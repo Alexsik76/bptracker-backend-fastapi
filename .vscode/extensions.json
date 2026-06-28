@@ -1,0 +1,10 @@
+{
+  "recommendations": [
+    "ms-python.python",            // Basic Python support
+    "ms-python.vscode-pylance",    // Types/autocomplete (mature; alternative is Astral type check, currently in preview)
+    "ms-python.debugpy",           // Debugger (required for launch.json below)
+    "charliermarsh.ruff",          // Linting and formatting
+    "tamasfe.even-better-toml",    // Formatting and editing for pyproject.toml
+    "ms-azuretools.vscode-docker"  // Manage Postgres containers from the IDE
+  ]
+}

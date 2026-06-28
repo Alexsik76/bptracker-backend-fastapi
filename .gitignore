@@ -1,0 +1,12 @@
+# Python bytecode and build artifacts
+__pycache__/
+*.py[oc]
+build/
+dist/
+*.egg-info/
+
+# Virtual environment (uv recreates it from uv.lock)
+.venv/
+
+# Local secrets — never commit; .env.example is the tracked template
+.env

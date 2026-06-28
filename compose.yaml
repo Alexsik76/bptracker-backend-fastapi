@@ -1,0 +1,24 @@
+# Single service: clean Postgres 16 in a container.
+# The application code remains in the local venv (deliberate choice from PROJECT.md).
+# Environment variables are loaded from the .env file in the same directory.
+services:
+  db:
+    image: postgres:16
+    container_name: bp-tracker-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-bp}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-bp}
+      POSTGRES_DB: ${POSTGRES_DB:-bp_tracker}
+    ports:
+      - "5432:5432"          # host:container - so that local code can connect to the DB on localhost:5432
+    volumes:
+      - bp_pgdata:/var/lib/postgresql/data
+    healthcheck:             # Ensure docker compose up waits for DB readiness, not just process start
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-bp} -d ${POSTGRES_DB:-bp_tracker}"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+volumes:
+  bp_pgdata:                 # Named volume to persist data across container restarts; delete using 'docker compose down -v'

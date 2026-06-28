@@ -1,0 +1,19 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    
+    {
+      // F5 -> run under debugger. Intentionally WITHOUT --reload:
+      // The reloader spawns a child process, which prevents breakpoints from triggering.
+      // For regular development with hot reload, use the terminal:
+      //   uv run fastapi dev main.py
+      "name": "FastAPI (debug, no reload)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "uvicorn",
+      "args": ["main:app", "--host", "127.0.0.1", "--port", "8000"],
+      "console": "integratedTerminal",
+      "envFile": "${workspaceFolder}/.env"
+    }
+  ]
+}
