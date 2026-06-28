@@ -1,11 +1,16 @@
 [project]
-name = "fastapi-backend"
+name = "bptracker-backend-fastapi"
 version = "0.1.0"
-description = "BP Tracker backend"
+description = "BP Tracker backend fastapi"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
+    "alembic>=1.18.5",
     "fastapi[standard]>=0.137.1",
+    "psycopg[binary]>=3.3.4",
+    "pydantic-settings>=2.14.1",
+    "sqlalchemy[asyncio]>=2.0.51",
+    "sqlmodel>=0.0.39",
 ]
 
 [dependency-groups]

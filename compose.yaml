@@ -3,15 +3,15 @@
 # Environment variables are loaded from the .env file in the same directory.
 services:
   db:
-    image: postgres:16
-    container_name: bp-tracker-db
+    image: postgres:18
+    container_name: bptracker-fa-db
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-bp}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-bp}
       POSTGRES_DB: ${POSTGRES_DB:-bp_tracker}
     ports:
-      - "5432:5432"          # host:container - so that local code can connect to the DB on localhost:5432
+      - "${POSTGRES_PORT:-5432}:5432"          # host:container - so that local code can connect to the DB on localhost:5432
     volumes:
       - bp_pgdata:/var/lib/postgresql/data
     healthcheck:             # Ensure docker compose up waits for DB readiness, not just process start
