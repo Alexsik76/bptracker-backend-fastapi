@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import ClassVar
 from uuid import UUID
 
 from sqlalchemy import Column, DateTime, Uuid, func, text
@@ -13,13 +14,14 @@ class MeasurementBase(SQLModel):
 
 
 class Measurement(MeasurementBase, table=True):
-    __tablename__ = "measurements"
+    __tablename__: ClassVar[str] = "measurements"
 
     id: UUID | None = Field(
         default=None,
         sa_column=Column(Uuid, primary_key=True, server_default=text("uuidv7()")),
     )
-    recorded_at: datetime = Field(
+    recorded_at: datetime | None = Field(
+        default=None,
         sa_column=Column(DateTime(timezone=True), server_default=func.now()),
     )
     # Plain uuid for now; FK to users is added by a migration when the auth module lands.

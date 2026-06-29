@@ -1,7 +1,6 @@
 {
   // Virtual environment interpreter created by uv (in the project root).
-  // Windows: replace with "${workspaceFolder}\\.venv\\Scripts\\python.exe" if needed.
-  "python.defaultInterpreterPath": "${workspaceFolder}/.venv/bin/python",
+  "python.defaultInterpreterPath": "${workspaceFolder}\\.venv\\Scripts\\python.exe",
   "python.terminal.activateEnvInCurrentTerminal": true,
 
   // Ruff (Astral ecosystem, same as uv) is both a linter and formatter in one.
