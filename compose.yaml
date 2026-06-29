@@ -13,7 +13,7 @@ services:
     ports:
       - "${POSTGRES_PORT:-5432}:5432"          # host:container - so that local code can connect to the DB on localhost:5432
     volumes:
-      - bp_pgdata:/var/lib/postgresql/data
+      - bp_pgdata:/var/lib/postgresql       # PG18: mount the parent, not /data — image puts data in a version subdir
     healthcheck:             # Ensure docker compose up waits for DB readiness, not just process start
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-bp} -d ${POSTGRES_DB:-bp_tracker}"]
       interval: 5s
