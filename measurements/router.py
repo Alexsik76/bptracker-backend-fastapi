@@ -2,11 +2,11 @@ from collections.abc import Sequence
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, HTTPException, status
 
 from db import SessionDep
 from measurements import crud
-from measurements.models import MeasurementCreate, MeasurementRead
+from measurements.models import Measurement, MeasurementCreate, MeasurementRead, MeasurementUpdate
 
 # --- Temporary auth stand-in -------------------------------------------------
 # Until the auth module lands, "who is calling" is a single hardcoded user
@@ -32,7 +32,7 @@ async def create_measurement(
     data: MeasurementCreate,
     session: SessionDep,
     user_id: CurrentUserId,
-) -> MeasurementRead:
+) -> Measurement:
     return await crud.create_measurement(session, data, user_id)
 
 
@@ -40,5 +40,30 @@ async def create_measurement(
 async def list_measurements(
     session: SessionDep,
     user_id: CurrentUserId,
-) -> Sequence[MeasurementRead]:
+) -> Sequence[Measurement]:
     return await crud.get_measurements(session, user_id)
+
+
+@router.get("/{measurement_id}", response_model=MeasurementRead)
+async def get_measurement(
+    measurement_id: UUID,
+    session: SessionDep,
+    user_id: CurrentUserId,
+) -> Measurement:
+    measurement = await crud.get_measurement(session, measurement_id, user_id)
+    if measurement is None:
+        raise HTTPException(status_code=404, detail="Measurement not found")
+    return measurement
+
+
+@router.patch("/{measurement_id}", response_model=MeasurementRead)
+async def update_measurement(
+    measurement_id: UUID,
+    data: MeasurementUpdate,
+    session: SessionDep,
+    user_id: CurrentUserId,
+) -> Measurement:
+    measurement = await crud.update_measurement(session, measurement_id, data, user_id)
+    if measurement is None:
+        raise HTTPException(status_code=404, detail="Measurement not found")
+    return measurement

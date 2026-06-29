@@ -36,3 +36,10 @@ class MeasurementCreate(MeasurementBase):
 class MeasurementRead(MeasurementBase):
     id: UUID
     recorded_at: datetime
+
+
+class MeasurementUpdate(SQLModel):
+    sys: int | None = Field(default=None, ge=40, le=300)
+    dia: int | None = Field(default=None, ge=20, le=200)
+    pulse: int | None = Field(default=None, ge=30, le=250)
+    recorded_at: datetime | None = None
