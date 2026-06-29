@@ -64,3 +64,17 @@ async def update_measurement(
     await session.commit()
     await session.refresh(measurement)
     return measurement
+
+
+async def delete_measurement(
+    session: AsyncSession,
+    measurement_id: UUID,
+    user_id: UUID,
+) -> bool:
+    """Delete a user's measurement. Returns False if it doesn't exist."""
+    measurement = await get_measurement(session, measurement_id, user_id)
+    if measurement is None:
+        return False
+    await session.delete(measurement)
+    await session.commit()
+    return True

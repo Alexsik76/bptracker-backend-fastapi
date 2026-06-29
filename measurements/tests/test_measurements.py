@@ -67,3 +67,23 @@ async def test_update_missing_measurement_returns_404(client):
     missing = "00000000-0000-0000-0000-000000000999"
     response = await client.patch(f"/measurements/{missing}", json={"sys": 130})
     assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_delete_measurement_removes_it(client):
+    created = await client.post("/measurements", json={"sys": 120, "dia": 80, "pulse": 60})
+    mid = created.json()["id"]
+
+    deleted = await client.delete(f"/measurements/{mid}")
+    assert deleted.status_code == 204
+
+    # Gone now: fetching it returns 404.
+    gone = await client.get(f"/measurements/{mid}")
+    assert gone.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_delete_missing_measurement_returns_404(client):
+    missing = "00000000-0000-0000-0000-000000000999"
+    response = await client.delete(f"/measurements/{missing}")
+    assert response.status_code == 404

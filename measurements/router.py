@@ -67,3 +67,14 @@ async def update_measurement(
     if measurement is None:
         raise HTTPException(status_code=404, detail="Measurement not found")
     return measurement
+
+
+@router.delete("/{measurement_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_measurement(
+    measurement_id: UUID,
+    session: SessionDep,
+    user_id: CurrentUserId,
+) -> None:
+    deleted = await crud.delete_measurement(session, measurement_id, user_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Measurement not found")
