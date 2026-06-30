@@ -40,10 +40,9 @@ async def create_measurement(
 async def list_measurements(
     session: SessionDep,
     user_id: CurrentUserId,
-    limit: Annotated[int, Query(ge=1, le=100)] = 50,
-    offset: Annotated[int, Query(ge=0)] = 0,
+    days: Annotated[int, Query(ge=1, le=365)] = 90,
 ) -> Sequence[Measurement]:
-    return await crud.get_measurements(session, user_id, limit, offset)
+    return await crud.get_measurements(session, user_id, days)
 
 
 @router.get("/{measurement_id}", response_model=MeasurementRead)

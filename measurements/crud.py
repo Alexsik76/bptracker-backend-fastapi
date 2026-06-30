@@ -1,4 +1,5 @@
 from collections.abc import Sequence
+from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 from sqlmodel import col, select
@@ -24,17 +25,18 @@ async def create_measurement(
 async def get_measurements(
     session: AsyncSession,
     user_id: UUID,
-    limit: int = 50,
-    offset: int = 0,
+    days: int = 90,
 ) -> Sequence[Measurement]:
-    """Return a user's measurements, newest first, paginated."""
+    """Return a user's measurements from the last N days, newest first."""
     # TODO: extract user-scoping when a 3rd query needs it
+    cutoff = datetime.now(UTC) - timedelta(days=days)
     statement = (
         select(Measurement)
-        .where(Measurement.user_id == user_id)
+        .where(
+            Measurement.user_id == user_id,
+            col(Measurement.recorded_at) >= cutoff,
+        )
         .order_by(col(Measurement.recorded_at).desc())
-        .limit(limit)
-        .offset(offset)
     )
     result = await session.exec(statement)
     return result.all()

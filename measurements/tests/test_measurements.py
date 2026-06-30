@@ -1,3 +1,4 @@
+from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 import pytest
@@ -90,17 +91,22 @@ async def test_delete_missing_measurement_returns_404(client):
 
 
 @pytest.mark.asyncio
-async def test_list_is_newest_first_and_respects_limit(client):
-    times = ["2026-01-01T10:00:00Z", "2026-01-02T10:00:00Z", "2026-01-03T10:00:00Z"]
-    for sys_val, ts in zip((110, 120, 130), times, strict=True):
+async def test_list_filters_by_days_and_sorts_newest_first(client):
+    now = datetime.now(UTC)
+    records = [
+        (110, now - timedelta(days=200)),  # outside 7-day window
+        (120, now - timedelta(days=3)),
+        (130, now - timedelta(days=1)),  # newest
+    ]
+    for sys_val, ts in records:
         await client.post(
             "/measurements",
-            json={"sys": sys_val, "dia": 80, "pulse": 60, "recorded_at": ts},
+            json={"sys": sys_val, "dia": 80, "pulse": 60, "recorded_at": ts.isoformat()},
         )
 
-    response = await client.get("/measurements?limit=2")
+    response = await client.get("/measurements?days=7")
     body = response.json()
 
-    assert len(body) == 2
-    assert body[0]["sys"] == 130  # 2026-01-03, newest
-    assert body[1]["sys"] == 120  # 2026-01-02
+    assert len(body) == 2  # 200-days-old record excluded
+    assert body[0]["sys"] == 130  # newest first
+    assert body[1]["sys"] == 120
