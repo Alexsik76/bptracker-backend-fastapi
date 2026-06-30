@@ -2,7 +2,7 @@ from collections.abc import Sequence
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from db import SessionDep
 from measurements import crud
@@ -40,8 +40,10 @@ async def create_measurement(
 async def list_measurements(
     session: SessionDep,
     user_id: CurrentUserId,
+    limit: Annotated[int, Query(ge=1, le=100)] = 50,
+    offset: Annotated[int, Query(ge=0)] = 0,
 ) -> Sequence[Measurement]:
-    return await crud.get_measurements(session, user_id)
+    return await crud.get_measurements(session, user_id, limit, offset)
 
 
 @router.get("/{measurement_id}", response_model=MeasurementRead)

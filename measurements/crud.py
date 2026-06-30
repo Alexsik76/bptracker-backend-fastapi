@@ -1,7 +1,7 @@
 from collections.abc import Sequence
 from uuid import UUID
 
-from sqlmodel import select
+from sqlmodel import col, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from measurements.models import Measurement, MeasurementCreate, MeasurementUpdate
@@ -24,10 +24,18 @@ async def create_measurement(
 async def get_measurements(
     session: AsyncSession,
     user_id: UUID,
+    limit: int = 50,
+    offset: int = 0,
 ) -> Sequence[Measurement]:
-    """Return all measurements belonging to the given user."""
+    """Return a user's measurements, newest first, paginated."""
     # TODO: extract user-scoping when a 3rd query needs it
-    statement = select(Measurement).where(Measurement.user_id == user_id)
+    statement = (
+        select(Measurement)
+        .where(Measurement.user_id == user_id)
+        .order_by(col(Measurement.recorded_at).desc())
+        .limit(limit)
+        .offset(offset)
+    )
     result = await session.exec(statement)
     return result.all()
 

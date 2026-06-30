@@ -87,3 +87,20 @@ async def test_delete_missing_measurement_returns_404(client):
     missing = "00000000-0000-0000-0000-000000000999"
     response = await client.delete(f"/measurements/{missing}")
     assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_list_is_newest_first_and_respects_limit(client):
+    times = ["2026-01-01T10:00:00Z", "2026-01-02T10:00:00Z", "2026-01-03T10:00:00Z"]
+    for sys_val, ts in zip((110, 120, 130), times, strict=True):
+        await client.post(
+            "/measurements",
+            json={"sys": sys_val, "dia": 80, "pulse": 60, "recorded_at": ts},
+        )
+
+    response = await client.get("/measurements?limit=2")
+    body = response.json()
+
+    assert len(body) == 2
+    assert body[0]["sys"] == 130  # 2026-01-03, newest
+    assert body[1]["sys"] == 120  # 2026-01-02
