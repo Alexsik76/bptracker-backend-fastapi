@@ -1,5 +1,4 @@
 from datetime import UTC, datetime
-from uuid import UUID
 
 import pytest
 
@@ -158,9 +157,11 @@ async def test_list_and_get_intake_reports(client, config_payload):
 
 
 @pytest.mark.asyncio
-async def test_user_cannot_see_another_users_intake_reports(client_factory, config_payload):
-    user_a = UUID("00000000-0000-0000-0000-0000000000aa")
-    user_b = UUID("00000000-0000-0000-0000-0000000000bb")
+async def test_user_cannot_see_another_users_intake_reports(
+    client_factory, make_user, config_payload
+):
+    user_a = await make_user("a@example.com")
+    user_b = await make_user("b@example.com")
 
     client_a = client_factory(user_a)
     await _setup_reminder_config(client_a, config_payload)

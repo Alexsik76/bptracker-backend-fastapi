@@ -2,7 +2,7 @@ from datetime import time
 from typing import ClassVar
 from uuid import UUID
 
-from sqlalchemy import Column, Uuid
+from sqlalchemy import Column, ForeignKey, Uuid
 from sqlmodel import Field, SQLModel
 
 
@@ -18,8 +18,7 @@ class ReminderConfig(ReminderConfigBase, table=True):
     __tablename__: ClassVar[str] = "reminder_config"
 
     # 1:1 with users: user_id is the primary key directly, no separate id column.
-    # Plain uuid for now; FK to users is added by a migration when the auth module lands.
-    user_id: UUID = Field(sa_column=Column(Uuid, primary_key=True))
+    user_id: UUID = Field(sa_column=Column(Uuid, ForeignKey("users.id"), primary_key=True))
 
 
 class ReminderConfigCreate(ReminderConfigBase):

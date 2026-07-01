@@ -1,5 +1,3 @@
-from uuid import UUID
-
 import pytest
 
 
@@ -47,9 +45,9 @@ async def test_multiple_active_prescriptions_allowed(client):
 
 
 @pytest.mark.asyncio
-async def test_user_cannot_see_another_users_prescriptions(client_factory):
-    user_a = UUID("00000000-0000-0000-0000-0000000000aa")
-    user_b = UUID("00000000-0000-0000-0000-0000000000bb")
+async def test_user_cannot_see_another_users_prescriptions(client_factory, make_user):
+    user_a = await make_user("a@example.com")
+    user_b = await make_user("b@example.com")
 
     client_a = client_factory(user_a)
     create = await client_a.post(
@@ -61,6 +59,18 @@ async def test_user_cannot_see_another_users_prescriptions(client_factory):
     listing = await client_b.get("/prescriptions")
     assert listing.status_code == 200
     assert listing.json() == []
+
+
+@pytest.mark.asyncio
+async def test_get_prescription_returns_it(client):
+    created = await client.post(
+        "/prescriptions", json={"doctor": "Dr. House", "prescribed_on": "2026-01-15"}
+    )
+    pid = created.json()["id"]
+
+    response = await client.get(f"/prescriptions/{pid}")
+    assert response.status_code == 200
+    assert response.json()["id"] == pid
 
 
 @pytest.mark.asyncio

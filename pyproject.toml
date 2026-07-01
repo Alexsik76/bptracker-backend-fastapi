@@ -19,6 +19,7 @@ dependencies = [
 dev = [
     "pytest>=9.1.1",
     "pytest-asyncio>=1.4.0",
+    "pytest-cov>=7.1.0",
     "ruff>=0.15.17",
 ]
 
@@ -28,3 +29,22 @@ target-version = "py313"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
+
+[tool.coverage.run]
+source = ["."]
+# SQLAlchemy's async ORM bridges to sync code via greenlet_spawn; without this,
+# coverage.py can't trace inside that greenlet and reports false "missing" lines
+# for code that tests clearly exercise (e.g. every awaited session call).
+concurrency = ["greenlet"]
+omit = [
+    "*/tests/*",
+    "conftest.py",
+    "alembic/*",
+    "main.py",
+]
+
+[tool.coverage.report]
+exclude_also = [
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+]

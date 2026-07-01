@@ -1,5 +1,3 @@
-from uuid import UUID
-
 import pytest
 
 
@@ -56,9 +54,11 @@ async def test_upsert_rejects_missing_required_field(client, config_payload):
 
 
 @pytest.mark.asyncio
-async def test_user_cannot_see_another_users_reminder_config(client_factory, config_payload):
-    user_a = UUID("00000000-0000-0000-0000-0000000000aa")
-    user_b = UUID("00000000-0000-0000-0000-0000000000bb")
+async def test_user_cannot_see_another_users_reminder_config(
+    client_factory, make_user, config_payload
+):
+    user_a = await make_user("a@example.com")
+    user_b = await make_user("b@example.com")
 
     client_a = client_factory(user_a)
     created = await client_a.put("/reminders/config", json=config_payload)

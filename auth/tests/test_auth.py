@@ -70,6 +70,27 @@ async def test_login_wrong_password_and_unknown_email_return_same_401(client, re
     assert wrong_password.json()["detail"] == unknown_email.json()["detail"]
 
 
+def test_verify_password_matches_and_rejects():
+    # verify_password itself has no caller yet in this task's scope (login uses
+    # verify_password_or_dummy), but it's kept for future callers that already
+    # know a hash exists — worth checking it actually works.
+    from auth.security import hash_password, verify_password
+
+    real = hash_password("correct-horse")
+    assert verify_password("correct-horse", real) is True
+    assert verify_password("wrong", real) is False
+
+
+def test_verify_password_or_dummy_handles_missing_hash():
+    from auth.security import hash_password, verify_password_or_dummy
+
+    real = hash_password("correct-horse")
+    assert verify_password_or_dummy("correct-horse", real) is True
+    assert verify_password_or_dummy("wrong", real) is False
+    # None hash (unknown user / passkey-only) never authenticates, but still runs.
+    assert verify_password_or_dummy("anything", None) is False
+
+
 def test_create_and_decode_access_token_roundtrip():
     user_id = uuid4()
     token = create_access_token(user_id)

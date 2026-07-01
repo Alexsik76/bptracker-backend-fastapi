@@ -23,6 +23,22 @@ def verify_password(password: str, password_hash: str) -> bool:
     return bcrypt.checkpw(password.encode(), password_hash.encode())
 
 
+# Precomputed bcrypt hash of a throwaway value. Used so that login spends the same
+# time hashing whether or not the account exists, preventing timing-based user
+# enumeration (a missing user must cost the same as a wrong password).
+_DUMMY_HASH = bcrypt.hashpw(b"timing-attack-dummy", bcrypt.gensalt()).decode()
+
+
+def verify_password_or_dummy(password: str, password_hash: str | None) -> bool:
+    """Constant-work password check for login.
+
+    Always runs one bcrypt comparison. When `password_hash` is None (unknown email
+    or passkey-only account), it compares against a dummy hash and returns False —
+    same cost as a real check, so response time doesn't leak account existence.
+    """
+    return bcrypt.checkpw(password.encode(), (password_hash or _DUMMY_HASH).encode())
+
+
 def create_access_token(user_id: UUID) -> str:
     """Issue a bearer token for a user_id. Takes only user_id — no password/login-method
     knowledge, so passkey/magic-link auth can reuse this unchanged.

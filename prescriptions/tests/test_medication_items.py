@@ -85,6 +85,17 @@ async def test_list_medication_items_for_missing_prescription_returns_404(client
 
 
 @pytest.mark.asyncio
+async def test_get_medication_item_returns_it(client, item_payload):
+    pid = await _create_prescription(client)
+    created = await client.post(f"/prescriptions/{pid}/items", json=item_payload)
+    iid = created.json()["id"]
+
+    response = await client.get(f"/prescriptions/{pid}/items/{iid}")
+    assert response.status_code == 200
+    assert response.json()["id"] == iid
+
+
+@pytest.mark.asyncio
 async def test_update_medication_item_changes_only_sent_fields(client, item_payload):
     pid = await _create_prescription(client)
     created = await client.post(f"/prescriptions/{pid}/items", json=item_payload)
@@ -119,6 +130,15 @@ async def test_delete_medication_item_removes_it(client, item_payload):
 
     gone = await client.get(f"/prescriptions/{pid}/items/{iid}")
     assert gone.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_delete_missing_medication_item_returns_404(client):
+    pid = await _create_prescription(client)
+    missing = "00000000-0000-0000-0000-000000000999"
+
+    response = await client.delete(f"/prescriptions/{pid}/items/{missing}")
+    assert response.status_code == 404
 
 
 @pytest.mark.asyncio

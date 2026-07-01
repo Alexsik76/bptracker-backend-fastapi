@@ -5,7 +5,7 @@ from sqlmodel import SQLModel
 
 from auth import crud
 from auth.models import TokenResponse, UserCreate
-from auth.security import create_access_token, verify_password
+from auth.security import create_access_token, verify_password_or_dummy
 from db import SessionDep
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -32,11 +32,11 @@ async def register(data: UserCreate, session: SessionDep) -> TokenResponse:
 @router.post("/login", response_model=TokenResponse)
 async def login(data: LoginRequest, session: SessionDep) -> TokenResponse:
     user = await crud.get_user_by_email(session, data.email)
-    # Same message whether the email is unknown or the password is wrong —
-    # deliberately avoids revealing which emails are registered.
-    if user is None or user.password_hash is None or not verify_password(
-        data.password, user.password_hash
-    ):
+    # One bcrypt comparison runs regardless of whether the email exists, so login
+    # response time doesn't reveal which emails are registered. Same 401 message
+    # for unknown email and wrong password.
+    ok = verify_password_or_dummy(data.password, user.password_hash if user else None)
+    if not ok:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="Incorrect email or password"
         )

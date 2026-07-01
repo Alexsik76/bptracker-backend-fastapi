@@ -2,7 +2,7 @@ from datetime import date, datetime
 from typing import Any, ClassVar
 from uuid import UUID
 
-from sqlalchemy import Column, DateTime, UniqueConstraint, Uuid, func, text
+from sqlalchemy import Column, DateTime, ForeignKey, UniqueConstraint, Uuid, func, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import Field, SQLModel
 
@@ -25,8 +25,9 @@ class IntakeReport(IntakeReportBase, table=True):
         default=None,
         sa_column=Column(Uuid, primary_key=True, server_default=text("uuidv7()")),
     )
-    # Plain uuid for now; FK to users is added by a migration when the auth module lands.
-    user_id: UUID = Field(index=True)
+    user_id: UUID = Field(
+        sa_column=Column(Uuid, ForeignKey("users.id"), index=True, nullable=False)
+    )
     # When the medication was actually taken (the real-world event). Client-supplied
     # per docs/conventions.md — the backend stores it as received, never interprets it.
     taken_at: datetime | None = Field(

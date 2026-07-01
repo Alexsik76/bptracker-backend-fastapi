@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import ClassVar
 from uuid import UUID
 
-from sqlalchemy import Column, DateTime, Uuid, func, text
+from sqlalchemy import Column, DateTime, ForeignKey, Uuid, func, text
 from sqlmodel import Field, SQLModel
 
 
@@ -24,8 +24,9 @@ class Measurement(MeasurementBase, table=True):
         default=None,
         sa_column=Column(DateTime(timezone=True), server_default=func.now()),
     )
-    # Plain uuid for now; FK to users is added by a migration when the auth module lands.
-    user_id: UUID = Field(index=True)
+    user_id: UUID = Field(
+        sa_column=Column(Uuid, ForeignKey("users.id"), index=True, nullable=False)
+    )
 
 
 class MeasurementCreate(MeasurementBase):
