@@ -13,6 +13,7 @@ from config import get_settings
 # env.py is migration infrastructure, not a domain module — it is the one place
 # allowed to import every module. Add a line per table-owning module.
 from measurements import models as _measurements_models  # noqa: F401
+from prescriptions import models as _prescriptions_models  # noqa: F401
 
 config = context.config
 
