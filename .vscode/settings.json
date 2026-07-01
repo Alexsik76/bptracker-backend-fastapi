@@ -12,5 +12,10 @@
     }
   },
   // Use ruff from the project's venv instead of the extension's built-in one to ensure consistent versioning.
-  "ruff.importStrategy": "fromEnvironment"
+  "ruff.importStrategy": "fromEnvironment",
+  "python.testing.pytestArgs": [
+    "."
+  ],
+  "python.testing.unittestEnabled": false,
+  "python.testing.pytestEnabled": true
 }
