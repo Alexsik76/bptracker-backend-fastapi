@@ -1,3 +1,4 @@
+from datetime import UTC, datetime
 from uuid import UUID
 
 import pytest
@@ -41,23 +42,16 @@ async def _create_prescription_with_item(client, when_slots):
 
 
 @pytest.mark.asyncio
-async def test_confirm_without_reminder_config_returns_404(client):
-    response = await client.post(
-        "/reminders/intake-reports", json={"period": "Morning", "date": "2026-01-15"}
-    )
-    assert response.status_code == 404
-
-
-@pytest.mark.asyncio
-async def test_confirm_creates_report_with_snapshot_from_active_prescription(
-    client, config_payload
-):
+async def test_record_without_taken_at_sets_it_to_now(client, config_payload):
     await _setup_reminder_config(client, config_payload)
     await _create_prescription_with_item(client, when_slots=["Morning"])
 
+    before = datetime.now(UTC)
     response = await client.post(
         "/reminders/intake-reports", json={"period": "Morning", "date": "2026-01-15"}
     )
+    after = datetime.now(UTC)
+
     assert response.status_code == 201
     body = response.json()
 
@@ -65,6 +59,66 @@ async def test_confirm_creates_report_with_snapshot_from_active_prescription(
         {"medicine": "Bisoprolol", "amount": "1", "condition": "after meal"}
     ]
     assert "user_id" not in body
+
+    taken_at = datetime.fromisoformat(body["taken_at"])
+    recorded_at = datetime.fromisoformat(body["recorded_at"])
+    assert before <= taken_at <= after
+    assert before <= recorded_at <= after
+
+
+@pytest.mark.asyncio
+async def test_record_with_explicit_taken_at_stores_it_unaltered(client, config_payload):
+    await _setup_reminder_config(client, config_payload)
+    explicit_taken_at = "2026-01-10T09:15:00+00:00"
+
+    response = await client.post(
+        "/reminders/intake-reports",
+        json={"period": "Morning", "date": "2026-01-10", "taken_at": explicit_taken_at},
+    )
+    assert response.status_code == 201
+    body = response.json()
+
+    # Backend does not interpret/adjust the client-supplied moment (docs/conventions.md).
+    assert datetime.fromisoformat(body["taken_at"]) == datetime.fromisoformat(explicit_taken_at)
+
+
+@pytest.mark.asyncio
+async def test_repeat_confirm_same_slot_overwrites_instead_of_conflicting(client, config_payload):
+    await _setup_reminder_config(client, config_payload)
+    payload = {
+        "period": "Morning",
+        "date": "2026-01-15",
+        "taken_at": "2026-01-15T08:05:00+00:00",
+    }
+
+    first = await client.post("/reminders/intake-reports", json=payload)
+    assert first.status_code == 201
+    first_body = first.json()
+
+    second_payload = {**payload, "taken_at": "2026-01-15T09:30:00+00:00"}
+    second = await client.post("/reminders/intake-reports", json=second_payload)
+    assert second.status_code == 201
+    second_body = second.json()
+
+    assert second_body["id"] == first_body["id"]
+    assert datetime.fromisoformat(second_body["taken_at"]) == datetime.fromisoformat(
+        "2026-01-15T09:30:00+00:00"
+    )
+    assert datetime.fromisoformat(second_body["recorded_at"]) >= datetime.fromisoformat(
+        first_body["recorded_at"]
+    )
+
+    listing = await client.get("/reminders/intake-reports")
+    assert len(listing.json()) == 1
+
+
+@pytest.mark.asyncio
+async def test_record_intake_succeeds_without_reminder_config(client):
+    # Recording no longer depends on reminder_config existing (no "late" to compute here).
+    response = await client.post(
+        "/reminders/intake-reports", json={"period": "Morning", "date": "2026-01-15"}
+    )
+    assert response.status_code == 201
 
 
 @pytest.mark.asyncio
@@ -77,40 +131,6 @@ async def test_confirm_excludes_items_from_other_slots(client, config_payload):
     )
     assert response.status_code == 201
     assert response.json()["snapshot"] == []
-
-
-@pytest.mark.asyncio
-async def test_confirm_marks_late_when_window_has_passed(client, config_payload):
-    await _setup_reminder_config(client, config_payload)
-    # A slot on a date far in the past: its reminder window is long over by "now".
-    response = await client.post(
-        "/reminders/intake-reports", json={"period": "Morning", "date": "2000-01-01"}
-    )
-    assert response.status_code == 201
-    assert response.json()["is_late"] is True
-
-
-@pytest.mark.asyncio
-async def test_confirm_marks_on_time_when_within_window(client, config_payload):
-    await _setup_reminder_config(client, config_payload)
-    # A slot on a date far in the future: its reminder window hasn't started yet.
-    response = await client.post(
-        "/reminders/intake-reports", json={"period": "Morning", "date": "2100-01-01"}
-    )
-    assert response.status_code == 201
-    assert response.json()["is_late"] is False
-
-
-@pytest.mark.asyncio
-async def test_duplicate_confirm_same_slot_and_date_returns_409(client, config_payload):
-    await _setup_reminder_config(client, config_payload)
-    payload = {"period": "Morning", "date": "2026-01-15"}
-
-    first = await client.post("/reminders/intake-reports", json=payload)
-    assert first.status_code == 201
-
-    second = await client.post("/reminders/intake-reports", json=payload)
-    assert second.status_code == 409
 
 
 @pytest.mark.asyncio

@@ -1,24 +1,12 @@
 from collections.abc import Sequence
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from uuid import UUID
 
-from sqlalchemy.exc import IntegrityError
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from prescriptions.models import MedicationItem, Prescription, WhenSlot
-from reminders.crud.reminder_config import get_reminder_config
 from reminders.models import IntakeReport, IntakeReportCreate
-
-_SLOT_TIME_FIELD: dict[WhenSlot, str] = {
-    WhenSlot.MORNING: "morning_time",
-    WhenSlot.DAY: "day_time",
-    WhenSlot.EVENING: "evening_time",
-}
-
-
-class IntakeReportAlreadyExists(Exception):
-    """Raised when (user_id, period, date) already has a confirmed intake."""
 
 
 async def _build_snapshot(
@@ -28,7 +16,7 @@ async def _build_snapshot(
 ) -> list[dict]:
     """Collect {medicine, amount, condition} from every active prescription covering this slot.
 
-    Never reads via prescription_id: a slot can combine items from several
+    Never reads via a prescription FK: a slot can combine items from several
     active prescriptions, and the report must stay readable after any of
     them changes or is deleted.
     """
@@ -46,43 +34,51 @@ async def _build_snapshot(
     ]
 
 
-async def create_intake_report(
+async def record_intake_report(
     session: AsyncSession,
     data: IntakeReportCreate,
     user_id: UUID,
-) -> IntakeReport | None:
-    """Confirm an intake. Returns None if the user has no reminder_config yet.
+) -> IntakeReport:
+    """Upsert an intake for (user_id, period, date) — create or overwrite, never conflict.
 
-    Raises IntakeReportAlreadyExists if this user/period/date was already confirmed.
+    taken_at: the client-supplied moment if given, else now() (see docs/conventions.md
+    — absent taken_at means "just taken", present means the client is recording a
+    moment other than now).
+    recorded_at: always now() on every write, whether this is a create or an edit.
+    snapshot: always rebuilt from the user's current active prescriptions, even on
+    edit, since "what's active" may have changed since the row was first written.
+
+    Does not require reminder_config to exist — recording an intake has no
+    dependency on it now that "late" is a read-time projection, not stored here.
     """
-    config = await get_reminder_config(session, user_id)
-    if config is None:
-        return None
-
-    confirmed_at = datetime.now(UTC)
-    slot_time = getattr(config, _SLOT_TIME_FIELD[data.period])
-    window_end = datetime.combine(data.date, slot_time, tzinfo=UTC) + timedelta(
-        minutes=config.duration_minutes
+    statement = select(IntakeReport).where(
+        IntakeReport.user_id == user_id,
+        IntakeReport.period == data.period,
+        IntakeReport.date == data.date,
     )
-    is_late = confirmed_at > window_end
+    result = await session.exec(statement)
+    report = result.first()
 
+    now = datetime.now(UTC)
+    taken_at = data.taken_at if data.taken_at is not None else now
     snapshot = await _build_snapshot(session, user_id, data.period)
 
-    report = IntakeReport(
-        user_id=user_id,
-        prescription_id=data.prescription_id,
-        period=data.period,
-        date=data.date,
-        confirmed_at=confirmed_at,
-        is_late=is_late,
-        snapshot=snapshot,
-    )
+    if report is None:
+        report = IntakeReport(
+            user_id=user_id,
+            period=data.period,
+            date=data.date,
+            taken_at=taken_at,
+            recorded_at=now,
+            snapshot=snapshot,
+        )
+    else:
+        report.taken_at = taken_at
+        report.recorded_at = now
+        report.snapshot = snapshot
+
     session.add(report)
-    try:
-        await session.commit()
-    except IntegrityError:
-        await session.rollback()
-        raise IntakeReportAlreadyExists from None
+    await session.commit()
     await session.refresh(report)
     return report
 

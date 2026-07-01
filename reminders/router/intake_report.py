@@ -12,24 +12,15 @@ router = APIRouter(prefix="/reminders/intake-reports")
 
 
 @router.post("", response_model=IntakeReportRead, status_code=status.HTTP_201_CREATED)
-async def create_intake_report(
+async def record_intake_report(
     data: IntakeReportCreate,
     session: SessionDep,
     user_id: CurrentUserId,
 ) -> IntakeReport:
-    try:
-        report = await crud.create_intake_report(session, data, user_id)
-    except crud.IntakeReportAlreadyExists as exc:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Intake already confirmed for this slot and date",
-        ) from exc
-    if report is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Reminder config not found; set it up before confirming intakes",
-        )
-    return report
+    # Single upsert endpoint: repeating (period, date) overwrites rather than
+    # conflicting, so this always returns 201 even on the edit path — a deliberate
+    # simplification at this project stage, not an oversight.
+    return await crud.record_intake_report(session, data, user_id)
 
 
 @router.get("", response_model=Sequence[IntakeReportRead])
