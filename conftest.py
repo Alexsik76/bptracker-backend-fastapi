@@ -11,11 +11,11 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlmodel import SQLModel
 from sqlmodel.ext.asyncio.session import AsyncSession
 
+# Models must be imported so their tables register on SQLModel.metadata.
+from auth import models as _a  # noqa: F401
 from config import get_settings
 from db import get_session
 from main import app
-
-# Models must be imported so their tables register on SQLModel.metadata.
 from measurements import models as _m  # noqa: F401
 from measurements.router import get_current_user_id as get_measurements_current_user_id
 from prescriptions import models as _p  # noqa: F401

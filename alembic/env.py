@@ -7,11 +7,11 @@ from alembic import context
 
 # Settings own the single source of truth for the DB URL (a SQLAlchemy URL object,
 # not a string — special chars in the password are escaped by URL.create).
-from config import get_settings
-
-# Importing each module's models registers their tables on SQLModel.metadata.
+# Importing each module's models below registers their tables on SQLModel.metadata.
 # env.py is migration infrastructure, not a domain module — it is the one place
 # allowed to import every module. Add a line per table-owning module.
+from auth import models as _auth_models  # noqa: F401
+from config import get_settings
 from measurements import models as _measurements_models  # noqa: F401
 from prescriptions import models as _prescriptions_models  # noqa: F401
 from reminders import models as _reminders_models  # noqa: F401

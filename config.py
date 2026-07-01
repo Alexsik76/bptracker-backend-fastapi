@@ -27,6 +27,11 @@ class Settings(BaseSettings):
     postgres_host: str = "localhost"
     postgres_port: int = 5432
 
+    # No default: a missing JWT_SECRET must fail loudly, never fall back silently.
+    jwt_secret: str
+    jwt_algorithm: str = "HS256"
+    access_token_expire_minutes: int = 60 * 24  # 1 day for now
+
     @property
     def is_dev(self) -> bool:
         return self.environment is Environment.DEV
