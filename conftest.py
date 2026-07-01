@@ -20,6 +20,8 @@ from measurements import models as _m  # noqa: F401
 from measurements.router import get_current_user_id as get_measurements_current_user_id
 from prescriptions import models as _p  # noqa: F401
 from prescriptions.router import get_current_user_id as get_prescriptions_current_user_id
+from reminders import models as _r  # noqa: F401
+from reminders.router import get_current_user_id as get_reminders_current_user_id
 
 # A dedicated test database URL: same server, name + "_test".
 _settings = get_settings()
@@ -36,7 +38,7 @@ test_session_factory = async_sessionmaker(
 async def client_factory(session: AsyncSession):
     # Build an HTTP client acting as a specific user. Lets one test play
     # two different users and prove they can't see each other's data.
-    # Both modules' auth stubs are overridden together — each router still
+    # All modules' auth stubs are overridden together — each router still
     # has its own get_current_user_id seam, but tests act as one caller.
     clients = []
 
@@ -44,6 +46,7 @@ async def client_factory(session: AsyncSession):
         app.dependency_overrides[get_session] = lambda: session
         app.dependency_overrides[get_measurements_current_user_id] = lambda: user_id
         app.dependency_overrides[get_prescriptions_current_user_id] = lambda: user_id
+        app.dependency_overrides[get_reminders_current_user_id] = lambda: user_id
         c = AsyncClient(transport=ASGITransport(app=app), base_url="http://test")
         clients.append(c)
         return c
@@ -76,7 +79,7 @@ async def session() -> AsyncGenerator[AsyncSession]:
 @pytest_asyncio.fixture
 async def client(session: AsyncSession) -> AsyncGenerator[AsyncClient]:
     # Route the app's DB calls through the test session.
-    # No user_id override needed: both routers' dev stubs already default
+    # No user_id override needed: all routers' dev stubs already default
     # to the same hardcoded UUID.
     app.dependency_overrides[get_session] = lambda: session
     transport = ASGITransport(app=app)

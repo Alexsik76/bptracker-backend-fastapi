@@ -14,6 +14,7 @@ from config import get_settings
 # allowed to import every module. Add a line per table-owning module.
 from measurements import models as _measurements_models  # noqa: F401
 from prescriptions import models as _prescriptions_models  # noqa: F401
+from reminders import models as _reminders_models  # noqa: F401
 
 config = context.config
 
