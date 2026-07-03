@@ -3,7 +3,7 @@ from typing import ClassVar
 from uuid import UUID
 
 from pydantic import EmailStr
-from sqlalchemy import Column, DateTime, Uuid, func, text
+from sqlalchemy import Column, DateTime, String, Uuid, func, text
 from sqlmodel import Field, SQLModel
 
 
@@ -45,3 +45,15 @@ class UserRead(SQLModel):
 class TokenResponse(SQLModel):
     access_token: str
     token_type: str = "bearer"
+
+
+class MagicLink(SQLModel, table=True):
+    __tablename__: ClassVar[str] = "magic_links"
+
+    email: str = Field(sa_column=Column(String, primary_key=True))
+    token_hash: str = Field(sa_column=Column(String, unique=True, index=True, nullable=False))
+    created_at: datetime | None = Field(
+        default=None,
+        sa_column=Column(DateTime(timezone=True), server_default=func.now()),
+    )
+    expires_at: datetime = Field(sa_column=Column(DateTime(timezone=True), nullable=False))

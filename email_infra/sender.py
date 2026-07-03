@@ -28,6 +28,7 @@ class SmtpEmailSender:
         smtp_password: str,
         smtp_from: str,
         smtp_starttls: bool = True,
+        smtp_timeout: int = 10,
     ) -> None:
         self.smtp_host = smtp_host
         self.smtp_port = smtp_port
@@ -35,6 +36,7 @@ class SmtpEmailSender:
         self.smtp_password = smtp_password
         self.smtp_from = smtp_from
         self.smtp_starttls = smtp_starttls
+        self.smtp_timeout = smtp_timeout
 
     async def send(
         self,
@@ -60,6 +62,7 @@ class SmtpEmailSender:
             username=self.smtp_username,
             password=self.smtp_password,
             start_tls=self.smtp_starttls,
+            timeout=self.smtp_timeout,
         )
 
 
@@ -71,4 +74,5 @@ def get_email_sender(settings: Annotated[Settings, Depends(get_settings)]) -> Em
         smtp_password=settings.smtp_password,
         smtp_from=settings.smtp_from,
         smtp_starttls=settings.smtp_starttls,
+        smtp_timeout=settings.smtp_timeout,
     )

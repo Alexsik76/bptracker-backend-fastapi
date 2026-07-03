@@ -1,3 +1,5 @@
+import hashlib
+import secrets
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
@@ -57,3 +59,11 @@ def decode_access_token(token: str) -> UUID:
     except (jwt.ExpiredSignatureError, jwt.InvalidTokenError) as exc:
         raise InvalidTokenError("Invalid or expired token") from exc
     return UUID(payload["sub"])
+
+
+def generate_magic_token() -> str:
+    return secrets.token_urlsafe(settings.magic_link_token_bytes)
+
+
+def hash_magic_token(token: str) -> str:
+    return hashlib.sha256(token.encode()).hexdigest()

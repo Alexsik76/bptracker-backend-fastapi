@@ -87,6 +87,7 @@ async def test_transport_parameters():
         smtp_password="custom_password",
         smtp_from="custom_from@custom.com",
         smtp_starttls=True,
+        smtp_timeout=10,
     )
 
     with patch("email_infra.sender.aiosmtplib.send", new_callable=AsyncMock) as mock_send:
@@ -103,6 +104,7 @@ async def test_transport_parameters():
         assert call_kwargs["username"] == "custom_user"
         assert call_kwargs["password"] == "custom_password"
         assert call_kwargs["start_tls"] is True
+        assert call_kwargs["timeout"] == 10
 
     sender_starttls_false = SmtpEmailSender(
         smtp_host="smtp.custom.com",
@@ -111,6 +113,7 @@ async def test_transport_parameters():
         smtp_password="custom_password",
         smtp_from="custom_from@custom.com",
         smtp_starttls=False,
+        smtp_timeout=15,
     )
 
     with patch("email_infra.sender.aiosmtplib.send", new_callable=AsyncMock) as mock_send:
@@ -123,3 +126,4 @@ async def test_transport_parameters():
         mock_send.assert_called_once()
         _, call_kwargs = mock_send.call_args
         assert call_kwargs["start_tls"] is False
+        assert call_kwargs["timeout"] == 15

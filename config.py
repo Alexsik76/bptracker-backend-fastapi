@@ -38,6 +38,11 @@ class Settings(BaseSettings):
     smtp_password: str
     smtp_from: str
     smtp_starttls: bool = True
+    smtp_timeout: int = 10
+
+    magic_link_base_url: str
+    magic_link_ttl_minutes: int = 15
+    magic_link_token_bytes: int = 32
 
     @property
     def is_dev(self) -> bool:
