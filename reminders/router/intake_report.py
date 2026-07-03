@@ -39,7 +39,5 @@ async def get_intake_report(
 ) -> IntakeReport:
     report = await crud.get_intake_report(session, report_id, user_id)
     if report is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Intake report not found"
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Intake report not found")
     return report

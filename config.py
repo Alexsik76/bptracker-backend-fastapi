@@ -32,6 +32,13 @@ class Settings(BaseSettings):
     jwt_algorithm: str = "HS256"
     access_token_expire_minutes: int = 60 * 24  # 1 day for now
 
+    smtp_host: str
+    smtp_port: int = 587
+    smtp_username: str
+    smtp_password: str
+    smtp_from: str
+    smtp_starttls: bool = True
+
     @property
     def is_dev(self) -> bool:
         return self.environment is Environment.DEV

@@ -5,6 +5,7 @@ description = "BP Tracker backend fastapi"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
+    "aiosmtplib>=5.1.2",
     "alembic>=1.18.5",
     "bcrypt>=5.0.0",
     "fastapi[standard]>=0.137.1",

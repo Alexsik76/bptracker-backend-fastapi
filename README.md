@@ -10,6 +10,7 @@ prescriptions/intake. A Python/FastAPI rebuild of an earlier C# service.
 - [psycopg3](https://www.psycopg.org/psycopg3/) (async driver)
 - PostgreSQL 18
 - [Alembic](https://alembic.sqlalchemy.org/) for migrations
+- [PyJWT](https://pyjwt.readthedocs.io/) + [bcrypt](https://pypi.org/project/bcrypt/) for token-based auth
 - Managed with [uv](https://docs.astral.sh/uv/), linted with [ruff](https://docs.astral.sh/ruff/)
 - Tested with pytest + pytest-asyncio
 
@@ -36,6 +37,8 @@ uv run pytest
 
 ## Modules
 
+- **auth** — user registration/login (email + password) and JWT bearer tokens.
+  All other endpoints require an `Authorization: Bearer <token>` header.
 - **measurements** — blood-pressure readings (systolic/diastolic/pulse). Plain CRUD.
 - **prescriptions** — a prescription (doctor, date, active flag) with its
   medication items (dose, frequency, time-of-day slots, course).
