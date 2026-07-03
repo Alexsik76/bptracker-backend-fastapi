@@ -2,12 +2,11 @@ from datetime import UTC, datetime, timedelta
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import EmailStr
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import SQLModel
 
 from auth import crud
-from auth.models import TokenResponse, UserCreate
+from auth.models import NormalizedEmail, TokenResponse, UserCreate
 from auth.security import (
     create_access_token,
     generate_magic_token,
@@ -23,12 +22,12 @@ settings = get_settings()
 
 
 class LoginRequest(SQLModel):
-    email: EmailStr
+    email: NormalizedEmail
     password: str
 
 
 class MagicLinkRequest(SQLModel):
-    email: EmailStr
+    email: NormalizedEmail
 
 
 class MagicLinkConfirm(SQLModel):

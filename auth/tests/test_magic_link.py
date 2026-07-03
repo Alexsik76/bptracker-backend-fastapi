@@ -199,3 +199,61 @@ async def test_confirm_magic_link_invalid_token(client):
     # Assert
     assert response.status_code == 401
     assert response.json()["detail"] == "Incorrect or expired token"
+
+
+@pytest.mark.asyncio
+async def test_register_lowercases_email(client, session: AsyncSession):
+    # Act
+    response = await client.post(
+        "/auth/register", json={"email": "Mixed@Example.com", "password": "supersecret123"}
+    )
+    assert response.status_code == 201
+
+    # Verify db has lowercase email
+    from auth.models import User
+
+    statement = select(User).where(User.email == "mixed@example.com")
+    result = await session.exec(statement)
+    user = result.first()
+    assert user is not None
+    assert user.email == "mixed@example.com"
+
+
+@pytest.mark.asyncio
+async def test_login_case_insensitive(client):
+    # Arrange - register mixed case
+    await client.post(
+        "/auth/register", json={"email": "Mixed@Example.com", "password": "supersecret123"}
+    )
+
+    # Act - login lowercase
+    response = await client.post(
+        "/auth/login", json={"email": "mixed@example.com", "password": "supersecret123"}
+    )
+
+    # Assert
+    assert response.status_code == 200
+    assert response.json()["access_token"]
+
+
+@pytest.mark.asyncio
+async def test_request_magic_link_case_insensitive(
+    client, session: AsyncSession, mock_email_sender
+):
+    # Arrange - Register with mixed case email
+    await client.post(
+        "/auth/register", json={"email": "Mixed@Example.com", "password": "supersecret123"}
+    )
+
+    # Act - request with different casing
+    response = await client.post("/auth/magic-link/request", json={"email": "mIxEd@ExAmPlE.cOm"})
+
+    # Assert
+    assert response.status_code == 202
+    mock_email_sender.send.assert_called_once()
+    assert mock_email_sender.send.call_args[1]["to"] == "mixed@example.com"
+
+    # Verify link exists in DB for lowercase email
+    statement = select(MagicLink).where(MagicLink.email == "mixed@example.com")
+    result = await session.exec(statement)
+    assert result.first() is not None

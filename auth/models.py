@@ -1,10 +1,19 @@
 from datetime import datetime
-from typing import ClassVar
+from typing import Annotated, ClassVar
 from uuid import UUID
 
-from pydantic import EmailStr
+from pydantic import AfterValidator, EmailStr
 from sqlalchemy import Column, DateTime, String, Uuid, func, text
 from sqlmodel import Field, SQLModel
+
+
+def lowercase_email(v: str) -> str:
+    # RFC 5321 technically allows case-sensitive local parts, but practically
+    # all major email providers treat emails as case-insensitive.
+    return v.lower()
+
+
+NormalizedEmail = Annotated[EmailStr, AfterValidator(lowercase_email)]
 
 
 class UserBase(SQLModel):
@@ -29,7 +38,7 @@ class User(UserBase, table=True):
 
 
 class UserCreate(SQLModel):
-    email: EmailStr
+    email: NormalizedEmail
     # Plaintext input, never persisted as-is — hashed in auth/crud.py before storage.
     password: str = Field(min_length=8)
     timezone: str | None = None
