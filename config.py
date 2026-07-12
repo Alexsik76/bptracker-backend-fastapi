@@ -44,6 +44,11 @@ class Settings(BaseSettings):
     magic_link_ttl_minutes: int = 15
     magic_link_token_bytes: int = 32
 
+    webauthn_rp_id: str
+    webauthn_rp_name: str = "BP Tracker"
+    webauthn_origin: str
+    webauthn_challenge_ttl_minutes: int = 5
+
     @property
     def is_dev(self) -> bool:
         return self.environment is Environment.DEV

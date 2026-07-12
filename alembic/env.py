@@ -11,6 +11,7 @@ from alembic import context
 # env.py is migration infrastructure, not a domain module — it is the one place
 # allowed to import every module. Add a line per table-owning module.
 from auth import models as _auth_models  # noqa: F401
+from auth.webauthn import models as _webauthn_models  # noqa: F401
 from config import get_settings
 from measurements import models as _measurements_models  # noqa: F401
 from prescriptions import models as _prescriptions_models  # noqa: F401

@@ -15,6 +15,7 @@ from auth import models as _a  # noqa: F401
 from auth.deps import get_current_user_id
 from auth.models import User
 from auth.security import hash_password
+from auth.webauthn import models as _w  # noqa: F401
 from config import get_settings
 from db import get_session
 from main import app
