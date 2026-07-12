@@ -35,6 +35,10 @@ class User(UserBase, table=True):
         default=None,
         sa_column=Column(DateTime(timezone=True), server_default=func.now()),
     )
+    last_export_at: datetime | None = Field(
+        default=None,
+        sa_column=Column(DateTime(timezone=True), nullable=True),
+    )
 
 
 class UserCreate(SQLModel):

@@ -10,6 +10,7 @@ from config import get_settings
 from db import async_session_factory
 from email_infra import get_email_sender
 from email_infra.worker import run_email_outbox_worker
+from export.router import router as export_router
 from measurements.router import router as measurements_router
 from prescriptions.router import router as prescriptions_router
 from reminders.router import router as reminders_router
@@ -52,6 +53,7 @@ app.include_router(webauthn_router)
 app.include_router(measurements_router)
 app.include_router(prescriptions_router)
 app.include_router(reminders_router)
+app.include_router(export_router)
 
 
 @app.get("/health")

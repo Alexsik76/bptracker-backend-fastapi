@@ -50,6 +50,9 @@ class Settings(BaseSettings):
     email_outbox_worker_enabled: bool = True
     email_outbox_lease_seconds: int = 300
 
+    export_cooldown_minutes: int = 10
+    export_sheets_template_url: str
+
     webauthn_rp_id: str
     webauthn_rp_name: str = "BP Tracker"
     webauthn_origin: str
