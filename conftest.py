@@ -5,6 +5,7 @@ import sys
 
 os.environ["EMAIL_OUTBOX_WORKER_ENABLED"] = "False"
 os.environ["CLEANUP_WORKER_ENABLED"] = "False"
+os.environ["GEMINI_API_KEY"] = "dummy-test-key-12345"
 from collections.abc import AsyncGenerator
 from uuid import UUID
 

@@ -54,6 +54,11 @@ class Settings(BaseSettings):
     cleanup_interval_minutes: int = 60
     cleanup_worker_enabled: bool = True
 
+    gemini_api_key: str
+    gemini_model: str = "gemini-2.0-flash"
+    gemini_timeout_seconds: int = 30
+    analyze_max_file_bytes: int = 10 * 1024 * 1024
+
     export_cooldown_minutes: int = 10
     export_sheets_template_url: str
 
