@@ -3,9 +3,11 @@ import json
 import logging
 
 import httpx
+from pydantic import ValidationError
 from sqlmodel import SQLModel
 
 from config import Settings
+from measurements.models import MeasurementBase
 
 logger = logging.getLogger(__name__)
 
@@ -43,8 +45,11 @@ async def analyze_image(
 
     url = (
         "https://generativelanguage.googleapis.com/v1beta/models/"
-        f"{settings.gemini_model}:generateContent?key={settings.gemini_api_key}"
+        f"{settings.gemini_model}:generateContent"
     )
+    headers = {
+        "x-goog-api-key": settings.gemini_api_key,
+    }
 
     payload = {
         "contents": [
@@ -68,15 +73,13 @@ async def analyze_image(
 
     try:
         async with httpx.AsyncClient(timeout=settings.gemini_timeout_seconds) as client:
-            response = await client.post(url, json=payload)
+            response = await client.post(url, json=payload, headers=headers)
     except httpx.HTTPError as exc:
         logger.error("Gemini connection error or timeout: %s", exc)
         raise GeminiUnavailable() from exc
 
     if response.status_code != 200:
-        logger.error(
-            "Gemini returned non-200 status code: %d. Body: %s", response.status_code, response.text
-        )
+        logger.error("Gemini returned non-200 status code: %d.", response.status_code)
         raise GeminiUnavailable()
 
     try:
@@ -109,11 +112,11 @@ async def analyze_image(
         )
         raise RecognitionFailed() from exc
 
-    # Validate ranges against MeasurementBase bounds
-    if not (40 <= systolic <= 300) or not (20 <= diastolic <= 200) or not (30 <= pulse <= 250):
-        logger.warning(
-            "Recognised values out of range: sys=%d, dia=%d, pulse=%d", systolic, diastolic, pulse
-        )
-        raise RecognitionFailed()
+    # Validate ranges through shared Pydantic bounds on MeasurementBase
+    try:
+        MeasurementBase(sys=systolic, dia=diastolic, pulse=pulse)
+    except ValidationError as exc:
+        logger.warning("Recognised values failed Pydantic validation: %s", exc)
+        raise RecognitionFailed() from exc
 
     return AnalyzeResult(sys=systolic, dia=diastolic, pulse=pulse)
