@@ -84,20 +84,16 @@ async def rotate_session(
         raise InvalidOrExpiredTokenError()
 
     if session_row.revoked_at is not None:
-        # If the refresh token was revoked very recently (e.g. within 10 seconds),
-        # it is likely due to concurrent requests from the client (e.g. concurrent calls
-        # to /auth/refresh). In this case, we fail the second request with
-        # InvalidOrExpiredTokenError but do not trigger full reuse/compromise revocation.
-        if datetime.now(UTC) - session_row.revoked_at > timedelta(seconds=0.5):
-            # When a refresh token that has already been revoked is presented again after
-            # the grace period, it indicates a malicious reuse attempt where the token was captured.
-            # To prevent further unauthorized access, we invalidate all active sessions.
-            logger.warning(
-                "Compromise detected: Revoked refresh token reused for user %s. "
-                "Invalidating all sessions.",
-                session_row.user_id,
-            )
-            await revoke_all_user_sessions(db_session, user_id=session_row.user_id)
+        # When a refresh token that has already been revoked is presented again, it indicates
+        # that the token has been leaked and reused (either by the legitimate user or an attacker).
+        # To prevent further unauthorized access, we must invalidate all active sessions for this
+        # user as the entire token family is compromised.
+        logger.warning(
+            "Compromise detected: Revoked refresh token reused for user %s. "
+            "Invalidating all sessions.",
+            session_row.user_id,
+        )
+        await revoke_all_user_sessions(db_session, user_id=session_row.user_id)
         raise InvalidOrExpiredTokenError()
 
     now_utc = datetime.now(UTC)
@@ -145,7 +141,7 @@ async def revoke_session(db_session: AsyncSession, *, raw_token: str) -> None:
         if session_row.revoked_at is None:
             session_row.revoked_at = datetime.now(UTC)
             db_session.add(session_row)
-            await db_session.commit()
+            await db_session.flush()
 
 
 async def revoke_all_user_sessions(db_session: AsyncSession, *, user_id: UUID) -> None:
@@ -157,7 +153,7 @@ async def revoke_all_user_sessions(db_session: AsyncSession, *, user_id: UUID) -
     for s in active_sessions:
         s.revoked_at = now_utc
         db_session.add(s)
-    await db_session.commit()
+    await db_session.flush()
 
 
 async def list_active_sessions(db_session: AsyncSession, *, user_id: UUID) -> list[Session]:

@@ -159,9 +159,6 @@ async def test_refresh_token_reuse_detection(client, register_payload, session: 
     raw_refresh2 = login_resp2.json()["refresh_token"]
 
     # Reuse detection triggered by using raw_refresh again (which was already rotated)
-    import asyncio
-
-    await asyncio.sleep(0.6)
     reuse_resp = await client.post("/auth/refresh", json={"refresh_token": raw_refresh})
     assert reuse_resp.status_code == 401
     assert reuse_resp.json()["detail"] == "Invalid or expired refresh token"
