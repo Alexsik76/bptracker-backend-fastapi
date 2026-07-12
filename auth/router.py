@@ -10,7 +10,7 @@ from auth.deps import CurrentUserId
 from auth.models import NormalizedEmail, SessionRead, TokenResponse, UserCreate
 from auth.security import (
     generate_magic_token,
-    hash_magic_token,
+    hash_token,
     verify_password_or_dummy,
 )
 from config import get_settings
@@ -96,7 +96,7 @@ async def request_magic_link(
     user = await crud.get_user_by_email(session, data.email)
     if user:
         raw_token = generate_magic_token()
-        token_hash = hash_magic_token(raw_token)
+        token_hash = hash_token(raw_token)
         expires_at = datetime.now(UTC) + timedelta(minutes=settings.magic_link_ttl_minutes)
 
         await crud.upsert_magic_link(
@@ -138,7 +138,7 @@ async def confirm_magic_link(
     session: SessionDep,
     user_agent: Annotated[str | None, Header()] = None,
 ) -> TokenResponse:
-    token_hash = hash_magic_token(data.token)
+    token_hash = hash_token(data.token)
     link = await crud.get_magic_link_by_hash(session, token_hash)
 
     if not link:

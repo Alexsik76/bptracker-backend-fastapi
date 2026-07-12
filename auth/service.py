@@ -7,7 +7,7 @@ from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from auth.models import Session
-from auth.security import create_access_token, generate_refresh_token, hash_magic_token
+from auth.security import create_access_token, generate_refresh_token, hash_token
 from config import get_settings
 
 logger = logging.getLogger(__name__)
@@ -72,9 +72,11 @@ async def rotate_session(
     user_agent: str | None,
 ) -> TokenPair:
     """Rotate the presented refresh token with a new token pair and access token."""
-    token_hash = hash_magic_token(raw_token)
+    token_hash = hash_token(raw_token)
 
-    statement = select(Session).where(Session.token_hash == token_hash)
+    # Lock the session row to prevent race conditions where concurrent refresh requests
+    # using the same token bypass the revoked_at check and create duplicate active session families.
+    statement = select(Session).where(Session.token_hash == token_hash).with_for_update()
     result = await db_session.exec(statement)
     session_row = result.first()
 
@@ -82,16 +84,20 @@ async def rotate_session(
         raise InvalidOrExpiredTokenError()
 
     if session_row.revoked_at is not None:
-        # When a refresh token that has already been revoked is presented again, it indicates
-        # that the token has been leaked and reused (either by the legitimate user or an attacker).
-        # To prevent further unauthorized access, we must invalidate all active sessions for this
-        # user as the entire token family is compromised.
-        logger.warning(
-            "Compromise detected: Revoked refresh token reused for user %s. "
-            "Invalidating all sessions.",
-            session_row.user_id,
-        )
-        await revoke_all_user_sessions(db_session, user_id=session_row.user_id)
+        # If the refresh token was revoked very recently (e.g. within 10 seconds),
+        # it is likely due to concurrent requests from the client (e.g. concurrent calls
+        # to /auth/refresh). In this case, we fail the second request with
+        # InvalidOrExpiredTokenError but do not trigger full reuse/compromise revocation.
+        if datetime.now(UTC) - session_row.revoked_at > timedelta(seconds=0.5):
+            # When a refresh token that has already been revoked is presented again after
+            # the grace period, it indicates a malicious reuse attempt where the token was captured.
+            # To prevent further unauthorized access, we invalidate all active sessions.
+            logger.warning(
+                "Compromise detected: Revoked refresh token reused for user %s. "
+                "Invalidating all sessions.",
+                session_row.user_id,
+            )
+            await revoke_all_user_sessions(db_session, user_id=session_row.user_id)
         raise InvalidOrExpiredTokenError()
 
     now_utc = datetime.now(UTC)
@@ -131,7 +137,7 @@ async def rotate_session(
 
 async def revoke_session(db_session: AsyncSession, *, raw_token: str) -> None:
     """Revoke the session matching the raw refresh token. Idempotent."""
-    token_hash = hash_magic_token(raw_token)
+    token_hash = hash_token(raw_token)
     statement = select(Session).where(Session.token_hash == token_hash)
     result = await db_session.exec(statement)
     session_row = result.first()

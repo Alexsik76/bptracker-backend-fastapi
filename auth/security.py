@@ -65,10 +65,10 @@ def generate_magic_token() -> str:
     return secrets.token_urlsafe(settings.magic_link_token_bytes)
 
 
-def hash_magic_token(token: str) -> str:
+def hash_token(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
 
 
 def generate_refresh_token() -> tuple[str, str]:
     token = secrets.token_urlsafe(32)
-    return token, hash_magic_token(token)
+    return token, hash_token(token)

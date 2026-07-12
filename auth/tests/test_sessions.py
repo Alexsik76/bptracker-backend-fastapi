@@ -5,7 +5,7 @@ from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from auth.models import Session
-from auth.security import hash_magic_token
+from auth.security import hash_token
 from auth.webauthn.tests.test_ceremonies import (
     SoftWebauthnDevice,
     make_authentication_verify_body,
@@ -159,6 +159,9 @@ async def test_refresh_token_reuse_detection(client, register_payload, session: 
     raw_refresh2 = login_resp2.json()["refresh_token"]
 
     # Reuse detection triggered by using raw_refresh again (which was already rotated)
+    import asyncio
+
+    await asyncio.sleep(0.6)
     reuse_resp = await client.post("/auth/refresh", json={"refresh_token": raw_refresh})
     assert reuse_resp.status_code == 401
     assert reuse_resp.json()["detail"] == "Invalid or expired refresh token"
@@ -190,7 +193,7 @@ async def test_expired_refresh_token(client, register_payload, session: AsyncSes
 
     # Artificially expire the session in the DB
     session.expire_all()
-    token_hash = hash_magic_token(raw_refresh)
+    token_hash = hash_token(raw_refresh)
     stmt = select(Session).where(Session.token_hash == token_hash)
     res = await session.exec(stmt)
     db_session = res.one()
@@ -304,3 +307,46 @@ async def test_get_sessions(client_factory, make_user, session: AsyncSession):
         assert "id" in item
         assert "created_at" in item
         assert "expires_at" in item
+
+
+@pytest.mark.asyncio
+async def test_concurrent_rotate_session(make_user, session: AsyncSession):
+    import asyncio
+
+    from auth.service import (
+        InvalidOrExpiredTokenError,
+        TokenPair,
+        issue_session,
+        list_active_sessions,
+        rotate_session,
+    )
+    from conftest import test_session_factory
+
+    user_id = await make_user("concurrent_rot@example.com")
+
+    # Issue a session first using a clean DB session
+    async with test_session_factory() as db_sess:
+        token_pair = await issue_session(db_sess, user_id=user_id, user_agent="Concurrent-UA")
+        raw_refresh = token_pair.refresh_token
+
+    # Define the concurrent rotation tasks using separate DB sessions
+    async def run_rotation():
+        async with test_session_factory() as db_sess:
+            return await rotate_session(
+                db_sess, raw_token=raw_refresh, user_agent="Concurrent-UA-Rotated"
+            )
+
+    # Run two rotate_session calls concurrently
+    results = await asyncio.gather(run_rotation(), run_rotation(), return_exceptions=True)
+
+    # Exactly one must succeed, and the other must raise InvalidOrExpiredTokenError
+    successes = [r for r in results if isinstance(r, TokenPair)]
+    failures = [r for r in results if isinstance(r, InvalidOrExpiredTokenError)]
+
+    assert len(successes) == 1
+    assert len(failures) == 1
+
+    # The user ends up with exactly one active session
+    async with test_session_factory() as db_sess:
+        active_sessions = await list_active_sessions(db_sess, user_id=user_id)
+        assert len(active_sessions) == 1

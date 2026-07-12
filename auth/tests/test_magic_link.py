@@ -6,7 +6,7 @@ from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from auth.models import MagicLink
-from auth.security import hash_magic_token
+from auth.security import hash_token
 from email_infra import EmailSender, get_email_sender
 from main import app
 
@@ -55,7 +55,7 @@ async def test_request_magic_link_known_email(
 
     assert link is not None
     # Raw token is not stored, only its hash
-    assert link.token_hash == hash_magic_token(raw_token)
+    assert link.token_hash == hash_token(raw_token)
     assert raw_token != link.token_hash
 
 
@@ -147,7 +147,7 @@ async def test_confirm_magic_link_expired(client, make_user, session: AsyncSessi
 
     # Manually insert an expired link
     raw_token = "some-expired-token"
-    token_hash = hash_magic_token(raw_token)
+    token_hash = hash_token(raw_token)
     expired_at = datetime.now(UTC) - timedelta(minutes=1)
     db_link = MagicLink(email=email, token_hash=token_hash, expires_at=expired_at)
     session.add(db_link)
