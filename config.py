@@ -44,6 +44,11 @@ class Settings(BaseSettings):
     magic_link_ttl_minutes: int = 15
     magic_link_token_bytes: int = 32
 
+    email_outbox_poll_seconds: int = 30
+    email_outbox_batch_size: int = 50
+    email_outbox_max_attempts: int = 10
+    email_outbox_worker_enabled: bool = True
+
     webauthn_rp_id: str
     webauthn_rp_name: str = "BP Tracker"
     webauthn_origin: str

@@ -1,10 +1,20 @@
+from dataclasses import dataclass
 from email.message import EmailMessage
 from typing import Annotated, Protocol
 
 import aiosmtplib
 from fastapi import Depends
+from sqlmodel.ext.asyncio.session import AsyncSession
 
 from config import Settings, get_settings
+from db import get_session
+
+
+@dataclass(frozen=True)
+class EmailAttachment:
+    filename: str
+    content: bytes
+    content_type: str
 
 
 class EmailSender(Protocol):
@@ -15,6 +25,7 @@ class EmailSender(Protocol):
         subject: str,
         text: str,
         html: str | None = None,
+        attachments: list[EmailAttachment] | None = None,
     ) -> None: ...
 
 
@@ -45,6 +56,7 @@ class SmtpEmailSender:
         subject: str,
         text: str,
         html: str | None = None,
+        attachments: list[EmailAttachment] | None = None,
     ) -> None:
         message = EmailMessage()
         message["From"] = self.smtp_from
@@ -55,6 +67,19 @@ class SmtpEmailSender:
         if html is not None:
             message.add_alternative(html, subtype="html")
 
+        if attachments:
+            for attachment in attachments:
+                if "/" in attachment.content_type:
+                    maintype, subtype = attachment.content_type.split("/", 1)
+                else:
+                    maintype, subtype = "application", attachment.content_type
+                message.add_attachment(
+                    attachment.content,
+                    maintype=maintype,
+                    subtype=subtype,
+                    filename=attachment.filename,
+                )
+
         await aiosmtplib.send(
             message,
             hostname=self.smtp_host,
@@ -63,6 +88,30 @@ class SmtpEmailSender:
             password=self.smtp_password,
             start_tls=self.smtp_starttls,
             timeout=self.smtp_timeout,
+        )
+
+
+class OutboxEmailSender:
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def send(
+        self,
+        *,
+        to: str,
+        subject: str,
+        text: str,
+        html: str | None = None,
+        attachments: list[EmailAttachment] | None = None,
+    ) -> None:
+        from email_infra.crud import enqueue
+
+        await enqueue(
+            self._session,
+            to=to,
+            subject=subject,
+            body=text,
+            attachments=attachments,
         )
 
 
@@ -76,3 +125,7 @@ def get_email_sender(settings: Annotated[Settings, Depends(get_settings)]) -> Em
         smtp_starttls=settings.smtp_starttls,
         smtp_timeout=settings.smtp_timeout,
     )
+
+
+def get_outbox_email_sender(session: Annotated[AsyncSession, Depends(get_session)]) -> EmailSender:
+    return OutboxEmailSender(session)

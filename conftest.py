@@ -1,6 +1,9 @@
 # conftest.py
 import asyncio
+import os
 import sys
+
+os.environ["EMAIL_OUTBOX_WORKER_ENABLED"] = "False"
 from collections.abc import AsyncGenerator
 from uuid import UUID
 
@@ -18,6 +21,7 @@ from auth.security import hash_password
 from auth.webauthn import models as _w  # noqa: F401
 from config import get_settings
 from db import get_session
+from email_infra import models as _e  # noqa: F401
 from main import app
 from measurements import models as _m  # noqa: F401
 from prescriptions import models as _p  # noqa: F401
