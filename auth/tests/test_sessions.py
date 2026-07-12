@@ -343,7 +343,47 @@ async def test_concurrent_rotate_session(make_user, session: AsyncSession):
     assert len(successes) == 1
     assert len(failures) == 1
 
-    # The user ends up with exactly one active session
+    # The user ends up with zero active sessions due to unconditional mass revocation on reuse
     async with test_session_factory() as db_sess:
         active_sessions = await list_active_sessions(db_sess, user_id=user_id)
-        assert len(active_sessions) == 1
+        assert len(active_sessions) == 0
+
+
+@pytest.mark.asyncio
+async def test_refresh_token_reuse_detection_http(client, register_payload):
+    from auth.crud import get_user_by_email
+    from auth.service import list_active_sessions
+    from conftest import test_session_factory
+
+    # 1. Register & Login to get the initial tokens
+    reg_resp = await client.post("/auth/register", json=register_payload)
+    assert reg_resp.status_code == 201
+
+    login_resp = await client.post("/auth/login", json=register_payload)
+    assert login_resp.status_code == 200
+    raw_refresh = login_resp.json()["refresh_token"]
+
+    # Retrieve user_id from database
+    async with test_session_factory() as db_sess:
+        user = await get_user_by_email(db_sess, email=register_payload["email"])
+        user_id = user.id
+
+    # 2. First rotation (succeeds)
+    refresh_resp1 = await client.post("/auth/refresh", json={"refresh_token": raw_refresh})
+    assert refresh_resp1.status_code == 200
+    new_refresh1 = refresh_resp1.json()["refresh_token"]
+
+    # 3. Reuse detection triggered by presenting the old raw_refresh again over HTTP
+    reuse_resp = await client.post("/auth/refresh", json={"refresh_token": raw_refresh})
+    assert reuse_resp.status_code == 401
+    assert reuse_resp.json()["detail"] == "Invalid or expired refresh token"
+
+    # 4. Open a fresh database session and verify all active sessions for the user are revoked
+    async with test_session_factory() as db_sess:
+        active_sessions = await list_active_sessions(db_sess, user_id=user_id)
+        assert len(active_sessions) == 0
+
+    # 5. Verify the token issued by the successful refresh is also revoked
+    final_refresh_resp = await client.post("/auth/refresh", json={"refresh_token": new_refresh1})
+    assert final_refresh_resp.status_code == 401
+    assert final_refresh_resp.json()["detail"] == "Invalid or expired refresh token"

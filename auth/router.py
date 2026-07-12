@@ -202,7 +202,6 @@ async def logout(
     session: SessionDep,
 ) -> None:
     await service.revoke_session(session, raw_token=data.refresh_token)
-    await session.commit()
 
 
 @router.post("/logout-all", status_code=status.HTTP_204_NO_CONTENT)
@@ -211,7 +210,6 @@ async def logout_all(
     current_user_id: CurrentUserId,
 ) -> None:
     await service.revoke_all_user_sessions(session, user_id=current_user_id)
-    await session.commit()
 
 
 @router.get("/sessions", response_model=list[SessionRead])

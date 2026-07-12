@@ -94,6 +94,7 @@ async def rotate_session(
             session_row.user_id,
         )
         await revoke_all_user_sessions(db_session, user_id=session_row.user_id)
+        await db_session.commit()
         raise InvalidOrExpiredTokenError()
 
     now_utc = datetime.now(UTC)
@@ -115,7 +116,6 @@ async def rotate_session(
         user_id=session_row.user_id,
         token_hash=new_token_hash,
         expires_at=new_expires_at,
-        last_used_at=now_utc,
         user_agent=truncated_ua,
     )
     db_session.add(new_session_row)
@@ -141,7 +141,7 @@ async def revoke_session(db_session: AsyncSession, *, raw_token: str) -> None:
         if session_row.revoked_at is None:
             session_row.revoked_at = datetime.now(UTC)
             db_session.add(session_row)
-            await db_session.flush()
+            await db_session.commit()
 
 
 async def revoke_all_user_sessions(db_session: AsyncSession, *, user_id: UUID) -> None:
@@ -153,7 +153,7 @@ async def revoke_all_user_sessions(db_session: AsyncSession, *, user_id: UUID) -
     for s in active_sessions:
         s.revoked_at = now_utc
         db_session.add(s)
-    await db_session.flush()
+    await db_session.commit()
 
 
 async def list_active_sessions(db_session: AsyncSession, *, user_id: UUID) -> list[Session]:
