@@ -51,6 +51,9 @@ class Settings(BaseSettings):
     email_outbox_worker_enabled: bool = True
     email_outbox_lease_seconds: int = 300
 
+    cleanup_interval_minutes: int = 60
+    cleanup_worker_enabled: bool = True
+
     export_cooldown_minutes: int = 10
     export_sheets_template_url: str
 
