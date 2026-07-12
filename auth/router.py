@@ -1,14 +1,14 @@
 from datetime import UTC, datetime, timedelta
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, Header, HTTPException, status
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import SQLModel
 
-from auth import crud
-from auth.models import NormalizedEmail, TokenResponse, UserCreate
+from auth import crud, service
+from auth.deps import CurrentUserId
+from auth.models import NormalizedEmail, SessionRead, TokenResponse, UserCreate
 from auth.security import (
-    create_access_token,
     generate_magic_token,
     hash_magic_token,
     verify_password_or_dummy,
@@ -34,8 +34,20 @@ class MagicLinkConfirm(SQLModel):
     token: str
 
 
+class RefreshRequest(SQLModel):
+    refresh_token: str
+
+
+class LogoutRequest(SQLModel):
+    refresh_token: str
+
+
 @router.post("/register", response_model=TokenResponse, status_code=status.HTTP_201_CREATED)
-async def register(data: UserCreate, session: SessionDep) -> TokenResponse:
+async def register(
+    data: UserCreate,
+    session: SessionDep,
+    user_agent: Annotated[str | None, Header()] = None,
+) -> TokenResponse:
     # Auto-login on register: a fresh account gets a token immediately.
     try:
         user = await crud.create_user(session, data)
@@ -44,11 +56,20 @@ async def register(data: UserCreate, session: SessionDep) -> TokenResponse:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT, detail="Email already registered"
         ) from exc
-    return TokenResponse(access_token=create_access_token(user.id))
+    token_pair = await service.issue_session(session, user_id=user.id, user_agent=user_agent)
+    return TokenResponse(
+        access_token=token_pair.access_token,
+        refresh_token=token_pair.refresh_token,
+        expires_in=token_pair.expires_in,
+    )
 
 
 @router.post("/login", response_model=TokenResponse)
-async def login(data: LoginRequest, session: SessionDep) -> TokenResponse:
+async def login(
+    data: LoginRequest,
+    session: SessionDep,
+    user_agent: Annotated[str | None, Header()] = None,
+) -> TokenResponse:
     user = await crud.get_user_by_email(session, data.email)
     # One bcrypt comparison runs regardless of whether the email exists, so login
     # response time doesn't reveal which emails are registered. Same 401 message
@@ -58,7 +79,12 @@ async def login(data: LoginRequest, session: SessionDep) -> TokenResponse:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="Incorrect email or password"
         )
-    return TokenResponse(access_token=create_access_token(user.id))
+    token_pair = await service.issue_session(session, user_id=user.id, user_agent=user_agent)
+    return TokenResponse(
+        access_token=token_pair.access_token,
+        refresh_token=token_pair.refresh_token,
+        expires_in=token_pair.expires_in,
+    )
 
 
 @router.post("/magic-link/request", status_code=status.HTTP_202_ACCEPTED)
@@ -110,6 +136,7 @@ async def request_magic_link(
 async def confirm_magic_link(
     data: MagicLinkConfirm,
     session: SessionDep,
+    user_agent: Annotated[str | None, Header()] = None,
 ) -> TokenResponse:
     token_hash = hash_magic_token(data.token)
     link = await crud.get_magic_link_by_hash(session, token_hash)
@@ -137,4 +164,67 @@ async def confirm_magic_link(
 
     await crud.delete_magic_link(session, link)
 
-    return TokenResponse(access_token=create_access_token(user.id))
+    token_pair = await service.issue_session(session, user_id=user.id, user_agent=user_agent)
+    return TokenResponse(
+        access_token=token_pair.access_token,
+        refresh_token=token_pair.refresh_token,
+        expires_in=token_pair.expires_in,
+    )
+
+
+@router.post("/refresh", response_model=TokenResponse)
+async def refresh(
+    data: RefreshRequest,
+    session: SessionDep,
+    user_agent: Annotated[str | None, Header()] = None,
+) -> TokenResponse:
+    try:
+        token_pair = await service.rotate_session(
+            session,
+            raw_token=data.refresh_token,
+            user_agent=user_agent,
+        )
+        return TokenResponse(
+            access_token=token_pair.access_token,
+            refresh_token=token_pair.refresh_token,
+            expires_in=token_pair.expires_in,
+        )
+    except service.InvalidOrExpiredTokenError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired refresh token",
+        ) from exc
+
+
+@router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
+async def logout(
+    data: LogoutRequest,
+    session: SessionDep,
+) -> None:
+    await service.revoke_session(session, raw_token=data.refresh_token)
+
+
+@router.post("/logout-all", status_code=status.HTTP_204_NO_CONTENT)
+async def logout_all(
+    session: SessionDep,
+    current_user_id: CurrentUserId,
+) -> None:
+    await service.revoke_all_user_sessions(session, user_id=current_user_id)
+
+
+@router.get("/sessions", response_model=list[SessionRead])
+async def get_sessions(
+    session: SessionDep,
+    current_user_id: CurrentUserId,
+) -> list[SessionRead]:
+    sessions = await service.list_active_sessions(session, user_id=current_user_id)
+    return [
+        SessionRead(
+            id=s.id,
+            created_at=s.created_at,
+            last_used_at=s.last_used_at,
+            expires_at=s.expires_at,
+            user_agent=s.user_agent,
+        )
+        for s in sessions
+    ]

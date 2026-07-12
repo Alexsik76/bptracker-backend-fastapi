@@ -30,7 +30,8 @@ class Settings(BaseSettings):
     # No default: a missing JWT_SECRET must fail loudly, never fall back silently.
     jwt_secret: str
     jwt_algorithm: str = "HS256"
-    access_token_expire_minutes: int = 60 * 24  # 1 day for now
+    access_token_expire_minutes: int = 15
+    refresh_token_ttl_days: int = 30
 
     smtp_host: str
     smtp_port: int = 587

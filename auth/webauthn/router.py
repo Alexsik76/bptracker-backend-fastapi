@@ -1,10 +1,11 @@
+from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, Response, status
+from fastapi import APIRouter, Header, HTTPException, Response, status
 
+from auth import service as auth_service
 from auth.deps import CurrentUserId
 from auth.models import TokenResponse, User
-from auth.security import create_access_token
 from auth.webauthn import service
 from auth.webauthn.crud import delete_credential, list_credentials_by_user
 from auth.webauthn.models import WebAuthnCredential, WebAuthnCredentialRead
@@ -59,18 +60,30 @@ async def authenticate_options(session: SessionDep) -> Response:
 
 
 @router.post("/authenticate/verify", response_model=TokenResponse, status_code=status.HTTP_200_OK)
-async def authenticate_verify(session: SessionDep, body: dict) -> TokenResponse:
+async def authenticate_verify(
+    session: SessionDep,
+    body: dict,
+    user_agent: Annotated[str | None, Header()] = None,
+) -> TokenResponse:
     try:
         authenticated_user_id = await service.finish_authentication(
             session,
             body=body,
             settings=settings,
         )
-        return TokenResponse(access_token=create_access_token(authenticated_user_id))
     except service.CeremonyError as exc:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired credentials"
         ) from exc
+
+    token_pair = await auth_service.issue_session(
+        session, user_id=authenticated_user_id, user_agent=user_agent
+    )
+    return TokenResponse(
+        access_token=token_pair.access_token,
+        refresh_token=token_pair.refresh_token,
+        expires_in=token_pair.expires_in,
+    )
 
 
 @router.get(
