@@ -10,7 +10,7 @@ from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from config import Settings
-from email_infra.crud import claim_batch, enqueue
+from email_infra.crud import claim_batch, enqueue, mark_sent
 from email_infra.models import EmailOutbox, EmailStatus
 from email_infra.sender import EmailAttachment, OutboxEmailSender, SmtpEmailSender
 from email_infra.worker import run_email_outbox_worker
@@ -32,6 +32,7 @@ async def test_enqueue_writes_pending_row(session: AsyncSession):
         attachments=[attachment],
         user_id=None,
     )
+    await session.commit()
 
     assert item.status == EmailStatus.PENDING
     assert item.to == "test@example.com"
@@ -110,6 +111,7 @@ async def test_worker_happy_path(session: AsyncSession):
         body="Plain text",
         attachments=[attachment],
     )
+    await session.commit()
 
     settings = Settings(
         postgres_user="dummy",
@@ -172,6 +174,7 @@ async def test_worker_retry_on_failure(session: AsyncSession):
         subject="Fail Subject",
         body="Plain text",
     )
+    await session.commit()
 
     settings = Settings(
         postgres_user="dummy",
@@ -228,6 +231,7 @@ async def test_worker_death_after_max_attempts(session: AsyncSession):
         subject="Dead Subject",
         body="Plain text",
     )
+    await session.commit()
 
     settings = Settings(
         postgres_user="dummy",
@@ -300,6 +304,7 @@ async def test_concurrency_skip_locked(session: AsyncSession):
         subject="Concurrency test",
         body="Plain text",
     )
+    await session.commit()
 
     from conftest import test_session_factory
 
@@ -331,6 +336,7 @@ async def test_outbox_email_sender_enqueues(session: AsyncSession):
         text="Outbox Text",
         attachments=[attachment],
     )
+    await session.commit()
 
     statement = select(EmailOutbox).where(EmailOutbox.to == "outbox-user@example.com")
     result = await session.exec(statement)
@@ -343,3 +349,25 @@ async def test_outbox_email_sender_enqueues(session: AsyncSession):
     assert item.attachments is not None
     assert len(item.attachments) == 1
     assert item.attachments[0]["filename"] == "sent.txt"
+
+
+@pytest.mark.asyncio
+async def test_lease_survives_intermediate_commit(session: AsyncSession):
+    await enqueue(session, to="lease1@example.com", subject="S1", body="B1")
+    await enqueue(session, to="lease2@example.com", subject="S2", body="B2")
+    await session.commit()
+
+    from conftest import test_session_factory
+
+    async with test_session_factory() as session1:
+        # Claim batch of 2, lease them for 300 seconds
+        batch = await claim_batch(session1, limit=2, lease_seconds=300)
+        assert len(batch) == 2
+
+        # Mark the first as sent (which commits session1's transaction)
+        await mark_sent(session1, batch[0])
+
+    async with test_session_factory() as session2:
+        # Second session attempts claim_batch — it must return zero rows
+        batch2 = await claim_batch(session2, limit=2)
+        assert len(batch2) == 0

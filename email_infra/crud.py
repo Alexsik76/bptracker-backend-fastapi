@@ -42,17 +42,23 @@ async def enqueue(
         user_id=user_id,
     )
     session.add(item)
-    await session.commit()
+    await session.flush()
     await session.refresh(item)
     return item
 
 
-async def claim_batch(session: AsyncSession, *, limit: int) -> list[EmailOutbox]:
-    """Selects pending or failed emails that are due for delivery.
+async def claim_batch(
+    session: AsyncSession, *, limit: int, lease_seconds: int = 300
+) -> list[EmailOutbox]:
+    """Selects pending or failed emails that are due for delivery and leases them.
 
-    This query uses SELECT ... FOR UPDATE SKIP LOCKED to ensure multiple concurrent
-    workers do not claim and process the same email. This is essential for horizontal
-    scaling in production.
+    Because FOR UPDATE SKIP LOCKED locks are held only until the end of the transaction,
+    and the worker commits after processing each individual email (which releases the locks
+    on the rest of the unclaimed batch), we must immediately lease the claimed batch.
+    By updating `next_attempt_at` forward by a lease interval and committing within this
+    transaction, the rows are removed from the claim predicate (next_attempt_at <= now())
+    even after the locks are released. If the worker crashes before processing, they will
+    naturally time out and return to the pool.
     """
     now_utc = datetime.now(UTC)
     statement = (
@@ -66,7 +72,16 @@ async def claim_batch(session: AsyncSession, *, limit: int) -> list[EmailOutbox]
         .with_for_update(skip_locked=True)
     )
     result = await session.exec(statement)
-    return list(result.all())
+    items = list(result.all())
+
+    if items:
+        lease_until = datetime.now(UTC) + timedelta(seconds=lease_seconds)
+        for item in items:
+            item.next_attempt_at = lease_until
+            session.add(item)
+        await session.commit()
+
+    return items
 
 
 async def mark_sent(session: AsyncSession, item: EmailOutbox) -> None:

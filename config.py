@@ -48,6 +48,7 @@ class Settings(BaseSettings):
     email_outbox_batch_size: int = 50
     email_outbox_max_attempts: int = 10
     email_outbox_worker_enabled: bool = True
+    email_outbox_lease_seconds: int = 300
 
     webauthn_rp_id: str
     webauthn_rp_name: str = "BP Tracker"

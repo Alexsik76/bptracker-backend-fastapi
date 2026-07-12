@@ -24,10 +24,16 @@ async def run_email_outbox_worker(
     while True:
         try:
             async with session_factory() as session:
-                batch = await claim_batch(session, limit=batch_size)
+                batch = await claim_batch(
+                    session,
+                    limit=batch_size,
+                    lease_seconds=settings.email_outbox_lease_seconds,
+                )
                 if batch:
                     logger.info("Claimed %d email outbox items for sending", len(batch))
                     for item in batch:
+                        send_success = False
+                        send_exc = None
                         try:
                             attachments = []
                             if item.attachments:
@@ -49,24 +55,28 @@ async def run_email_outbox_worker(
                                 text=item.body,
                                 attachments=attachments,
                             )
+                            send_success = True
+                        except Exception as exc:
+                            send_exc = exc
 
+                        if send_success:
                             await mark_sent(session, item)
                             logger.info("Email %s to %s sent successfully", item.id, item.to)
-                        except Exception as exc:
+                        else:
                             await mark_failed(
                                 session,
                                 item,
-                                error=str(exc),
+                                error=str(send_exc),
                                 max_attempts=max_attempts,
                             )
                             if item.status == EmailStatus.DEAD:
                                 logger.error(
-                                    "Email %s to %s marked DEAD after %d attempts. Error: %s",
+                                    "Email %s to %s marked DEAD after %d/%d attempts. Error: %s",
                                     item.id,
                                     item.to,
                                     item.attempts,
                                     max_attempts,
-                                    exc,
+                                    send_exc,
                                 )
                             else:
                                 logger.warning(
@@ -76,7 +86,7 @@ async def run_email_outbox_worker(
                                     item.to,
                                     item.attempts,
                                     max_attempts,
-                                    exc,
+                                    send_exc,
                                 )
         except asyncio.CancelledError:
             logger.info("Email outbox worker task cancelled. Exiting cleanly.")
