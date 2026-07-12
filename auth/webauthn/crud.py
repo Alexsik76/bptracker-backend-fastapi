@@ -1,7 +1,7 @@
 from datetime import UTC, datetime
 from uuid import UUID
 
-from sqlmodel import select
+from sqlmodel import delete, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from auth.webauthn.models import ChallengePurpose, WebAuthnChallenge, WebAuthnCredential
@@ -94,15 +94,21 @@ async def create_challenge(
 async def consume_challenge(
     session: AsyncSession, *, challenge: bytes, purpose: ChallengePurpose
 ) -> WebAuthnChallenge | None:
-    statement = select(WebAuthnChallenge).where(WebAuthnChallenge.challenge == challenge)
+    # To prevent a race condition where concurrent verify requests could both read the
+    # same ephemeral challenge, we perform a single atomic DELETE ... RETURNING operation.
+    # Placing the purpose check in the WHERE clause ensures we only delete and return
+    # the challenge if it exactly matches the expected purpose, leaving it intact otherwise.
+    statement = (
+        delete(WebAuthnChallenge)
+        .where(
+            WebAuthnChallenge.challenge == challenge,
+            WebAuthnChallenge.purpose == purpose,
+        )
+        .returning(WebAuthnChallenge)
+    )
     result = await session.exec(statement)
-    row = result.first()
-    if not row:
-        return None
-
-    if row.purpose != purpose:
-        return None
-
-    await session.delete(row)
-    await session.commit()
-    return row
+    row = result.scalar_one_or_none()
+    if row:
+        await session.commit()
+        return row
+    return None

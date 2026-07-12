@@ -220,3 +220,37 @@ async def test_consume_challenge_mismatched_purpose(session: AsyncSession):
     row = result.first()
     assert row is not None
     assert row.purpose == ChallengePurpose.REGISTRATION
+
+
+@pytest.mark.asyncio
+async def test_consume_challenge_atomic_properties(session: AsyncSession):
+    challenge_bytes = b"atomic_test_challenge_nonce"
+    expires = datetime.now(UTC) + timedelta(minutes=5)
+
+    await create_challenge(
+        session,
+        challenge=challenge_bytes,
+        user_id=None,
+        purpose=ChallengePurpose.REGISTRATION,
+        expires_at=expires,
+    )
+
+    consumed_mismatch = await consume_challenge(
+        session, challenge=challenge_bytes, purpose=ChallengePurpose.AUTHENTICATION
+    )
+    assert consumed_mismatch is None
+
+    statement = select(WebAuthnChallenge).where(WebAuthnChallenge.challenge == challenge_bytes)
+    res = await session.exec(statement)
+    assert res.first() is not None
+
+    consumed_correct = await consume_challenge(
+        session, challenge=challenge_bytes, purpose=ChallengePurpose.REGISTRATION
+    )
+    assert consumed_correct is not None
+    assert consumed_correct.challenge == challenge_bytes
+
+    consumed_sequential = await consume_challenge(
+        session, challenge=challenge_bytes, purpose=ChallengePurpose.REGISTRATION
+    )
+    assert consumed_sequential is None
