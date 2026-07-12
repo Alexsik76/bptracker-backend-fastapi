@@ -4,7 +4,6 @@ import zoneinfo
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
-from fastapi import HTTPException, status
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
@@ -14,11 +13,19 @@ from email_infra import EmailAttachment, OutboxEmailSender
 from measurements.models import Measurement
 
 
+class UserNotFound(Exception):
+    pass
+
+
+class ExportCooldownActive(Exception):
+    pass
+
+
 def get_user_timezone(timezone_str: str | None) -> zoneinfo.ZoneInfo:
     if timezone_str:
         try:
             return zoneinfo.ZoneInfo(timezone_str)
-        except Exception:
+        except (zoneinfo.ZoneInfoNotFoundError, ValueError):
             pass
     return zoneinfo.ZoneInfo("UTC")
 
@@ -29,14 +36,11 @@ def generate_measurements_csv(measurements: list[Measurement], tz: zoneinfo.Zone
     writer.writerow(["timestamp", "systolic", "diastolic", "pulse"])
 
     for m in measurements:
-        rec_at = m.recorded_at or datetime.now(UTC)
         # Convert the timestamp to the user's target local timezone before formatting.
-        # Note for code comment: docs/conventions.md says the client normalizes
-        # timezone and the backend never interprets it. That rule governs data
-        # the client sends. Here the backend renders a human-readable file with
-        # no client in the loop, so users.timezone — the field kept precisely
-        # for this class of server-side rendering — is the correct source.
-        local_dt = rec_at.astimezone(tz)
+        # The backend renders this file server-side with no client in the loop, which is why
+        # users.timezone — and not the "client normalizes timezone" convention from
+        # docs/conventions.md — governs here.
+        local_dt = m.recorded_at.astimezone(tz)
         timestamp_str = local_dt.strftime("%Y-%m-%d %H:%M:%S")
         writer.writerow([timestamp_str, m.sys, m.dia, m.pulse])
 
@@ -52,7 +56,7 @@ async def export_measurements_to_csv(
     """Orchestrates the export process:
 
     1. Fetches the user (with with_for_update() to prevent race conditions).
-    2. Performs cooldown validation (returns 429 if requested within 10 minutes).
+    2. Performs cooldown validation.
     3. Fetches all measurements for the user in ascending date order.
     4. Generates the CSV bytes formatted to the user's timezone.
     5. Queues the email using OutboxEmailSender in the same transaction.
@@ -64,19 +68,13 @@ async def export_measurements_to_csv(
     result = await session.exec(statement)
     user = result.first()
     if not user:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="User not found",
-        )
+        raise UserNotFound()
 
     now_utc = datetime.now(UTC)
     if user.last_export_at is not None:
         cooldown_limit = user.last_export_at + timedelta(minutes=settings.export_cooldown_minutes)
         if now_utc < cooldown_limit:
-            raise HTTPException(
-                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                detail="Export already requested recently",
-            )
+            raise ExportCooldownActive()
 
     # Fetch all measurements ordered ascending
     m_statement = (
