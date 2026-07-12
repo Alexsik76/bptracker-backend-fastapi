@@ -1,52 +1,3 @@
-
-FastAPI-BPTracker
-
-
-
-How can I help you today?
-
-
-BP Tracker: Alembic і перша міграція
-Last message just now
-Налаштування FastAPI проекту з PostgreSQL
-Last message 7 hours ago
-Memory
-Only you
-Purpose & context Alex is rebuilding an existing C# backend (bptracker-backend, GitHub: Alexsik76) as a Python/FastAPI project (bptracker-backend-fastapi) — primarily as a structured learning exercise in modern Python backend development. The goal is to replicate the same domain logic while adopting best practices and modern libraries, not to explore low-level fundamentals. Alex explicitly frames Claude's role as teacher/guide in this work. Sessions are conducted in Ukrainian. Current state Full infrastructure scaffolding is complete: Containerization: Docker Compose with Postgres 18 (Alex correctly challenged an initial Claude suggestion of Postgres 16) Package management: uv with pyproject.toml as source of truth and uv.lock for reproducibility; UVCACHEDIR relocated from C: to D: via setx on Windows Stack: fastapi[standard], ruff (dev), SQLModel + SQLAlchemy 2.0 async + psycopg3 + Alembic Primary keys: uuidv7() server-side via Postgres 18's native function Config: .env uses five discrete fields (POSTGRESUSER, POSTGRESPASSWORD, POSTGRESDB, POSTGRESHOST, POSTGRESPORT); URL construction deferred to a config module VS Code: .vscode/ placement corrected mid-session measurements module: SQLModel multi-class inheritance pattern (MeasurementBase / Measurement(table=True) / MeasurementCreate / MeasurementRead), validated against C# source via GitHub API; source field intentionally omitted (not stored in C# measurements table) On the horizon Alembic configuration — this is the immediate next step, left pending at session end Key learnings & principles Alex actively and successfully challenges Claude's reasoning; Claude should acknowledge when prior reasoning was flawed rather than defending it (established over the Postgres version, DATABASEURL duplication, and uuidv7() framing episodes) Decisions from the C# codebase are treated as the canonical reference — the GitHub API was used mid-session to validate model design against actual source Approach & patterns Alex prefers Claude to make decisions with clear rationale rather than presenting open-ended choices; questions should only be asked when genuinely uncertain Responses should be concise and non-repetitive — re-explaining already-covered content has been corrected multiple times Code and config comments must always be in English, never Ukrainian — Alex had to redo work due to Ukrainian comments; this is a hard requirement. Conversational prose can remain Ukrainian. Tools & resources Languages/runtime: Python (uv), Docker Compose Framework: FastAPI, SQLModel, SQLAlchemy 2.0 async, psycopg3, Alembic Database: Postgres 18 Dev tooling: Ruff, VS Code Reference codebase: bptracker-backend (C#, GitHub: Alexsik76)
-
-Last updated 17 hours ago
-
-Instructions
-Add instructions to tailor Claude’s responses
-
-Files
-6% of project capacity used
-Search mode
-
-Alexsik76/bptracker-backend-fastapi
-master
-
-GITHUB
-
-
-
-PROJECT.md
-79 lines
-
-md
-
-
-
-medication-data-model.md
-136 lines
-
-md
-
-
-
-PROJECT.md
-
-
 <!-- MAINTENANCE: вступний документ нового беку BP Tracker (FastAPI).
      Фіксує прийняті рішення та межі. Не план робіт, не код.
      Правки робити точково; рішення, що змінились, переписувати в місці, а не дописувати знизу. -->
@@ -88,15 +39,23 @@ PROJECT.md
  
 ---
  
-## Що НЕ робимо зараз
- 
-Накопичуємо в дев-гілках / документації, не в проді:
-- автентифікація складніше за мінімум (passkey/WebAuthn, magic-link);
-- авторизація, ролі, адмінка;
-- push-нагадування, OCR-проксі;
-- частота (`frequency`) і курс (`course`) лікування — даних під них поки нема.
-Старт — чистий CRUD на трьох модулях.
- 
+## Що НЕ робимо зараз / Що реалізовано
+
+Основні фічі бекенду вже реалізовані та інтегровані:
+- **Автентифікація та сесії:** реалізовано три методи входу (пароль, magic-link та usernameless WebAuthn/passkey), збереження та ротація сесій у БД (`sessions`) з механізмом безумовного відкликання при компрометації.
+- **Модулі домену:** `measurements` (заміри тиску), `prescriptions` (призначення ліків) та `reminders` (планування прийомів та звіти).
+- **Поштова інфраструктура:** реалізовано `email_infra` з підтримкою синхронної доставки та асинхронної черги з ретраями (`email_outbox`).
+- **Експорт даних:** вивантаження історії замірів у CSV (`export`).
+- **Розпізнавання фото:** безстанційне розпізнавання показників тиску з фото через Gemini API (`POST /measurements/analyze`).
+- **Фоновий очищувач:** воркер для автоматичного очищення застарілих даних (челенджів, лінків, сесій).
+
+### Що залишається зробити:
+- **Rate limiting (D-003):** обмеження частоти запитів (особливо для ендпоінтів входу та розпізнавання фото) перед фінальним деплоем.
+
+### Що було свідомо відхилено або винесено на клієнт (див. D-006):
+- **Серверний push нагадувань:** нагадування планує та показує клієнт офлайн; VAPID-інфраструктура та воркер-планувальник не портуються.
+- **Серверний ланцюжок розпізнавання та збереження фото:** бекенд виступає лише як LLM-fallback (Gemini); локальне розпізнавання та накопичення датасету винесено безпосередньо на Android-клієнт.
+
 ### Закласти заздалегідь (передбачити, не реалізувати)
  
 - **Ізоляція даних per-user.** Моделі від початку несуть `user_id`. Поки користувач один (захардкоджений, як старий dev-сід), але поле є з першого дня.
