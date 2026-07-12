@@ -369,3 +369,52 @@ async def test_sign_count_advances(client_factory, make_user, session: AsyncSess
     # Refresh row and verify it advanced
     await session.refresh(cred)
     assert cred.sign_count > initial_sign_count
+
+
+@pytest.mark.asyncio
+async def test_unknown_raw_id_consumes_challenge(client_factory, make_user, session: AsyncSession):
+    user_id = await make_user("unknown_rawid@example.com")
+    client = client_factory(user_id)
+    origin = "http://localhost:5173"
+
+    # Register properly first
+    reg_options_resp = await client.post("/auth/webauthn/register/options")
+    device = SoftWebauthnDevice()
+    device_response = device.create(
+        prepare_options_for_soft_webauthn(reg_options_resp.json()), origin=origin
+    )
+    await client.post(
+        "/auth/webauthn/register/verify", json=make_registration_verify_body(device_response)
+    )
+
+    # Request authentication options (creates the challenge)
+    auth_options_resp = await client.post("/auth/webauthn/authenticate/options")
+    auth_options_dict = auth_options_resp.json()
+
+    # Sign with virtual device
+    auth_device_response = device.get(
+        prepare_options_for_soft_webauthn(auth_options_dict), origin=origin
+    )
+
+    # 1. Send verify request with unknown rawId
+    verify_body_mangled = make_authentication_verify_body(auth_device_response)
+    # Generate some fake rawId (32 random bytes as base64url)
+    fake_raw_id = bytes_to_base64url(b"a" * 32)
+    verify_body_mangled["id"] = fake_raw_id
+    verify_body_mangled["rawId"] = fake_raw_id
+
+    verify_resp_fake = await client.post(
+        "/auth/webauthn/authenticate/verify", json=verify_body_mangled
+    )
+    assert verify_resp_fake.status_code == 401
+    assert verify_resp_fake.json()["detail"] == "Invalid or expired credentials"
+
+    # 2. Try verifying with the original correct rawId using the same challenge
+    verify_body_correct = make_authentication_verify_body(auth_device_response)
+    verify_resp_correct = await client.post(
+        "/auth/webauthn/authenticate/verify", json=verify_body_correct
+    )
+
+    # It must fail with 401 because the challenge has been consumed and burned
+    assert verify_resp_correct.status_code == 401
+    assert verify_resp_correct.json()["detail"] == "Invalid or expired credentials"

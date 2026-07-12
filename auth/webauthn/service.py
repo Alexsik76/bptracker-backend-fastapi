@@ -164,6 +164,29 @@ async def finish_authentication(
     body: dict,
     settings: Settings,
 ) -> UUID:
+    client_data_json_b64 = body.get("response", {}).get("clientDataJSON")
+    if not client_data_json_b64:
+        raise CeremonyError("Missing clientDataJSON")
+
+    try:
+        client_data_json_bytes = base64url_to_bytes(client_data_json_b64)
+        client_data = parse_client_data_json(client_data_json_bytes)
+        challenge_bytes = client_data.challenge
+    except Exception as e:
+        raise CeremonyError(f"Invalid clientDataJSON format: {e}") from e
+
+    # To prevent brute-force probing of credential IDs (rawId) without consuming
+    # the single-use challenge, we consume and burn the challenge unconditionally
+    # before performing the database lookup for the credential.
+    challenge_row = await consume_challenge(
+        session, challenge=challenge_bytes, purpose=ChallengePurpose.AUTHENTICATION
+    )
+    if not challenge_row:
+        raise CeremonyError("Authentication challenge not found or purpose mismatch")
+
+    if challenge_row.expires_at < datetime.now(UTC):
+        raise CeremonyError("Authentication challenge expired")
+
     raw_id = body.get("rawId")
     if not raw_id:
         raise CeremonyError("Missing rawId")
@@ -176,26 +199,6 @@ async def finish_authentication(
     cred = await get_credential_by_credential_id(session, credential_id_bytes)
     if not cred:
         raise CeremonyError("Credential not found")
-
-    client_data_json_b64 = body.get("response", {}).get("clientDataJSON")
-    if not client_data_json_b64:
-        raise CeremonyError("Missing clientDataJSON")
-
-    try:
-        client_data_json_bytes = base64url_to_bytes(client_data_json_b64)
-        client_data = parse_client_data_json(client_data_json_bytes)
-        challenge_bytes = client_data.challenge
-    except Exception as e:
-        raise CeremonyError(f"Invalid clientDataJSON format: {e}") from e
-
-    challenge_row = await consume_challenge(
-        session, challenge=challenge_bytes, purpose=ChallengePurpose.AUTHENTICATION
-    )
-    if not challenge_row:
-        raise CeremonyError("Authentication challenge not found or purpose mismatch")
-
-    if challenge_row.expires_at < datetime.now(UTC):
-        raise CeremonyError("Authentication challenge expired")
 
     try:
         verification = verify_authentication_response(

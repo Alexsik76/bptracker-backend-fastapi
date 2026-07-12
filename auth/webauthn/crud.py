@@ -111,4 +111,5 @@ async def consume_challenge(
     if row:
         await session.commit()
         return row
+    await session.rollback()
     return None

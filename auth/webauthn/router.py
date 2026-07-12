@@ -1,3 +1,5 @@
+from uuid import UUID
+
 from fastapi import APIRouter, HTTPException, Response, status
 
 from auth.deps import CurrentUserId
@@ -18,16 +20,12 @@ async def register_options(session: SessionDep, user_id: CurrentUserId) -> Respo
     user = await session.get(User, user_id)
     if not user:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
-    try:
-        options_json = await service.start_registration(
-            session,
-            user_id=user_id,
-            email=user.email,
-            settings=settings,
-        )
-    except service.CeremonyError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-
+    options_json = await service.start_registration(
+        session,
+        user_id=user_id,
+        email=user.email,
+        settings=settings,
+    )
     return Response(content=options_json, media_type="application/json")
 
 
@@ -53,14 +51,10 @@ async def register_verify(
 
 @router.post("/authenticate/options", status_code=status.HTTP_200_OK)
 async def authenticate_options(session: SessionDep) -> Response:
-    try:
-        options_json = await service.start_authentication(
-            session,
-            settings=settings,
-        )
-    except service.CeremonyError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-
+    options_json = await service.start_authentication(
+        session,
+        settings=settings,
+    )
     return Response(content=options_json, media_type="application/json")
 
 
@@ -88,18 +82,9 @@ async def get_credentials(session: SessionDep, user_id: CurrentUserId) -> list[W
 
 @router.delete("/credentials/{credential_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_user_credential(
-    session: SessionDep, user_id: CurrentUserId, credential_id: str
+    session: SessionDep, user_id: CurrentUserId, credential_id: UUID
 ) -> Response:
-    try:
-        from uuid import UUID
-
-        cred_uuid = UUID(credential_id)
-    except ValueError:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Credential not found"
-        ) from None
-
-    cred = await session.get(WebAuthnCredential, cred_uuid)
+    cred = await session.get(WebAuthnCredential, credential_id)
     if not cred or cred.user_id != user_id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Credential not found")
 
