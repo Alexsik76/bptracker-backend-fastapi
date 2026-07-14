@@ -1,6 +1,6 @@
 from enum import StrEnum
 from functools import lru_cache
-from typing import Annotated
+from typing import Annotated, Any
 
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
@@ -10,6 +10,35 @@ from sqlalchemy import URL
 class Environment(StrEnum):
     DEV = "dev"
     PROD = "prod"
+
+
+def _parse_csv(value: Any, *, field_name: str, lowercase: bool = False) -> Any:
+    """Parse a comma-separated env var into a list of non-empty, stripped items.
+
+    Values that are already lists are normalised the same way. Any other type is
+    returned unchanged so that pydantic reports the type error itself.
+    """
+    if isinstance(value, str):
+        if not value.strip():
+            raise ValueError(f"{field_name} cannot be empty")
+        parsed = [item.strip() for item in value.split(",")]
+        if lowercase:
+            parsed = [item.lower() for item in parsed]
+        parsed = [item for item in parsed if item]
+        if not parsed:
+            raise ValueError(f"{field_name} cannot be empty")
+        return parsed
+
+    if isinstance(value, list):
+        parsed = [str(item).strip() for item in value]
+        if lowercase:
+            parsed = [item.lower() for item in parsed]
+        parsed = [item for item in parsed if item]
+        if not parsed:
+            raise ValueError(f"{field_name} cannot be empty")
+        return parsed
+
+    return value
 
 
 class Settings(BaseSettings):
@@ -73,41 +102,15 @@ class Settings(BaseSettings):
     # ALLOWED_EMAILS gates account creation. Only emails in this list can request a magic link.
     allowed_emails: Annotated[list[str], NoDecode]
 
-    @field_validator("allowed_emails", mode="before")
-    @classmethod
-    def parse_allowed_emails(cls, v: any) -> any:
-        if isinstance(v, str):
-            if not v.strip():
-                raise ValueError("allowed_emails cannot be empty")
-            parsed = [item.strip().lower() for item in v.split(",")]
-            parsed = [item for item in parsed if item]
-            if not parsed:
-                raise ValueError("allowed_emails cannot be empty")
-            return parsed
-        if isinstance(v, list):
-            parsed = [str(item).strip().lower() for item in v]
-            parsed = [item for item in parsed if item]
-            if not parsed:
-                raise ValueError("allowed_emails cannot be empty")
-            return parsed
-        return v
-
     @field_validator("webauthn_origins", mode="before")
     @classmethod
-    def parse_webauthn_origins(cls, v: any) -> any:
-        if isinstance(v, str):
-            if not v.strip():
-                raise ValueError("webauthn_origins cannot be empty")
-            parsed = [item.strip() for item in v.split(",")]
-            parsed = [item for item in parsed if item]
-            if not parsed:
-                raise ValueError("webauthn_origins cannot be empty")
-            return parsed
-        if isinstance(v, list):
-            if not v:
-                raise ValueError("webauthn_origins cannot be empty")
-            return v
-        return v
+    def parse_webauthn_origins(cls, v: Any) -> Any:
+        return _parse_csv(v, field_name="webauthn_origins")
+
+    @field_validator("allowed_emails", mode="before")
+    @classmethod
+    def parse_allowed_emails(cls, v: Any) -> Any:
+        return _parse_csv(v, field_name="allowed_emails", lowercase=True)
 
     @property
     def is_dev(self) -> bool:

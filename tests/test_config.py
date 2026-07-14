@@ -31,7 +31,7 @@ def test_webauthn_origins_parsing():
     s2 = make_settings(webauthn_origins="http://localhost:5173")
     assert s2.webauthn_origins == ["http://localhost:5173"]
 
-    # A list passes through unchanged
+    # A list passes through, whitespace stripped
     s3 = make_settings(webauthn_origins=["http://localhost:5173", "android:apk-key-hash:XYZ"])
     assert s3.webauthn_origins == ["http://localhost:5173", "android:apk-key-hash:XYZ"]
 
@@ -48,6 +48,14 @@ def test_webauthn_origins_parsing():
     with pytest.raises(ValidationError) as exc_info:
         make_settings(webauthn_origins=[])
     assert "webauthn_origins" in str(exc_info.value)
+
+    # Trailing/repeated commas
+    s4 = make_settings(webauthn_origins="http://localhost,,android:apk-key-hash:AbCd,")
+    assert s4.webauthn_origins == ["http://localhost", "android:apk-key-hash:AbCd"]
+
+    # List normalization identical to string normalization
+    s5 = make_settings(webauthn_origins=[" http://localhost ", "", " android:apk-key-hash:AbCd "])
+    assert s5.webauthn_origins == ["http://localhost", "android:apk-key-hash:AbCd"]
 
 
 def test_allowed_emails_parsing():
@@ -90,3 +98,11 @@ def test_allowed_emails_parsing():
     with pytest.raises(ValidationError) as exc_info:
         make_settings(allowed_emails=[])
     assert "allowed_emails" in str(exc_info.value)
+
+    # Trailing/repeated commas
+    s4 = make_settings(allowed_emails="A@Example.com,,b@example.com,")
+    assert s4.allowed_emails == ["a@example.com", "b@example.com"]
+
+    # List normalization identical to string normalization
+    s5 = make_settings(allowed_emails=[" A@Example.com ", "", " b@example.com "])
+    assert s5.allowed_emails == ["a@example.com", "b@example.com"]
