@@ -32,7 +32,9 @@ class WebAuthnCredential(SQLModel, table=True):
         sa_column=Column(Uuid, primary_key=True, server_default=text("uuidv7()")),
     )
     user_id: UUID = Field(
-        sa_column=Column(Uuid, sa.ForeignKey("users.id"), index=True, nullable=False)
+        sa_column=Column(
+            Uuid, sa.ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False
+        )
     )
     credential_id: bytes = Field(
         sa_column=Column(LargeBinary, unique=True, index=True, nullable=False)

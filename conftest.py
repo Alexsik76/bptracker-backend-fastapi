@@ -6,6 +6,31 @@ import sys
 os.environ["EMAIL_OUTBOX_WORKER_ENABLED"] = "False"
 os.environ["CLEANUP_WORKER_ENABLED"] = "False"
 os.environ["GEMINI_API_KEY"] = "dummy-test-key-12345"
+os.environ["ALLOWED_EMAILS"] = ",".join(
+    [
+        "testuser@example.com",
+        "profile_test@example.com",
+        "allowed@example.com",
+        "existing@example.com",
+        "mixed@example.com",
+        "new-user@example.com",
+        "alice@example.com",
+        "reused@example.com",
+        "known@example.com",
+        "happy@example.com",
+        "cooldown@example.com",
+        "user_a@example.com",
+        "user_b@example.com",
+        "kyiv@example.com",
+        "utc@example.com",
+        "empty@example.com",
+        "body@example.com",
+        "a@example.com",
+        "b@example.com",
+        "foo@example.com",
+        "test_session@example.com",
+    ]
+)
 from collections.abc import AsyncGenerator
 from uuid import UUID
 
@@ -19,7 +44,6 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from auth import models as _a  # noqa: F401
 from auth.deps import get_current_user_id
 from auth.models import User
-from auth.security import hash_password
 from auth.webauthn import models as _w  # noqa: F401
 from config import get_settings
 from db import get_session
@@ -56,7 +80,7 @@ async def make_user(session: AsyncSession):
     # Domain tables now FK to users.id, so any user_id a test acts as must be
     # a real row, not just an arbitrary UUID.
     async def _create(email: str) -> UUID:
-        user = User(email=email, password_hash=hash_password("test-password-123"))
+        user = User(email=email)
         session.add(user)
         await session.commit()
         await session.refresh(user)

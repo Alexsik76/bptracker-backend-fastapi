@@ -3,22 +3,16 @@ from datetime import UTC, datetime
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from auth.models import MagicLink, User, UserCreate
-from auth.security import hash_password
+from auth.models import MagicLink, User
 
 
-async def create_user(session: AsyncSession, data: UserCreate) -> User:
-    """Persist a new user with a hashed password. Duplicate email raises IntegrityError
-    on commit — the caller (router) maps it to a 409.
-    """
-    user = User(
-        email=data.email,
-        timezone=data.timezone,
-        password_hash=hash_password(data.password),
-    )
-    session.add(user)
-    await session.commit()
-    await session.refresh(user)
+async def get_or_create_user_by_email(session: AsyncSession, email: str) -> User:
+    """Return an existing user by email, or create and return one if none exists."""
+    user = await get_user_by_email(session, email)
+    if not user:
+        user = User(email=email)
+        session.add(user)
+        await session.flush()
     return user
 
 

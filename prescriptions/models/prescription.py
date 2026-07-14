@@ -26,7 +26,9 @@ class Prescription(PrescriptionBase, table=True):
         sa_column=Column(DateTime(timezone=True), server_default=func.now()),
     )
     user_id: UUID = Field(
-        sa_column=Column(Uuid, ForeignKey("users.id"), index=True, nullable=False)
+        sa_column=Column(
+            Uuid, ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False
+        )
     )
 
 

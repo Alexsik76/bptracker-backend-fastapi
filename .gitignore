@@ -10,3 +10,4 @@ dist/
 
 # Local secrets — never commit; .env.example is the tracked template
 .env
+.env copy

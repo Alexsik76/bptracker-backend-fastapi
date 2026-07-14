@@ -39,7 +39,7 @@ class EmailOutbox(SQLModel, table=True):
     next_attempt_at: datetime = Field(sa_column=Column(DateTime(timezone=True), nullable=False))
     user_id: UUID | None = Field(
         default=None,
-        sa_column=Column(Uuid, sa.ForeignKey("users.id"), nullable=True),
+        sa_column=Column(Uuid, sa.ForeignKey("users.id", ondelete="CASCADE"), nullable=True),
     )
 
     __table_args__ = (Index("ix_email_outbox_status_next_attempt_at", "status", "next_attempt_at"),)

@@ -14,67 +14,32 @@ from auth.webauthn.tests.test_ceremonies import (
 )
 
 
-@pytest.fixture
-def register_payload():
-    return {"email": "test_session@example.com", "password": "supersecret123"}
-
-
 @pytest.mark.asyncio
-async def test_password_login_returns_token_pair(client, register_payload):
-    # Register
-    reg_resp = await client.post("/auth/register", json=register_payload)
-    assert reg_resp.status_code == 201
-    reg_body = reg_resp.json()
-    assert "access_token" in reg_body
-    assert "refresh_token" in reg_body
-    assert reg_body["token_type"] == "bearer"
-    assert reg_body["expires_in"] == 900
-
-    # Login
-    login_resp = await client.post("/auth/login", json=register_payload)
-    assert login_resp.status_code == 200
-    login_body = login_resp.json()
-    assert "access_token" in login_body
-    assert "refresh_token" in login_body
-    assert login_body["token_type"] == "bearer"
-    assert login_body["expires_in"] == 900
-
-
-@pytest.mark.asyncio
-async def test_magic_link_confirm_returns_token_pair(
-    client, make_user, session: AsyncSession, register_payload
-):
-    email = register_payload["email"]
+async def test_magic_link_confirm_returns_token_pair(client, make_user, session: AsyncSession):
+    email = "test_session@example.com"
     await make_user(email)
 
-    from unittest.mock import AsyncMock
+    # Request magic link
+    await client.post("/auth/magic-link/request", json={"email": email})
 
-    from email_infra import EmailSender, get_email_sender
-    from main import app
+    # Extract token from outbox
+    from email_infra.models import EmailOutbox
 
-    mock_email_sender = AsyncMock(spec=EmailSender)
-    app.dependency_overrides[get_email_sender] = lambda: mock_email_sender
+    statement = select(EmailOutbox).where(EmailOutbox.to == email)
+    outbox_item = (await session.exec(statement)).first()
+    assert outbox_item is not None
+    text_content = outbox_item.body
+    url_line = [line for line in text_content.split("\n") if "token=" in line][0]
+    raw_token = url_line.split("token=")[1].strip()
 
-    try:
-        # Request magic link
-        await client.post("/auth/magic-link/request", json={"email": email})
-        assert mock_email_sender.send.called
-
-        # Extract token
-        text_content = mock_email_sender.send.call_args[1]["text"]
-        url_line = [line for line in text_content.split("\n") if "token=" in line][0]
-        raw_token = url_line.split("token=")[1].strip()
-
-        # Confirm magic link
-        confirm_resp = await client.post("/auth/magic-link/confirm", json={"token": raw_token})
-        assert confirm_resp.status_code == 200
-        body = confirm_resp.json()
-        assert "access_token" in body
-        assert "refresh_token" in body
-        assert body["token_type"] == "bearer"
-        assert body["expires_in"] == 900
-    finally:
-        app.dependency_overrides.pop(get_email_sender, None)
+    # Confirm magic link
+    confirm_resp = await client.post("/auth/magic-link/confirm", json={"token": raw_token})
+    assert confirm_resp.status_code == 200
+    body = confirm_resp.json()
+    assert "access_token" in body
+    assert "refresh_token" in body
+    assert body["token_type"] == "bearer"
+    assert body["expires_in"] == 900
 
 
 @pytest.mark.asyncio
@@ -117,17 +82,15 @@ async def test_webauthn_authenticate_returns_token_pair(
 
 
 @pytest.mark.asyncio
-async def test_refresh_token_rotation_and_revocation(
-    client, register_payload, session: AsyncSession
-):
-    # Register
-    await client.post("/auth/register", json=register_payload)
+async def test_refresh_token_rotation_and_revocation(client, make_user, session: AsyncSession):
+    email = "session@example.com"
+    user_id = await make_user(email)
 
-    # Login to get fresh tokens
-    login_resp = await client.post("/auth/login", json=register_payload)
-    assert login_resp.status_code == 200
-    login_body = login_resp.json()
-    raw_refresh = login_body["refresh_token"]
+    # Issue session tokens directly
+    from auth import service
+
+    token_pair = await service.issue_session(session, user_id=user_id, user_agent="Test-UA")
+    raw_refresh = token_pair.refresh_token
 
     # Refresh - should rotate token
     refresh_resp = await client.post("/auth/refresh", json={"refresh_token": raw_refresh})
@@ -143,20 +106,24 @@ async def test_refresh_token_rotation_and_revocation(
 
 
 @pytest.mark.asyncio
-async def test_refresh_token_reuse_detection(client, register_payload, session: AsyncSession):
-    # Register & Login
-    await client.post("/auth/register", json=register_payload)
-    login_resp = await client.post("/auth/login", json=register_payload)
-    raw_refresh = login_resp.json()["refresh_token"]
+async def test_refresh_token_reuse_detection(client, make_user, session: AsyncSession):
+    email = "session@example.com"
+    user_id = await make_user(email)
+
+    # Issue session tokens directly
+    from auth import service
+
+    token_pair1 = await service.issue_session(session, user_id=user_id, user_agent="Test-UA")
+    raw_refresh = token_pair1.refresh_token
 
     # First rotation (succeeds)
     refresh_resp1 = await client.post("/auth/refresh", json={"refresh_token": raw_refresh})
     assert refresh_resp1.status_code == 200
     new_refresh1 = refresh_resp1.json()["refresh_token"]
 
-    # Second login to create a parallel family
-    login_resp2 = await client.post("/auth/login", json=register_payload)
-    raw_refresh2 = login_resp2.json()["refresh_token"]
+    # Second login (direct issue) to create a parallel family
+    token_pair2 = await service.issue_session(session, user_id=user_id, user_agent="Test-UA")
+    raw_refresh2 = token_pair2.refresh_token
 
     # Reuse detection triggered by using raw_refresh again (which was already rotated)
     reuse_resp = await client.post("/auth/refresh", json={"refresh_token": raw_refresh})
@@ -182,11 +149,15 @@ async def test_refresh_token_reuse_detection(client, register_payload, session: 
 
 
 @pytest.mark.asyncio
-async def test_expired_refresh_token(client, register_payload, session: AsyncSession):
-    # Register & Login
-    await client.post("/auth/register", json=register_payload)
-    login_resp = await client.post("/auth/login", json=register_payload)
-    raw_refresh = login_resp.json()["refresh_token"]
+async def test_expired_refresh_token(client, make_user, session: AsyncSession):
+    email = "session@example.com"
+    user_id = await make_user(email)
+
+    # Issue session tokens directly
+    from auth import service
+
+    token_pair = await service.issue_session(session, user_id=user_id, user_agent="Test-UA")
+    raw_refresh = token_pair.refresh_token
 
     # Artificially expire the session in the DB
     session.expire_all()
@@ -205,11 +176,15 @@ async def test_expired_refresh_token(client, register_payload, session: AsyncSes
 
 
 @pytest.mark.asyncio
-async def test_logout_invalidates_session(client, register_payload, session: AsyncSession):
-    # Register & Login
-    await client.post("/auth/register", json=register_payload)
-    login_resp = await client.post("/auth/login", json=register_payload)
-    raw_refresh = login_resp.json()["refresh_token"]
+async def test_logout_invalidates_session(client, make_user, session: AsyncSession):
+    email = "session@example.com"
+    user_id = await make_user(email)
+
+    # Issue session tokens directly
+    from auth import service
+
+    token_pair = await service.issue_session(session, user_id=user_id, user_agent="Test-UA")
+    raw_refresh = token_pair.refresh_token
 
     # Logout
     logout_resp = await client.post("/auth/logout", json={"refresh_token": raw_refresh})
@@ -230,23 +205,17 @@ async def test_logout_all(client_factory, make_user, session: AsyncSession):
     user_b = await make_user("user_b@example.com")
 
     client_a = client_factory(user_a)
-    client_b = client_factory(user_b)
+
+    from auth import service
 
     # Issue 2 sessions for User A
-    token_a1 = await client_a.post(
-        "/auth/login", json={"email": "user_a@example.com", "password": "test-password-123"}
-    )
-    token_a2 = await client_a.post(
-        "/auth/login", json={"email": "user_a@example.com", "password": "test-password-123"}
-    )
-    assert token_a1.status_code == 200
-    assert token_a2.status_code == 200
+    await service.issue_session(session, user_id=user_a, user_agent="UA-A1")
+    await service.issue_session(session, user_id=user_a, user_agent="UA-A2")
+    await session.commit()
 
     # Issue 1 session for User B
-    token_b = await client_b.post(
-        "/auth/login", json={"email": "user_b@example.com", "password": "test-password-123"}
-    )
-    assert token_b.status_code == 200
+    await service.issue_session(session, user_id=user_b, user_agent="UA-B")
+    await session.commit()
 
     # Call logout-all as User A
     from auth.deps import get_current_user_id
@@ -274,17 +243,12 @@ async def test_get_sessions(client_factory, make_user, session: AsyncSession):
     user_id = await make_user("sessions_list@example.com")
     client = client_factory(user_id)
 
+    from auth import service
+
     # Issue two sessions
-    await client.post(
-        "/auth/login",
-        json={"email": "sessions_list@example.com", "password": "test-password-123"},
-        headers={"User-Agent": "Browser-Agent-A"},
-    )
-    await client.post(
-        "/auth/login",
-        json={"email": "sessions_list@example.com", "password": "test-password-123"},
-        headers={"User-Agent": "Browser-Agent-B"},
-    )
+    await service.issue_session(session, user_id=user_id, user_agent="Browser-Agent-A")
+    await service.issue_session(session, user_id=user_id, user_agent="Browser-Agent-B")
+    await session.commit()
 
     # Get sessions list
     list_resp = await client.get("/auth/sessions")
@@ -350,23 +314,18 @@ async def test_concurrent_rotate_session(make_user, session: AsyncSession):
 
 
 @pytest.mark.asyncio
-async def test_refresh_token_reuse_detection_http(client, register_payload):
-    from auth.crud import get_user_by_email
+async def test_refresh_token_reuse_detection_http(client, make_user):
+    from auth import service
     from auth.service import list_active_sessions
     from conftest import test_session_factory
 
-    # 1. Register & Login to get the initial tokens
-    reg_resp = await client.post("/auth/register", json=register_payload)
-    assert reg_resp.status_code == 201
+    email = "session@example.com"
+    user_id = await make_user(email)
 
-    login_resp = await client.post("/auth/login", json=register_payload)
-    assert login_resp.status_code == 200
-    raw_refresh = login_resp.json()["refresh_token"]
-
-    # Retrieve user_id from database
+    # 1. Issue tokens directly
     async with test_session_factory() as db_sess:
-        user = await get_user_by_email(db_sess, email=register_payload["email"])
-        user_id = user.id
+        token_pair = await service.issue_session(db_sess, user_id=user_id, user_agent="Test-UA")
+        raw_refresh = token_pair.refresh_token
 
     # 2. First rotation (succeeds)
     refresh_resp1 = await client.post("/auth/refresh", json={"refresh_token": raw_refresh})

@@ -6,9 +6,8 @@ from fastapi.security import OAuth2PasswordBearer
 
 from auth.security import InvalidTokenError, decode_access_token
 
-# tokenUrl only drives the Swagger "Authorize" UI; the actual /auth/login
-# endpoint takes a JSON body, not an OAuth2 form. Extraction here just reads
-# the Bearer header regardless of how the token was obtained.
+# tokenUrl is configured to dummy value because direct token login is passwordless.
+# Extraction here just reads the Bearer header regardless of how the token was obtained.
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/login")
 
 

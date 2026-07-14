@@ -70,6 +70,28 @@ class Settings(BaseSettings):
     webauthn_origins: Annotated[list[str], NoDecode]
     webauthn_challenge_ttl_minutes: int = 5
 
+    # ALLOWED_EMAILS gates account creation. Only emails in this list can request a magic link.
+    allowed_emails: Annotated[list[str], NoDecode]
+
+    @field_validator("allowed_emails", mode="before")
+    @classmethod
+    def parse_allowed_emails(cls, v: any) -> any:
+        if isinstance(v, str):
+            if not v.strip():
+                raise ValueError("allowed_emails cannot be empty")
+            parsed = [item.strip().lower() for item in v.split(",")]
+            parsed = [item for item in parsed if item]
+            if not parsed:
+                raise ValueError("allowed_emails cannot be empty")
+            return parsed
+        if isinstance(v, list):
+            parsed = [str(item).strip().lower() for item in v]
+            parsed = [item for item in parsed if item]
+            if not parsed:
+                raise ValueError("allowed_emails cannot be empty")
+            return parsed
+        return v
+
     @field_validator("webauthn_origins", mode="before")
     @classmethod
     def parse_webauthn_origins(cls, v: any) -> any:

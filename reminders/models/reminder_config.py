@@ -18,7 +18,9 @@ class ReminderConfig(ReminderConfigBase, table=True):
     __tablename__: ClassVar[str] = "reminder_config"
 
     # 1:1 with users: user_id is the primary key directly, no separate id column.
-    user_id: UUID = Field(sa_column=Column(Uuid, ForeignKey("users.id"), primary_key=True))
+    user_id: UUID = Field(
+        sa_column=Column(Uuid, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    )
 
 
 class ReminderConfigCreate(ReminderConfigBase):

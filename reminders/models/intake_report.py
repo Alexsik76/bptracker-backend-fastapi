@@ -26,7 +26,9 @@ class IntakeReport(IntakeReportBase, table=True):
         sa_column=Column(Uuid, primary_key=True, server_default=text("uuidv7()")),
     )
     user_id: UUID = Field(
-        sa_column=Column(Uuid, ForeignKey("users.id"), index=True, nullable=False)
+        sa_column=Column(
+            Uuid, ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False
+        )
     )
     # When the medication was actually taken (the real-world event). Client-supplied
     # per docs/conventions.md — the backend stores it as received, never interprets it.

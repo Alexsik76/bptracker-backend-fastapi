@@ -1,32 +1,18 @@
 from datetime import UTC, datetime, timedelta
-from unittest.mock import AsyncMock
 
 import pytest
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from auth.models import MagicLink
+from auth.models import MagicLink, User
 from auth.security import hash_token
-from email_infra import EmailSender, get_email_sender
-from main import app
-
-
-@pytest.fixture
-def mock_email_sender():
-    mock = AsyncMock(spec=EmailSender)
-    app.dependency_overrides[get_email_sender] = lambda: mock
-    yield mock
-    # Clear the specific override after test
-    app.dependency_overrides.pop(get_email_sender, None)
+from email_infra.models import EmailOutbox
 
 
 @pytest.mark.asyncio
-async def test_request_magic_link_known_email(
-    client, make_user, session: AsyncSession, mock_email_sender
-):
+async def test_request_magic_link_allowlisted_unknown_email(client, session: AsyncSession):
     # Arrange
-    email = "known@example.com"
-    await make_user(email)
+    email = "new-user@example.com"  # Present in ALLOWED_EMAILS env in conftest.py
 
     # Act
     response = await client.post("/auth/magic-link/request", json={"email": email})
@@ -35,51 +21,104 @@ async def test_request_magic_link_known_email(
     assert response.status_code == 202
     assert response.json()["detail"] == "If the address is registered, a link has been sent"
 
-    # Verify email was sent
-    mock_email_sender.send.assert_called_once()
-    _, kwargs = mock_email_sender.send.call_args
-    assert kwargs["to"] == email
-    assert "token=" in kwargs["text"]
-    assert "token=" in kwargs["html"]
+    # Verify user was created
+    statement = select(User).where(User.email == email)
+    user = (await session.exec(statement)).first()
+    assert user is not None
+    assert user.email == email
 
-    # Extract raw token from link in email text
-    # text format is f"Use the link below to log in to your account:\n{magic_link}"
-    text_content = kwargs["text"]
-    url_line = [line for line in text_content.split("\n") if "token=" in line][0]
-    raw_token = url_line.split("token=")[1].strip()
+    # Verify email was enqueued in outbox
+    statement_outbox = select(EmailOutbox).where(EmailOutbox.to == email)
+    outbox_item = (await session.exec(statement_outbox)).first()
+    assert outbox_item is not None
+    assert outbox_item.status == "PENDING"
+    assert "token=" in outbox_item.body
 
-    # Verify database state
-    statement = select(MagicLink).where(MagicLink.email == email)
-    result = await session.exec(statement)
-    link = result.first()
-
+    # Verify magic link exists in DB
+    statement_link = select(MagicLink).where(MagicLink.email == email)
+    link = (await session.exec(statement_link)).first()
     assert link is not None
-    # Raw token is not stored, only its hash
-    assert link.token_hash == hash_token(raw_token)
-    assert raw_token != link.token_hash
 
 
 @pytest.mark.asyncio
-async def test_request_magic_link_unknown_email(client, session: AsyncSession, mock_email_sender):
+async def test_request_magic_link_allowlisted_known_email(client, make_user, session: AsyncSession):
+    # Arrange
+    email = "existing@example.com"  # Present in ALLOWED_EMAILS env
+    user_id = await make_user(email)
+
     # Act
-    response = await client.post("/auth/magic-link/request", json={"email": "unknown@example.com"})
+    response = await client.post("/auth/magic-link/request", json={"email": email})
+
+    # Assert
+    assert response.status_code == 202
+
+    # Verify no duplicate user was created
+    statement = select(User).where(User.email == email)
+    users = (await session.exec(statement)).all()
+    assert len(users) == 1
+    assert users[0].id == user_id
+
+    # Verify email was enqueued in outbox
+    statement_outbox = select(EmailOutbox).where(EmailOutbox.to == email)
+    outbox_item = (await session.exec(statement_outbox)).first()
+    assert outbox_item is not None
+    assert outbox_item.status == "PENDING"
+
+
+@pytest.mark.asyncio
+async def test_request_magic_link_non_allowlisted_email(client, session: AsyncSession):
+    # Arrange
+    email = "notallowed@example.com"  # NOT present in ALLOWED_EMAILS env
+
+    # Act
+    response = await client.post("/auth/magic-link/request", json={"email": email})
 
     # Assert
     assert response.status_code == 202
     assert response.json()["detail"] == "If the address is registered, a link has been sent"
 
-    # Verify no email was sent and no DB row created
-    mock_email_sender.send.assert_not_called()
+    # Verify no user was created
+    statement = select(User).where(User.email == email)
+    user = (await session.exec(statement)).first()
+    assert user is None
 
-    statement = select(MagicLink).where(MagicLink.email == "unknown@example.com")
-    result = await session.exec(statement)
-    assert result.first() is None
+    # Verify no email was enqueued in outbox
+    statement_outbox = select(EmailOutbox).where(EmailOutbox.to == email)
+    outbox_item = (await session.exec(statement_outbox)).first()
+    assert outbox_item is None
+
+    # Verify no magic link row in DB
+    statement_link = select(MagicLink).where(MagicLink.email == email)
+    link = (await session.exec(statement_link)).first()
+    assert link is None
 
 
 @pytest.mark.asyncio
-async def test_request_magic_link_replaces_old_link(
-    client, make_user, session: AsyncSession, mock_email_sender
-):
+async def test_request_magic_link_allowlist_case_insensitive(client, session: AsyncSession):
+    # Arrange
+    mixed_email = "MiXeD@ExAmPlE.cOm"  # mixed@example.com is present in ALLOWED_EMAILS env
+
+    # Act
+    response = await client.post("/auth/magic-link/request", json={"email": mixed_email})
+
+    # Assert
+    assert response.status_code == 202
+
+    # Verify user was created with normalized lowercase email
+    statement = select(User).where(User.email == "mixed@example.com")
+    user = (await session.exec(statement)).first()
+    assert user is not None
+    assert user.email == "mixed@example.com"
+
+    # Verify email was enqueued in outbox to lowercase email
+    statement_outbox = select(EmailOutbox).where(EmailOutbox.to == "mixed@example.com")
+    outbox_item = (await session.exec(statement_outbox)).first()
+    assert outbox_item is not None
+    assert outbox_item.status == "PENDING"
+
+
+@pytest.mark.asyncio
+async def test_request_magic_link_replaces_old_link(client, make_user, session: AsyncSession):
     # Arrange
     email = "known@example.com"
     await make_user(email)
@@ -99,7 +138,6 @@ async def test_request_magic_link_replaces_old_link(
     assert response2.status_code == 202
 
     # Assert only one row remains, but with a different hash
-    # Expire session so we fetch fresh data
     session.expire_all()
     result = await session.exec(statement)
     links = result.all()
@@ -109,18 +147,19 @@ async def test_request_magic_link_replaces_old_link(
 
 
 @pytest.mark.asyncio
-async def test_confirm_magic_link_success(
-    client, make_user, session: AsyncSession, mock_email_sender
-):
+async def test_confirm_magic_link_success(client, make_user, session: AsyncSession):
     # Arrange
     email = "alice@example.com"
     await make_user(email)
 
-    # Generate link
+    # Generate link via request
     await client.post("/auth/magic-link/request", json={"email": email})
-    mock_email_sender.send.assert_called_once()
-    text_content = mock_email_sender.send.call_args[1]["text"]
-    url_line = [line for line in text_content.split("\n") if "token=" in line][0]
+
+    # Get token from outbox
+    statement_outbox = select(EmailOutbox).where(EmailOutbox.to == email)
+    outbox_item = (await session.exec(statement_outbox)).first()
+    assert outbox_item is not None
+    url_line = [line for line in outbox_item.body.split("\n") if "token=" in line][0]
     raw_token = url_line.split("token=")[1].strip()
 
     # Act - Confirm
@@ -168,17 +207,19 @@ async def test_confirm_magic_link_expired(client, make_user, session: AsyncSessi
 
 
 @pytest.mark.asyncio
-async def test_confirm_magic_link_reused(
-    client, make_user, session: AsyncSession, mock_email_sender
-):
+async def test_confirm_magic_link_reused(client, make_user, session: AsyncSession):
     # Arrange
     email = "reused@example.com"
     await make_user(email)
 
     # Request link
     await client.post("/auth/magic-link/request", json={"email": email})
-    text_content = mock_email_sender.send.call_args[1]["text"]
-    url_line = [line for line in text_content.split("\n") if "token=" in line][0]
+
+    # Get token from outbox
+    statement_outbox = select(EmailOutbox).where(EmailOutbox.to == email)
+    outbox_item = (await session.exec(statement_outbox)).first()
+    assert outbox_item is not None
+    url_line = [line for line in outbox_item.body.split("\n") if "token=" in line][0]
     raw_token = url_line.split("token=")[1].strip()
 
     # Confirm 1st time - Success
@@ -199,61 +240,3 @@ async def test_confirm_magic_link_invalid_token(client):
     # Assert
     assert response.status_code == 401
     assert response.json()["detail"] == "Incorrect or expired token"
-
-
-@pytest.mark.asyncio
-async def test_register_lowercases_email(client, session: AsyncSession):
-    # Act
-    response = await client.post(
-        "/auth/register", json={"email": "Mixed@Example.com", "password": "supersecret123"}
-    )
-    assert response.status_code == 201
-
-    # Verify db has lowercase email
-    from auth.models import User
-
-    statement = select(User).where(User.email == "mixed@example.com")
-    result = await session.exec(statement)
-    user = result.first()
-    assert user is not None
-    assert user.email == "mixed@example.com"
-
-
-@pytest.mark.asyncio
-async def test_login_case_insensitive(client):
-    # Arrange - register mixed case
-    await client.post(
-        "/auth/register", json={"email": "Mixed@Example.com", "password": "supersecret123"}
-    )
-
-    # Act - login lowercase
-    response = await client.post(
-        "/auth/login", json={"email": "mixed@example.com", "password": "supersecret123"}
-    )
-
-    # Assert
-    assert response.status_code == 200
-    assert response.json()["access_token"]
-
-
-@pytest.mark.asyncio
-async def test_request_magic_link_case_insensitive(
-    client, session: AsyncSession, mock_email_sender
-):
-    # Arrange - Register with mixed case email
-    await client.post(
-        "/auth/register", json={"email": "Mixed@Example.com", "password": "supersecret123"}
-    )
-
-    # Act - request with different casing
-    response = await client.post("/auth/magic-link/request", json={"email": "mIxEd@ExAmPlE.cOm"})
-
-    # Assert
-    assert response.status_code == 202
-    mock_email_sender.send.assert_called_once()
-    assert mock_email_sender.send.call_args[1]["to"] == "mixed@example.com"
-
-    # Verify link exists in DB for lowercase email
-    statement = select(MagicLink).where(MagicLink.email == "mixed@example.com")
-    result = await session.exec(statement)
-    assert result.first() is not None

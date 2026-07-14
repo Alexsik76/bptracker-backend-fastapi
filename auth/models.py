@@ -29,8 +29,6 @@ class User(UserBase, table=True):
         default=None,
         sa_column=Column(Uuid, primary_key=True, server_default=text("uuidv7()")),
     )
-    # Nullable: a future passkey-only user has no password.
-    password_hash: str | None = None
     created_at: datetime | None = Field(
         default=None,
         sa_column=Column(DateTime(timezone=True), server_default=func.now()),
@@ -39,13 +37,6 @@ class User(UserBase, table=True):
         default=None,
         sa_column=Column(DateTime(timezone=True), nullable=True),
     )
-
-
-class UserCreate(SQLModel):
-    email: NormalizedEmail
-    # Plaintext input, never persisted as-is — hashed in auth/crud.py before storage.
-    password: str = Field(min_length=8)
-    timezone: str | None = None
 
 
 class UserRead(SQLModel):
@@ -82,7 +73,9 @@ class Session(SQLModel, table=True):
         sa_column=Column(Uuid, primary_key=True, server_default=text("uuidv7()")),
     )
     user_id: UUID = Field(
-        sa_column=Column(Uuid, ForeignKey("users.id"), index=True, nullable=False)
+        sa_column=Column(
+            Uuid, ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False
+        )
     )
     token_hash: str = Field(sa_column=Column(String, unique=True, index=True, nullable=False))
     created_at: datetime | None = Field(
