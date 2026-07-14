@@ -1,0 +1,67 @@
+# This file is the production deployment configuration for Portainer stack.
+# The local development setup remains in compose.yaml.
+# Host ports default to 5437 (DB) and 8001 (API) to avoid collision with the legacy C# stack.
+
+services:
+  db:
+    image: postgres:18
+    container_name: bptracker-fa-db-prod
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-bp}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-bp}
+      POSTGRES_DB: ${POSTGRES_DB:-bp_tracker}
+    ports:
+      - "${POSTGRES_HOST_PORT:-5437}:5432"
+    volumes:
+      - bp_fa_pgdata:/var/lib/postgresql       # PG18: mount the parent, not /data — image puts data in a version subdir
+    healthcheck:             # Ensure docker compose up waits for DB readiness, not just process start
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-bp} -d ${POSTGRES_DB:-bp_tracker}"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  api:
+    build: .
+    container_name: bptracker-fa-api
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "${APP_HOST_PORT:-8001}:8000"
+    environment:
+      # Sane defaults or dev/prod settings from environment config
+      ENVIRONMENT: ${ENVIRONMENT:-prod}
+      POSTGRES_USER: ${POSTGRES_USER:-bp}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-bp}
+      POSTGRES_DB: ${POSTGRES_DB:-bp_tracker}
+      POSTGRES_HOST: ${POSTGRES_HOST:-db}
+      POSTGRES_PORT: ${POSTGRES_PORT:-5432}
+
+      # Secrets and required fields: no default, fails loudly if missing
+      JWT_SECRET: ${JWT_SECRET}
+      SMTP_HOST: ${SMTP_HOST}
+      SMTP_USERNAME: ${SMTP_USERNAME}
+      SMTP_PASSWORD: ${SMTP_PASSWORD}
+      SMTP_FROM: ${SMTP_FROM}
+      MAGIC_LINK_BASE_URL: ${MAGIC_LINK_BASE_URL}
+      WEBAUTHN_RP_ID: ${WEBAUTHN_RP_ID}
+      WEBAUTHN_ORIGIN: ${WEBAUTHN_ORIGIN}
+      EXPORT_SHEETS_TEMPLATE_URL: ${EXPORT_SHEETS_TEMPLATE_URL}
+      GEMINI_API_KEY: ${GEMINI_API_KEY}
+
+      # Other configurable values with sane defaults
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_STARTTLS: ${SMTP_STARTTLS:-True}
+      SMTP_TIMEOUT: ${SMTP_TIMEOUT:-10}
+      MAGIC_LINK_TTL_MINUTES: ${MAGIC_LINK_TTL_MINUTES:-15}
+      MAGIC_LINK_TOKEN_BYTES: ${MAGIC_LINK_TOKEN_BYTES:-32}
+      WEBAUTHN_RP_NAME: ${WEBAUTHN_RP_NAME:-BP Tracker}
+      WEBAUTHN_CHALLENGE_TTL_MINUTES: ${WEBAUTHN_CHALLENGE_TTL_MINUTES:-5}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.0-flash}
+      GEMINI_TIMEOUT_SECONDS: ${GEMINI_TIMEOUT_SECONDS:-30}
+      ANALYZE_MAX_FILE_BYTES: ${ANALYZE_MAX_FILE_BYTES:-10485760}
+
+volumes:
+  bp_fa_pgdata:

@@ -1,0 +1,25 @@
+# Ignore VCS
+.git
+
+# Ignore local virtual environment
+.venv
+
+# Ignore environment/secret files
+.env
+
+# Ignore IDE settings
+.vscode
+
+# Ignore Python cache files and build artifacts
+__pycache__/
+*.py[oc]
+.pytest_cache/
+.ruff_cache/
+.coverage
+
+# Ignore tests and test configuration
+**/tests/
+conftest.py
+
+# Ignore local dev/documentation files
+README_DEV.md
