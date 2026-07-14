@@ -21,5 +21,8 @@
 **/tests/
 conftest.py
 
+# Ignore one-off scripts (not part of the application)
+scripts/
+
 # Ignore local dev/documentation files
 README_DEV.md
