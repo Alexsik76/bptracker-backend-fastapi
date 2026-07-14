@@ -83,6 +83,7 @@ dev = [
     { name = "pytest-cov" },
     { name = "ruff" },
     { name = "soft-webauthn" },
+    { name = "typer" },
 ]
 
 [package.metadata]
@@ -106,6 +107,7 @@ dev = [
     { name = "pytest-cov", specifier = ">=7.1.0" },
     { name = "ruff", specifier = ">=0.15.17" },
     { name = "soft-webauthn", specifier = ">=0.1.3" },
+    { name = "typer", specifier = ">=0.12.3" },
 ]
 
 [[package]]
