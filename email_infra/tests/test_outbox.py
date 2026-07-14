@@ -12,7 +12,8 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from config import Settings
 from email_infra.crud import claim_batch, enqueue, mark_sent
 from email_infra.models import EmailOutbox, EmailStatus
-from email_infra.sender import EmailAttachment, OutboxEmailSender, SmtpEmailSender
+from email_infra.sender import OutboxEmailSender, SmtpEmailSender
+from email_infra.types import EmailAttachment
 from email_infra.worker import run_email_outbox_worker
 
 

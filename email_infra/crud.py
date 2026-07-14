@@ -6,7 +6,7 @@ from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from email_infra.models import EmailOutbox, EmailStatus
-from email_infra.sender import EmailAttachment
+from email_infra.types import EmailAttachment
 
 
 async def enqueue(
@@ -43,7 +43,6 @@ async def enqueue(
     )
     session.add(item)
     await session.flush()
-    await session.refresh(item)
     return item
 
 

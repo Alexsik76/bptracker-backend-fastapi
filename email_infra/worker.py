@@ -7,7 +7,8 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 from config import Settings
 from email_infra.crud import claim_batch, mark_failed, mark_sent
 from email_infra.models import EmailStatus
-from email_infra.sender import EmailAttachment, SmtpEmailSender
+from email_infra.sender import SmtpEmailSender
+from email_infra.types import EmailAttachment
 
 logger = logging.getLogger(__name__)
 

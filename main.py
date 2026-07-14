@@ -78,6 +78,6 @@ app.include_router(export_router)
 app.include_router(users_router)
 
 
-@app.get("/health")
+@app.get("/health", include_in_schema=False)
 def health() -> dict[str, str]:
     return {"status": "ok"}
