@@ -6,7 +6,8 @@ Migrates two tables:
 
 Run with:
   uv run python scripts/import_from_legacy.py \
-      --legacy-url postgresql://... \
+      --legacy-url postgresql://user:pass@host:port/db \
+      --target-url postgresql://user:pass@host:port/db \
       --user-id <uuid> \
       [--dry-run]
 """
@@ -23,12 +24,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from pydantic import ValidationError
 from sqlalchemy import text as sa_text
-from sqlalchemy.ext.asyncio import create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from auth.webauthn.models import WebAuthnCredential
-from db import async_session_factory
 from measurements.models import Measurement
+
+
+def _ensure_async_driver(url: str) -> str:
+    return url.replace("postgresql://", "postgresql+psycopg://", 1)
 
 
 async def _verify_target_user(session: AsyncSession, user_id: UUID) -> None:
@@ -142,8 +146,13 @@ async def _read_legacy_credentials(legacy_engine, user_id: UUID) -> list[WebAuth
 
 
 async def _run(args: argparse.Namespace) -> None:
-    legacy_url = args.legacy_url.replace("postgresql://", "postgresql+psycopg://", 1)
-    legacy_engine = create_async_engine(legacy_url, echo=False)
+    legacy_engine = create_async_engine(_ensure_async_driver(args.legacy_url), echo=False)
+    target_engine = create_async_engine(_ensure_async_driver(args.target_url), echo=False)
+    target_session_factory = async_sessionmaker(
+        bind=target_engine,
+        class_=AsyncSession,
+        expire_on_commit=False,
+    )
 
     try:
         measurements = await _read_legacy_measurements(legacy_engine, args.user_id)
@@ -154,31 +163,34 @@ async def _run(args: argparse.Namespace) -> None:
     print(f"Read {len(measurements)} measurements from legacy DB.")
     print(f"Read {len(credentials)} webauthn_credentials from legacy DB.")
 
-    if args.dry_run:
-        print("\n--- DRY RUN ---")
-        async with async_session_factory() as session:
+    try:
+        if args.dry_run:
+            print("\n--- DRY RUN ---")
+            async with target_session_factory() as session:
+                await _verify_target_user(session, args.user_id)
+                await _check_existing_rows(session, args.user_id, dry_run=True)
+
+            print(f"\nWould write {len(measurements)} measurements.")
+            print(f"Would write {len(credentials)} webauthn_credentials.")
+            print("No changes made.")
+            return
+
+        async with target_session_factory() as session:
             await _verify_target_user(session, args.user_id)
-            await _check_existing_rows(session, args.user_id, dry_run=True)
+            await _check_existing_rows(session, args.user_id, dry_run=False)
 
-        print(f"\nWould write {len(measurements)} measurements.")
-        print(f"Would write {len(credentials)} webauthn_credentials.")
-        print("No changes made.")
-        return
+            for m in measurements:
+                session.add(m)
+            for c in credentials:
+                session.add(c)
 
-    async with async_session_factory() as session:
-        await _verify_target_user(session, args.user_id)
-        await _check_existing_rows(session, args.user_id, dry_run=False)
+            await session.commit()
 
-        for m in measurements:
-            session.add(m)
-        for c in credentials:
-            session.add(c)
-
-        await session.commit()
-
-    print(f"\nWritten {len(measurements)} measurements.")
-    print(f"Written {len(credentials)} webauthn_credentials.")
-    print("Import complete.")
+        print(f"\nWritten {len(measurements)} measurements.")
+        print(f"Written {len(credentials)} webauthn_credentials.")
+        print("Import complete.")
+    finally:
+        await target_engine.dispose()
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -189,6 +201,11 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--legacy-url",
         required=True,
         help="PostgreSQL connection string for the legacy (source) database.",
+    )
+    parser.add_argument(
+        "--target-url",
+        required=True,
+        help="PostgreSQL connection string for the new (target) database.",
     )
     parser.add_argument(
         "--user-id",
