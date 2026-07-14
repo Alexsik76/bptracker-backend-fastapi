@@ -8,15 +8,15 @@ services:
     container_name: bptracker-fa-db-prod
     restart: unless-stopped
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:-bp}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-bp}
-      POSTGRES_DB: ${POSTGRES_DB:-bp_tracker}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
     ports:
       - "${POSTGRES_HOST_PORT:-5437}:5432"
     volumes:
       - bp_fa_pgdata:/var/lib/postgresql       # PG18: mount the parent, not /data — image puts data in a version subdir
     healthcheck:             # Ensure docker compose up waits for DB readiness, not just process start
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-bp} -d ${POSTGRES_DB:-bp_tracker}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
       interval: 5s
       timeout: 3s
       retries: 5
@@ -33,9 +33,9 @@ services:
     environment:
       # Sane defaults or dev/prod settings from environment config
       ENVIRONMENT: ${ENVIRONMENT:-prod}
-      POSTGRES_USER: ${POSTGRES_USER:-bp}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-bp}
-      POSTGRES_DB: ${POSTGRES_DB:-bp_tracker}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
       POSTGRES_HOST: ${POSTGRES_HOST:-db}
       POSTGRES_PORT: ${POSTGRES_PORT:-5432}
 
