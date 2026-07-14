@@ -7,15 +7,14 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 from config import Settings
 from email_infra.crud import claim_batch, mark_failed, mark_sent
 from email_infra.models import EmailStatus
-from email_infra.sender import SmtpEmailSender
-from email_infra.types import EmailAttachment
+from email_infra.types import EmailAttachment, EmailSender
 
 logger = logging.getLogger(__name__)
 
 
 async def run_email_outbox_worker(
     session_factory: async_sessionmaker,
-    smtp_sender: SmtpEmailSender,
+    smtp_sender: EmailSender,
     settings: Settings,
 ) -> None:
     poll_seconds = settings.email_outbox_poll_seconds
@@ -33,8 +32,6 @@ async def run_email_outbox_worker(
                 if batch:
                     logger.info("Claimed %d email outbox items for sending", len(batch))
                     for item in batch:
-                        send_success = False
-                        send_exc = None
                         try:
                             attachments = []
                             if item.attachments:
@@ -56,39 +53,32 @@ async def run_email_outbox_worker(
                                 text=item.body,
                                 attachments=attachments,
                             )
-                            send_success = True
                         except Exception as exc:
-                            send_exc = exc
-
-                        if send_success:
-                            await mark_sent(session, item)
-                            logger.info("Email %s to %s sent successfully", item.id, item.to)
-                        else:
                             await mark_failed(
                                 session,
                                 item,
-                                error=str(send_exc),
+                                error=str(exc),
                                 max_attempts=max_attempts,
                             )
                             if item.status == EmailStatus.DEAD:
                                 logger.error(
-                                    "Email %s to %s marked DEAD after %d/%d attempts. Error: %s",
+                                    "Email %s marked DEAD after %d/%d attempts. Error: %s",
                                     item.id,
-                                    item.to,
                                     item.attempts,
                                     max_attempts,
-                                    send_exc,
+                                    exc,
                                 )
                             else:
                                 logger.warning(
-                                    "Email %s to %s failed (attempt %d/%d). "
-                                    "Scheduled retry. Error: %s",
+                                    "Email %s failed (attempt %d/%d). Scheduled retry. Error: %s",
                                     item.id,
-                                    item.to,
                                     item.attempts,
                                     max_attempts,
-                                    send_exc,
+                                    exc,
                                 )
+                        else:
+                            await mark_sent(session, item)
+                            logger.info("Email %s sent successfully", item.id)
         except asyncio.CancelledError:
             logger.info("Email outbox worker task cancelled. Exiting cleanly.")
             raise
