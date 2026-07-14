@@ -130,7 +130,7 @@ async def test_cleanup_worker_deletes_expired_rows(session: AsyncSession, make_u
         magic_link_base_url="test",
         export_sheets_template_url="test",
         webauthn_rp_id="test",
-        webauthn_origin="test",
+        webauthn_origins=["test"],
     )
 
     # Run worker cycle once by mocking asyncio.sleep to raise CancelledError

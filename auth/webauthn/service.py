@@ -110,7 +110,7 @@ async def finish_registration(
             credential=body,
             expected_challenge=challenge_row.challenge,
             expected_rp_id=settings.webauthn_rp_id,
-            expected_origin=settings.webauthn_origin,
+            expected_origin=settings.webauthn_origins,
         )
     except InvalidRegistrationResponse as e:
         raise CeremonyError(f"Registration verification failed: {e}") from e
@@ -205,7 +205,7 @@ async def finish_authentication(
             credential=body,
             expected_challenge=challenge_row.challenge,
             expected_rp_id=settings.webauthn_rp_id,
-            expected_origin=settings.webauthn_origin,
+            expected_origin=settings.webauthn_origins,
             credential_public_key=cred.public_key,
             credential_current_sign_count=cred.sign_count,
         )

@@ -1,7 +1,9 @@
 from enum import StrEnum
 from functools import lru_cache
+from typing import Annotated
 
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import field_validator
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 from sqlalchemy import URL
 
 
@@ -64,8 +66,26 @@ class Settings(BaseSettings):
 
     webauthn_rp_id: str
     webauthn_rp_name: str = "BP Tracker"
-    webauthn_origin: str
+    # Allowed origins for WebAuthn (web frontend origin + Android apk-key-hash origins)
+    webauthn_origins: Annotated[list[str], NoDecode]
     webauthn_challenge_ttl_minutes: int = 5
+
+    @field_validator("webauthn_origins", mode="before")
+    @classmethod
+    def parse_webauthn_origins(cls, v: any) -> any:
+        if isinstance(v, str):
+            if not v.strip():
+                raise ValueError("webauthn_origins cannot be empty")
+            parsed = [item.strip() for item in v.split(",")]
+            parsed = [item for item in parsed if item]
+            if not parsed:
+                raise ValueError("webauthn_origins cannot be empty")
+            return parsed
+        if isinstance(v, list):
+            if not v:
+                raise ValueError("webauthn_origins cannot be empty")
+            return v
+        return v
 
     @property
     def is_dev(self) -> bool:
