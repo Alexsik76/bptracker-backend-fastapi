@@ -1,6 +1,9 @@
+import zoneinfo
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from pydantic import field_validator
+from sqlmodel import SQLModel
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from auth.deps import CurrentUserId
@@ -16,12 +19,26 @@ from export.service import (
 router = APIRouter(prefix="/export", tags=["export"])
 
 
+class ExportRequest(SQLModel):
+    tz: str
+
+    @field_validator("tz")
+    @classmethod
+    def validate_timezone(cls, v: str) -> str:
+        try:
+            zoneinfo.ZoneInfo(v)
+        except Exception as exc:
+            raise ValueError(f"Invalid timezone identifier: '{v}'") from exc
+        return v
+
+
 @router.post(
     "/csv",
     status_code=status.HTTP_202_ACCEPTED,
     response_model=ExportResponse,
 )
 async def export_csv(
+    data: ExportRequest,
     current_user_id: CurrentUserId,
     session: Annotated[AsyncSession, Depends(get_session)],
     settings: Annotated[Settings, Depends(get_settings)],
@@ -31,6 +48,7 @@ async def export_csv(
             session,
             user_id=current_user_id,
             settings=settings,
+            tz=data.tz,
         )
     except UserNotFound as exc:
         raise HTTPException(

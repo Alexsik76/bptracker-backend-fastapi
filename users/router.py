@@ -15,7 +15,6 @@ router = APIRouter(prefix="/users", tags=["users"])
 class UserRead(SQLModel):
     id: UUID
     email: EmailStr
-    timezone: str | None
     created_at: datetime
 
 

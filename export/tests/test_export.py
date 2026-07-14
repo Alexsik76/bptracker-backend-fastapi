@@ -47,7 +47,7 @@ async def test_export_happy_path(
     session.add_all([m1, m2, m3])
     await session.commit()
 
-    response = await client.post("/export/csv")
+    response = await client.post("/export/csv", json={"tz": "UTC"})
     assert response.status_code == 202
     data = response.json()
     assert data["message"] == "Export is queued"
@@ -98,11 +98,11 @@ async def test_export_cooldown(
     client = client_factory(user_id)
 
     # First call succeeds
-    response1 = await client.post("/export/csv")
+    response1 = await client.post("/export/csv", json={"tz": "UTC"})
     assert response1.status_code == 202
 
     # Second call returns 429
-    response2 = await client.post("/export/csv")
+    response2 = await client.post("/export/csv", json={"tz": "UTC"})
     assert response2.status_code == 429
     assert response2.json()["detail"] == "Export already requested recently"
 
@@ -141,7 +141,7 @@ async def test_export_data_isolation(
     await session.commit()
 
     client = client_factory(user_a)
-    response = await client.post("/export/csv")
+    response = await client.post("/export/csv", json={"tz": "UTC"})
     assert response.status_code == 202
 
     statement = select(EmailOutbox).where(EmailOutbox.to == "user_a@example.com")
@@ -162,12 +162,8 @@ async def test_export_timezone(
     client_factory,
     make_user,
 ):
-    # 4. Timezone shifting: Europe/Kyiv (+3 in July) vs NULL (UTC)
-    # Kyiv user
+    # 4. Timezone shifting: Europe/Kyiv (+3 in July) vs UTC
     user_kyiv_id = await make_user("kyiv@example.com")
-    user_kyiv = await session.get(User, user_kyiv_id)
-    user_kyiv.timezone = "Europe/Kyiv"
-    session.add(user_kyiv)
 
     m_kyiv = Measurement(
         sys=120,
@@ -180,7 +176,7 @@ async def test_export_timezone(
     await session.commit()
 
     client_kyiv = client_factory(user_kyiv_id)
-    await client_kyiv.post("/export/csv")
+    await client_kyiv.post("/export/csv", json={"tz": "Europe/Kyiv"})
 
     statement_kyiv = select(EmailOutbox).where(EmailOutbox.to == "kyiv@example.com")
     result_kyiv = await session.exec(statement_kyiv)
@@ -190,28 +186,62 @@ async def test_export_timezone(
     # Kyiv is UTC+3 in July, so 12:00 UTC -> 15:00 Kyiv
     assert rows_kyiv[1][0] == "2026-07-12 15:00:00"
 
-    # UTC user (NULL timezone)
-    user_utc_id = await make_user("utc@example.com")
-    m_utc = Measurement(
-        sys=120,
-        dia=80,
-        pulse=70,
-        recorded_at=datetime(2026, 7, 12, 12, 0, 0, tzinfo=UTC),
-        user_id=user_utc_id,
-    )
-    session.add(m_utc)
-    await session.commit()
 
-    client_utc = client_factory(user_utc_id)
-    await client_utc.post("/export/csv")
+@pytest.mark.asyncio
+async def test_export_timezone_filename_date(
+    session: AsyncSession,
+    client_factory,
+    make_user,
+):
+    from unittest.mock import patch
 
-    statement_utc = select(EmailOutbox).where(EmailOutbox.to == "utc@example.com")
-    result_utc = await session.exec(statement_utc)
-    item_utc = result_utc.first()
-    csv_utc = base64.b64decode(item_utc.attachments[0]["content_b64"]).decode("utf-8")
-    rows_utc = list(csv.reader(csv_utc.splitlines()))
-    # No timezone shifts, defaults to UTC
-    assert rows_utc[1][0] == "2026-07-12 12:00:00"
+    user_id = await make_user("tokyo@example.com")
+    client = client_factory(user_id)
+
+    class FakeDatetime:
+        @classmethod
+        def now(cls, tz=None):
+            return datetime(2026, 7, 12, 22, 30, 0, tzinfo=UTC)
+
+    with patch("export.service.datetime", FakeDatetime):
+        response = await client.post("/export/csv", json={"tz": "Asia/Tokyo"})
+        assert response.status_code == 202
+
+    statement = select(EmailOutbox).where(EmailOutbox.to == "tokyo@example.com")
+    result = await session.exec(statement)
+    item = result.first()
+    assert item is not None
+
+    # Tokyo is UTC+9. 22:30 UTC -> 07:30 Tokyo of the next day (July 13th)
+    assert "2026-07-13" in item.subject
+    assert "2026-07-13" in item.attachments[0]["filename"]
+
+
+@pytest.mark.asyncio
+async def test_export_missing_tz(
+    client_factory,
+    make_user,
+):
+    user_id = await make_user("missing-tz@example.com")
+    client = client_factory(user_id)
+
+    # Missing tz yields 422
+    response = await client.post("/export/csv")
+    assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_export_invalid_tz(
+    client_factory,
+    make_user,
+):
+    user_id = await make_user("invalid-tz@example.com")
+    client = client_factory(user_id)
+
+    # Invalid tz yields 422
+    response = await client.post("/export/csv", json={"tz": "Not/AZone"})
+    assert response.status_code == 422
+    assert "Invalid timezone identifier" in response.json()["detail"][0]["msg"]
 
 
 @pytest.mark.asyncio
@@ -224,7 +254,7 @@ async def test_export_empty_history(
     user_id = await make_user("empty@example.com")
     client = client_factory(user_id)
 
-    response = await client.post("/export/csv")
+    response = await client.post("/export/csv", json={"tz": "UTC"})
     assert response.status_code == 202
 
     statement = select(EmailOutbox).where(EmailOutbox.to == "empty@example.com")
@@ -250,7 +280,7 @@ async def test_export_body_content(
     user_id = await make_user("body@example.com")
     client = client_factory(user_id)
 
-    await client.post("/export/csv")
+    await client.post("/export/csv", json={"tz": "UTC"})
 
     statement = select(EmailOutbox).where(EmailOutbox.to == "body@example.com")
     result = await session.exec(statement)
@@ -258,3 +288,22 @@ async def test_export_body_content(
 
     settings = get_settings()
     assert settings.export_sheets_template_url in item.body
+
+
+@pytest.mark.asyncio
+async def test_export_user_not_found(
+    client_factory,
+):
+    from uuid import uuid4
+
+    from auth.deps import get_current_user_id
+    from main import app
+
+    app.dependency_overrides.clear()
+    dummy_id = uuid4()
+    app.dependency_overrides[get_current_user_id] = lambda: dummy_id
+
+    client = client_factory(dummy_id)
+    response = await client.post("/export/csv", json={"tz": "UTC"})
+    assert response.status_code == 404
+    assert response.json()["detail"] == "User not found"

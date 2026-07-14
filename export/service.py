@@ -21,25 +21,15 @@ class ExportCooldownActive(Exception):
     pass
 
 
-def get_user_timezone(timezone_str: str | None) -> zoneinfo.ZoneInfo:
-    if timezone_str:
-        try:
-            return zoneinfo.ZoneInfo(timezone_str)
-        except (zoneinfo.ZoneInfoNotFoundError, ValueError):
-            pass
-    return zoneinfo.ZoneInfo("UTC")
-
-
 def generate_measurements_csv(measurements: list[Measurement], tz: zoneinfo.ZoneInfo) -> bytes:
     output = io.StringIO()
     writer = csv.writer(output, lineterminator="\n")
     writer.writerow(["timestamp", "systolic", "diastolic", "pulse"])
 
     for m in measurements:
-        # Convert the timestamp to the user's target local timezone before formatting.
-        # The backend renders this file server-side with no client in the loop, which is why
-        # users.timezone — and not the "client normalizes timezone" convention from
-        # docs/conventions.md — governs here.
+        # Convert the timestamp to the target local timezone supplied by the client.
+        # This renders the file server-side using the request-time timezone, ensuring
+        # the dates and times align with the client's current context.
         local_dt = m.recorded_at.astimezone(tz)
         timestamp_str = local_dt.strftime("%Y-%m-%d %H:%M:%S")
         writer.writerow([timestamp_str, m.sys, m.dia, m.pulse])
@@ -52,13 +42,14 @@ async def export_measurements_to_csv(
     *,
     user_id: UUID,
     settings: Settings,
+    tz: str,
 ) -> str:
     """Orchestrates the export process:
 
     1. Fetches the user (with with_for_update() to prevent race conditions).
     2. Performs cooldown validation.
     3. Fetches all measurements for the user in ascending date order.
-    4. Generates the CSV bytes formatted to the user's timezone.
+    4. Generates the CSV bytes formatted to the target timezone.
     5. Queues the email using OutboxEmailSender in the same transaction.
     6. Stamping user.last_export_at.
     7. Commits the transaction atomically.
@@ -86,10 +77,10 @@ async def export_measurements_to_csv(
     measurements = list(m_result.all())
 
     # Build CSV and email attachment
-    tz = get_user_timezone(user.timezone)
-    csv_bytes = generate_measurements_csv(measurements, tz)
+    tz_info = zoneinfo.ZoneInfo(tz)
+    csv_bytes = generate_measurements_csv(measurements, tz_info)
 
-    now_local = now_utc.astimezone(tz)
+    now_local = now_utc.astimezone(tz_info)
     today_str = now_local.strftime("%Y-%m-%d")
     filename = f"bp-tracker-{today_str}.csv"
     subject = f"BP Tracker — export from {today_str}"

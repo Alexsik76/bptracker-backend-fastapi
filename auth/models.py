@@ -18,8 +18,6 @@ NormalizedEmail = Annotated[EmailStr, AfterValidator(lowercase_email)]
 
 class UserBase(SQLModel):
     email: EmailStr = Field(index=True, sa_column_kwargs={"unique": True})
-    # IANA timezone (e.g. "Europe/Kyiv"); per domain spec, not used by auth logic yet.
-    timezone: str | None = None
 
 
 class User(UserBase, table=True):
@@ -42,7 +40,6 @@ class User(UserBase, table=True):
 class UserRead(SQLModel):
     id: UUID
     email: EmailStr
-    timezone: str | None
     created_at: datetime
 
 
