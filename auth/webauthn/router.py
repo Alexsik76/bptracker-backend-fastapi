@@ -1,3 +1,4 @@
+import logging
 from typing import Annotated
 from uuid import UUID
 
@@ -13,6 +14,7 @@ from config import get_settings
 from db import SessionDep
 
 router = APIRouter(prefix="/auth/webauthn", tags=["auth"])
+logger = logging.getLogger(__name__)
 settings = get_settings()
 
 
@@ -45,6 +47,7 @@ async def register_verify(
         )
         return credential
     except service.CeremonyError as exc:
+        logger.warning("WebAuthn registration failed: %s", exc)
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail="Registration failed"
         ) from exc
@@ -72,6 +75,7 @@ async def authenticate_verify(
             settings=settings,
         )
     except service.CeremonyError as exc:
+        logger.warning("WebAuthn authentication failed: %s", exc)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired credentials"
         ) from exc
