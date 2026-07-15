@@ -1,6 +1,8 @@
 from enum import StrEnum
 from functools import lru_cache
+import re
 from typing import Annotated, Any
+
 
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
@@ -21,10 +23,12 @@ def _parse_csv(value: Any, *, field_name: str, lowercase: bool = False) -> Any:
     if isinstance(value, str):
         if not value.strip():
             raise ValueError(f"{field_name} cannot be empty")
-        parsed = [item.strip() for item in value.split(",")]
+        # Split on commas and/or any whitespace. Both are safe separators here: none of
+        # the list-valued settings (origins, emails) contain internal whitespace, and
+        # Portainer mangles comma-only values, so whitespace separation must work too.
+        parsed = [item for item in re.split(r"[,\s]+", value.strip()) if item]
         if lowercase:
             parsed = [item.lower() for item in parsed]
-        parsed = [item for item in parsed if item]
         if not parsed:
             raise ValueError(f"{field_name} cannot be empty")
         return parsed

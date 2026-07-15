@@ -27,6 +27,14 @@ def test_webauthn_origins_parsing():
     s1 = make_settings(webauthn_origins="http://localhost:5173, android:apk-key-hash:AbCd")
     assert s1.webauthn_origins == ["http://localhost:5173", "android:apk-key-hash:AbCd"]
 
+    # A space-separated string produces the expected list
+    s_space = make_settings(webauthn_origins="https://bptracker.home.vn.ua android:apk-key-hash:XXX")
+    assert s_space.webauthn_origins == ["https://bptracker.home.vn.ua", "android:apk-key-hash:XXX"]
+
+    # A mixed comma-and-space separated string produces the expected list
+    s_mixed = make_settings(webauthn_origins="a, b c")
+    assert s_mixed.webauthn_origins == ["a", "b", "c"]
+
     # A single value with no comma produces a one-element list
     s2 = make_settings(webauthn_origins="http://localhost:5173")
     assert s2.webauthn_origins == ["http://localhost:5173"]
@@ -80,6 +88,14 @@ def test_allowed_emails_parsing():
     # Comma-separated list with whitespace stripped and lowercased
     s1 = make_settings(allowed_emails="A@Example.com, b@example.com ")
     assert s1.allowed_emails == ["a@example.com", "b@example.com"]
+
+    # Space-separated list with lowercasing
+    s_space = make_settings(allowed_emails="A@Example.com b@example.com ")
+    assert s_space.allowed_emails == ["a@example.com", "b@example.com"]
+
+    # Mixed comma-and-space list with lowercasing
+    s_mixed = make_settings(allowed_emails="A@Example.com, b@example.com c@example.com")
+    assert s_mixed.allowed_emails == ["a@example.com", "b@example.com", "c@example.com"]
 
     # Single value
     s2 = make_settings(allowed_emails="A@Example.com")
