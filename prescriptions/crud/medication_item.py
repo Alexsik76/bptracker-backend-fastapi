@@ -5,7 +5,12 @@ from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from prescriptions.crud.prescription import get_prescription
-from prescriptions.models import MedicationItem, MedicationItemCreate, MedicationItemUpdate
+from prescriptions.models import (
+    CourseType,
+    MedicationItem,
+    MedicationItemCreate,
+    MedicationItemUpdate,
+)
 
 # Ownership is checked via the parent prescription (medication_items has no user_id).
 
@@ -21,6 +26,9 @@ async def create_medication_item(
     if prescription is None:
         return None
     item = MedicationItem.model_validate(data, update={"prescription_id": prescription_id})
+    if item.course_type == CourseType.ONGOING:
+        item.course_start = None
+        item.course_intakes = None
     session.add(item)
     await session.commit()
     await session.refresh(item)
@@ -73,6 +81,9 @@ async def update_medication_item(
     updates = data.model_dump(exclude_unset=True)
     for field, value in updates.items():
         setattr(item, field, value)
+    if item.course_type == CourseType.ONGOING:
+        item.course_start = None
+        item.course_intakes = None
     session.add(item)
     await session.commit()
     await session.refresh(item)

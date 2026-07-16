@@ -41,3 +41,17 @@ async def get_intake_report(
     if report is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Intake report not found")
     return report
+
+
+@router.delete("/{report_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_intake_report(
+    report_id: UUID,
+    session: SessionDep,
+    user_id: CurrentUserId,
+) -> None:
+    deleted = await crud.delete_intake_report(session, report_id, user_id)
+    if not deleted:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Intake report not found"
+        )
+

@@ -173,3 +173,50 @@ async def test_user_cannot_see_another_users_intake_reports(
     listing = await client_b.get("/reminders/intake-reports")
     assert listing.status_code == 200
     assert listing.json() == []
+
+
+@pytest.mark.asyncio
+async def test_delete_intake_report_removes_it(client):
+    created = await client.post(
+        "/reminders/intake-reports", json={"period": "Morning", "date": "2026-01-15"}
+    )
+    assert created.status_code == 201
+    rid = created.json()["id"]
+
+    deleted = await client.delete(f"/reminders/intake-reports/{rid}")
+    assert deleted.status_code == 204
+
+    gone = await client.get(f"/reminders/intake-reports/{rid}")
+    assert gone.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_delete_missing_intake_report_returns_404(client):
+    missing = "00000000-0000-0000-0000-000000000999"
+    response = await client.delete(f"/reminders/intake-reports/{missing}")
+    assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_delete_another_users_intake_report_returns_404(
+    client_factory, make_user
+):
+    user_a = await make_user("a@example.com")
+    user_b = await make_user("b@example.com")
+
+    client_a = client_factory(user_a)
+    created = await client_a.post(
+        "/reminders/intake-reports", json={"period": "Morning", "date": "2026-01-15"}
+    )
+    assert created.status_code == 201
+    rid = created.json()["id"]
+
+    client_b = client_factory(user_b)
+    response = await client_b.delete(f"/reminders/intake-reports/{rid}")
+    assert response.status_code == 404
+
+    # Re-apply the dependency override for user_a so that client_a requests act as user_a.
+    client_a = client_factory(user_a)
+    check = await client_a.get(f"/reminders/intake-reports/{rid}")
+    assert check.status_code == 200
+

@@ -154,3 +154,51 @@ async def test_delete_prescription_cascades_to_medication_items(client, item_pay
     # this still proves the item is unreachable, not that the row was dropped.
     gone = await client.get(f"/prescriptions/{pid}/items/{iid}")
     assert gone.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_create_ongoing_medication_item_clears_course_fields(client, item_payload):
+    pid = await _create_prescription(client)
+    item_payload["course_type"] = "ongoing"
+    item_payload["course_start"] = "2026-01-15T08:00:00+00:00"
+    item_payload["course_intakes"] = 10
+
+    response = await client.post(f"/prescriptions/{pid}/items", json=item_payload)
+    assert response.status_code == 201
+    body = response.json()
+    assert body["course_type"] == "ongoing"
+    assert body["course_start"] is None
+    assert body["course_intakes"] is None
+
+
+@pytest.mark.asyncio
+async def test_patch_medication_item_to_ongoing_clears_course_fields(client, item_payload):
+    pid = await _create_prescription(client)
+    item_payload["course_type"] = "course"
+    item_payload["course_start"] = "2026-01-15T08:00:00+00:00"
+    item_payload["course_intakes"] = 10
+
+    created = await client.post(f"/prescriptions/{pid}/items", json=item_payload)
+    assert created.status_code == 201
+    iid = created.json()["id"]
+    assert created.json()["course_type"] == "course"
+    assert created.json()["course_start"] is not None
+    assert created.json()["course_intakes"] == 10
+
+    updated = await client.patch(
+        f"/prescriptions/{pid}/items/{iid}",
+        json={"course_type": "ongoing"}
+    )
+    assert updated.status_code == 200
+    body = updated.json()
+    assert body["course_type"] == "ongoing"
+    assert body["course_start"] is None
+    assert body["course_intakes"] is None
+
+    fetched = await client.get(f"/prescriptions/{pid}/items/{iid}")
+    assert fetched.status_code == 200
+    fetched_body = fetched.json()
+    assert fetched_body["course_type"] == "ongoing"
+    assert fetched_body["course_start"] is None
+    assert fetched_body["course_intakes"] is None
+

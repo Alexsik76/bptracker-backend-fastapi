@@ -105,3 +105,18 @@ async def get_intake_reports(
     statement = select(IntakeReport).where(IntakeReport.user_id == user_id)
     result = await session.exec(statement)
     return result.all()
+
+
+async def delete_intake_report(
+    session: AsyncSession,
+    report_id: UUID,
+    user_id: UUID,
+) -> bool:
+    """Delete an intake report by id, scoped to the user. False if not found."""
+    report = await get_intake_report(session, report_id, user_id)
+    if report is None:
+        return False
+    await session.delete(report)
+    await session.commit()
+    return True
+
