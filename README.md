@@ -41,14 +41,14 @@ uv run pytest
 - **auth** — magic-link and WebAuthn/passkey authentication, JWT access/refresh
   tokens, session management. All other endpoints require an
   `Authorization: Bearer <token>` header.
-- **users** — user profile (`GET /users/me`, `DELETE /users/me`).
+- **users** — user profile (`GET /users/me`, `PATCH /users/me`, `DELETE /users/me`).
 - **measurements** — blood-pressure readings (systolic/diastolic/pulse). Plain CRUD
   plus photo recognition via Gemini API (`POST /measurements/analyze`).
 - **prescriptions** — a prescription (doctor, date, active flag) with its
   medication items (dose, frequency, time-of-day slots, course).
 - **reminders** — per-user reminder configuration (slot times) and an
   append-only log of confirmed medication intakes.
-- **export** — CSV export of measurement history, delivered via email.
+- **export** — CSV and print-ready PDF export of measurement history (with optional date range), delivered via email.
 - **email_infra** — SMTP delivery and async email outbox with retries.
 - **cleanup** — background worker for expired magic links, challenges, and sessions.
 

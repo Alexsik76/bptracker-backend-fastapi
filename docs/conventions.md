@@ -16,13 +16,12 @@ not a per-module decision — every timestamp everywhere follows it.
    client knows.
 4. The backend stores moments as received and does not interpret timezone.
    It never guesses a user's offset in order to store or classify a moment.
-5. The backend uses the user's timezone (`users.timezone`) for server-side rendering.
+5. The backend uses the request-supplied timezone (`tz` parameter) for server-side rendering.
    There is exactly one exception to the client-normalization rule: when the backend
-   renders a human-readable file server-side with no client in the loop, it must use
-   `users.timezone` to format times. Specifically, the CSV export (`export`) reads
-   `users.timezone` to adjust timestamps before writing them to the CSV. Beyond this
-   exception, the timezone is NOT used to record intakes, compute statuses, or perform
-   read-time database projections.
+   renders human-readable files server-side (CSV data and PDF reports for doctors),
+   it formats dates using the `tz` parameter supplied by the client in `POST /export/csv` (D-008).
+   The timezone is NOT stored in the database. Beyond this exception, the timezone is NOT used
+   to record intakes, compute statuses, or perform read-time database projections.
 
 Consequence: no module bakes a timezone-dependent value into a row. Derived
 states ("late", "missed", "manually entered") are computed at read time from
