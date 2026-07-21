@@ -8,6 +8,7 @@ dependencies = [
     "aiosmtplib>=5.1.2",
     "alembic>=1.18.5",
     "fastapi[standard]>=0.137.1",
+    "fpdf2>=2.8.7",
     "httpx>=0.28.1",
     "psycopg[binary]>=3.3.4",
     "pydantic-settings>=2.14.1",

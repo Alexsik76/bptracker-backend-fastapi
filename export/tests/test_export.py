@@ -69,14 +69,24 @@ async def test_export_happy_path(
     assert item.subject.startswith("BP Tracker — export from")
 
     assert item.attachments is not None
-    assert len(item.attachments) == 1
-    att = item.attachments[0]
-    assert att["filename"].startswith("bp-tracker-")
-    assert att["filename"].endswith(".csv")
-    assert att["content_type"] == "text/csv"
+    assert len(item.attachments) == 2
+
+    # Attachment 1: CSV
+    att_csv = item.attachments[0]
+    assert att_csv["filename"].startswith("bp-tracker-")
+    assert att_csv["filename"].endswith(".csv")
+    assert att_csv["content_type"] == "text/csv"
+
+    # Attachment 2: PDF
+    att_pdf = item.attachments[1]
+    assert att_pdf["filename"].startswith("bp-tracker-")
+    assert att_pdf["filename"].endswith(".pdf")
+    assert att_pdf["content_type"] == "application/pdf"
+    pdf_bytes = base64.b64decode(att_pdf["content_b64"])
+    assert pdf_bytes.startswith(b"%PDF")
 
     # Decode CSV content
-    csv_bytes = base64.b64decode(att["content_b64"])
+    csv_bytes = base64.b64decode(att_csv["content_b64"])
     csv_text = csv_bytes.decode("utf-8")
     rows = list(csv.reader(csv_text.splitlines()))
 
@@ -307,3 +317,83 @@ async def test_export_user_not_found(
     response = await client.post("/export/csv", json={"tz": "UTC"})
     assert response.status_code == 404
     assert response.json()["detail"] == "User not found"
+
+
+def test_generate_measurements_pdf_with_data():
+    import zoneinfo
+    from uuid import uuid4
+
+    from export.service import generate_measurements_pdf
+
+    user_id = uuid4()
+    tz = zoneinfo.ZoneInfo("UTC")
+    m1 = Measurement(
+        sys=120,
+        dia=80,
+        pulse=70,
+        recorded_at=datetime(2026, 4, 17, 8, 30, 0, tzinfo=UTC),
+        user_id=user_id,
+    )
+    m2 = Measurement(
+        sys=130,
+        dia=85,
+        pulse=75,
+        recorded_at=datetime(2026, 4, 23, 19, 45, 0, tzinfo=UTC),
+        user_id=user_id,
+    )
+
+    pdf_bytes = generate_measurements_pdf(
+        [m1, m2],
+        tz,
+        patient_label="Олена Коваль",
+        generated_at=datetime(2026, 4, 23, 20, 0, 0, tzinfo=UTC),
+    )
+
+    assert isinstance(pdf_bytes, bytes)
+    assert len(pdf_bytes) > 0
+    assert pdf_bytes.startswith(b"%PDF")
+
+
+def test_generate_measurements_pdf_empty():
+    import zoneinfo
+
+    from export.service import generate_measurements_pdf
+
+    tz = zoneinfo.ZoneInfo("Europe/Kyiv")
+    pdf_bytes = generate_measurements_pdf(
+        [],
+        tz,
+        patient_label="test@example.com",
+        generated_at=datetime(2026, 7, 21, 10, 0, 0, tzinfo=UTC),
+    )
+
+    assert isinstance(pdf_bytes, bytes)
+    assert len(pdf_bytes) > 0
+    assert pdf_bytes.startswith(b"%PDF")
+
+
+@pytest.mark.asyncio
+async def test_export_with_display_name(
+    session: AsyncSession,
+    client_factory,
+    make_user,
+):
+    user_id = await make_user("named@example.com")
+    user = await session.get(User, user_id)
+    user.display_name = "Тарас Шевченко"
+    session.add(user)
+    await session.commit()
+
+    client = client_factory(user_id)
+    response = await client.post("/export/csv", json={"tz": "UTC"})
+    assert response.status_code == 202
+
+    statement = select(EmailOutbox).where(EmailOutbox.to == "named@example.com")
+    result = await session.exec(statement)
+    item = result.first()
+    assert item is not None
+    assert len(item.attachments) == 2
+    pdf_att = item.attachments[1]
+    assert pdf_att["content_type"] == "application/pdf"
+    pdf_bytes = base64.b64decode(pdf_att["content_b64"])
+    assert pdf_bytes.startswith(b"%PDF")

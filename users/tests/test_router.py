@@ -16,7 +16,34 @@ async def test_get_me_returns_caller_profile(client_factory, make_user):
 
     assert data["id"] == str(user_id)
     assert data["email"] == "profile_test@example.com"
+    assert data["display_name"] is None
     assert "last_export_at" not in data
+
+
+@pytest.mark.asyncio
+async def test_patch_me_sets_and_clears_display_name(client_factory, make_user):
+    user_id = await make_user("patch_test@example.com")
+    client = client_factory(user_id)
+
+    # 1. Set display name with leading/trailing spaces
+    patch_resp = await client.patch("/users/me", json={"display_name": "  Taras Shevchenko  "})
+    assert patch_resp.status_code == 200
+    assert patch_resp.json()["display_name"] == "Taras Shevchenko"
+
+    # 2. GET /users/me reflects new display name
+    get_resp = await client.get("/users/me")
+    assert get_resp.status_code == 200
+    assert get_resp.json()["display_name"] == "Taras Shevchenko"
+
+    # 3. Clear display name using whitespace string
+    clear_resp = await client.patch("/users/me", json={"display_name": "   "})
+    assert clear_resp.status_code == 200
+    assert clear_resp.json()["display_name"] is None
+
+    # 4. Verify cleared in GET /users/me
+    get_resp2 = await client.get("/users/me")
+    assert get_resp2.status_code == 200
+    assert get_resp2.json()["display_name"] is None
 
 
 @pytest.mark.asyncio

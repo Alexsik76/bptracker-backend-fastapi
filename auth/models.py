@@ -27,6 +27,10 @@ class User(UserBase, table=True):
         default=None,
         sa_column=Column(Uuid, primary_key=True, server_default=text("uuidv7()")),
     )
+    display_name: str | None = Field(
+        default=None,
+        sa_column=Column(String(120), nullable=True),
+    )
     created_at: datetime | None = Field(
         default=None,
         sa_column=Column(DateTime(timezone=True), server_default=func.now()),
@@ -40,6 +44,7 @@ class User(UserBase, table=True):
 class UserRead(SQLModel):
     id: UUID
     email: EmailStr
+    display_name: str | None = None
     created_at: datetime
 
 
