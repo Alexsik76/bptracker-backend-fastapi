@@ -397,3 +397,136 @@ async def test_export_with_display_name(
     assert pdf_att["content_type"] == "application/pdf"
     pdf_bytes = base64.b64decode(pdf_att["content_b64"])
     assert pdf_bytes.startswith(b"%PDF")
+
+
+@pytest.mark.asyncio
+async def test_export_date_range_filtering(
+    session: AsyncSession,
+    client_factory,
+    make_user,
+):
+    user_id = await make_user("range@example.com")
+
+    # Kyiv is UTC+3 in July
+    # m1: July 9th 20:30 UTC -> July 9th 23:30 Kyiv (BEFORE range)
+    m1 = Measurement(
+        sys=110,
+        dia=70,
+        pulse=60,
+        recorded_at=datetime(2026, 7, 9, 20, 30, 0, tzinfo=UTC),
+        user_id=user_id,
+    )
+    # m2: July 9th 21:30 UTC -> July 10th 00:30 Kyiv (IN range for 2026-07-10)
+    m2 = Measurement(
+        sys=120,
+        dia=80,
+        pulse=70,
+        recorded_at=datetime(2026, 7, 9, 21, 30, 0, tzinfo=UTC),
+        user_id=user_id,
+    )
+    # m3: July 10th 12:00 UTC -> July 10th 15:00 Kyiv (IN range for 2026-07-10)
+    m3 = Measurement(
+        sys=130,
+        dia=85,
+        pulse=75,
+        recorded_at=datetime(2026, 7, 10, 12, 0, 0, tzinfo=UTC),
+        user_id=user_id,
+    )
+    # m4: July 10th 21:30 UTC -> July 11th 00:30 Kyiv (AFTER range for 2026-07-10)
+    m4 = Measurement(
+        sys=140,
+        dia=90,
+        pulse=80,
+        recorded_at=datetime(2026, 7, 10, 21, 30, 0, tzinfo=UTC),
+        user_id=user_id,
+    )
+    session.add_all([m1, m2, m3, m4])
+    await session.commit()
+
+    client = client_factory(user_id)
+    response = await client.post(
+        "/export/csv",
+        json={
+            "tz": "Europe/Kyiv",
+            "date_from": "2026-07-10",
+            "date_to": "2026-07-10",
+        },
+    )
+    assert response.status_code == 202
+
+    statement = select(EmailOutbox).where(EmailOutbox.to == "range@example.com")
+    result = await session.exec(statement)
+    item = result.first()
+    assert item is not None
+    assert len(item.attachments) == 2
+
+    csv_bytes = base64.b64decode(item.attachments[0]["content_b64"])
+    rows = list(csv.reader(csv_bytes.decode("utf-8").splitlines()))
+
+    # Header + 2 in-range measurements (m2 and m3)
+    assert len(rows) == 3
+    assert rows[1] == ["2026-07-10 00:30:00", "120", "80", "70"]
+    assert rows[2] == ["2026-07-10 15:00:00", "130", "85", "75"]
+
+
+@pytest.mark.asyncio
+async def test_export_invalid_date_range(
+    client_factory,
+    make_user,
+):
+    user_id = await make_user("invalid_range@example.com")
+    client = client_factory(user_id)
+
+    response = await client.post(
+        "/export/csv",
+        json={
+            "tz": "UTC",
+            "date_from": "2026-07-15",
+            "date_to": "2026-07-10",
+        },
+    )
+    assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_export_empty_result_date_range(
+    session: AsyncSession,
+    client_factory,
+    make_user,
+):
+    user_id = await make_user("empty_range@example.com")
+    m = Measurement(
+        sys=120,
+        dia=80,
+        pulse=70,
+        recorded_at=datetime(2026, 7, 10, 10, 0, 0, tzinfo=UTC),
+        user_id=user_id,
+    )
+    session.add(m)
+    await session.commit()
+
+    client = client_factory(user_id)
+    response = await client.post(
+        "/export/csv",
+        json={
+            "tz": "UTC",
+            "date_from": "2026-08-01",
+            "date_to": "2026-08-05",
+        },
+    )
+    assert response.status_code == 202
+
+    statement = select(EmailOutbox).where(EmailOutbox.to == "empty_range@example.com")
+    result = await session.exec(statement)
+    item = result.first()
+    assert item is not None
+    assert len(item.attachments) == 2
+
+    # CSV has header only
+    csv_bytes = base64.b64decode(item.attachments[0]["content_b64"])
+    rows = list(csv.reader(csv_bytes.decode("utf-8").splitlines()))
+    assert len(rows) == 1
+
+    # PDF is valid empty report
+    pdf_bytes = base64.b64decode(item.attachments[1]["content_b64"])
+    assert pdf_bytes.startswith(b"%PDF")

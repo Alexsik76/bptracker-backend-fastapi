@@ -1,7 +1,7 @@
 import csv
 import io
 import zoneinfo
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from pathlib import Path
 from uuid import UUID
 
@@ -136,12 +136,14 @@ async def export_measurements_to_csv(
     user_id: UUID,
     settings: Settings,
     tz: str,
+    date_from: date | None = None,
+    date_to: date | None = None,
 ) -> str:
     """Orchestrates the export process:
 
     1. Fetches the user (with with_for_update() to prevent race conditions).
     2. Performs cooldown validation.
-    3. Fetches all measurements for the user in ascending date order.
+    3. Fetches all measurements for the user (filtered by date range if provided).
     4. Generates the CSV and PDF bytes formatted to the target timezone.
     5. Queues the email using OutboxEmailSender in the same transaction.
     6. Stamping user.last_export_at.
@@ -160,17 +162,24 @@ async def export_measurements_to_csv(
         if now_utc < cooldown_limit:
             raise ExportCooldownActive()
 
-    # Fetch all measurements ordered ascending
-    m_statement = (
-        select(Measurement)
-        .where(Measurement.user_id == user_id)
-        .order_by(Measurement.recorded_at.asc())
-    )
+    tz_info = zoneinfo.ZoneInfo(tz)
+
+    # Fetch measurements ordered ascending, optionally filtered by date range
+    m_statement = select(Measurement).where(Measurement.user_id == user_id)
+
+    if date_from is not None:
+        start_local = datetime.combine(date_from, time.min, tzinfo=tz_info)
+        m_statement = m_statement.where(Measurement.recorded_at >= start_local.astimezone(UTC))
+
+    if date_to is not None:
+        end_local = datetime.combine(date_to + timedelta(days=1), time.min, tzinfo=tz_info)
+        m_statement = m_statement.where(Measurement.recorded_at < end_local.astimezone(UTC))
+
+    m_statement = m_statement.order_by(Measurement.recorded_at.asc())
     m_result = await session.exec(m_statement)
     measurements = list(m_result.all())
 
     # Build CSV and PDF attachments
-    tz_info = zoneinfo.ZoneInfo(tz)
     csv_bytes = generate_measurements_csv(measurements, tz_info)
 
     patient_label = user.display_name or user.email

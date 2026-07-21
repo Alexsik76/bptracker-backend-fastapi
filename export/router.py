@@ -1,8 +1,9 @@
 import zoneinfo
+from datetime import date
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import field_validator
+from pydantic import field_validator, model_validator
 from sqlmodel import SQLModel
 from sqlmodel.ext.asyncio.session import AsyncSession
 
@@ -21,6 +22,8 @@ router = APIRouter(prefix="/export", tags=["export"])
 
 class ExportRequest(SQLModel):
     tz: str
+    date_from: date | None = None
+    date_to: date | None = None
 
     @field_validator("tz")
     @classmethod
@@ -30,6 +33,13 @@ class ExportRequest(SQLModel):
         except Exception as exc:
             raise ValueError(f"Invalid timezone identifier: '{v}'") from exc
         return v
+
+    @model_validator(mode="after")
+    def validate_date_range(self) -> "ExportRequest":
+        if self.date_from is not None and self.date_to is not None:
+            if self.date_from > self.date_to:
+                raise ValueError("date_from cannot be after date_to")
+        return self
 
 
 @router.post(
@@ -49,6 +59,8 @@ async def export_csv(
             user_id=current_user_id,
             settings=settings,
             tz=data.tz,
+            date_from=data.date_from,
+            date_to=data.date_to,
         )
     except UserNotFound as exc:
         raise HTTPException(
