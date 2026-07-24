@@ -1,8 +1,7 @@
+import re
 from enum import StrEnum
 from functools import lru_cache
-import re
 from typing import Annotated, Any
-
 
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict

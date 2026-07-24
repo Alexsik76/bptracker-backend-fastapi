@@ -28,7 +28,9 @@ def test_webauthn_origins_parsing():
     assert s1.webauthn_origins == ["http://localhost:5173", "android:apk-key-hash:AbCd"]
 
     # A space-separated string produces the expected list
-    s_space = make_settings(webauthn_origins="https://bptracker.home.vn.ua android:apk-key-hash:XXX")
+    s_space = make_settings(
+        webauthn_origins="https://bptracker.home.vn.ua android:apk-key-hash:XXX"
+    )
     assert s_space.webauthn_origins == ["https://bptracker.home.vn.ua", "android:apk-key-hash:XXX"]
 
     # A mixed comma-and-space separated string produces the expected list

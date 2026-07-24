@@ -1,0 +1,87 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: bp
+          POSTGRES_PASSWORD: bp
+          POSTGRES_DB: bp_tracker
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U bp -d bp_tracker"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      ENVIRONMENT: dev
+      POSTGRES_USER: bp
+      POSTGRES_PASSWORD: bp
+      POSTGRES_DB: bp_tracker
+      POSTGRES_HOST: localhost
+      POSTGRES_PORT: 5432
+      JWT_SECRET: test-jwt-secret-key-for-ci-testing-12345
+      SMTP_HOST: smtp.example.com
+      SMTP_PORT: 587
+      SMTP_USERNAME: test-smtp-user@example.com
+      SMTP_PASSWORD: test-smtp-password
+      SMTP_FROM: noreply@example.com
+      SMTP_STARTTLS: "True"
+      SMTP_TIMEOUT: 10
+      MAGIC_LINK_BASE_URL: http://localhost:3000/auth/confirm
+      MAGIC_LINK_TTL_MINUTES: 15
+      MAGIC_LINK_TOKEN_BYTES: 32
+      WEBAUTHN_RP_ID: localhost
+      WEBAUTHN_RP_NAME: "BP Tracker"
+      WEBAUTHN_ORIGINS: http://localhost:5173
+      WEBAUTHN_CHALLENGE_TTL_MINUTES: 5
+      EXPORT_SHEETS_TEMPLATE_URL: https://docs.google.com/spreadsheets/d/placeholder-id-here/copy
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync
+
+      - name: Check code formatting and linting
+        run: uv run ruff check .
+
+      - name: Create test database
+        run: |
+          uv run python -c "
+          import os, psycopg
+          user = os.environ['POSTGRES_USER']
+          password = os.environ['POSTGRES_PASSWORD']
+          host = os.environ['POSTGRES_HOST']
+          port = os.environ['POSTGRES_PORT']
+          db = os.environ['POSTGRES_DB']
+          test_db = f'{db}_test'
+          dsn = f'postgresql://{user}:{password}@{host}:{port}/{db}'
+          with psycopg.connect(dsn, autocommit=True) as conn:
+              with conn.cursor() as cur:
+                  try:
+                      cur.execute(f'CREATE DATABASE \"{test_db}\"')
+                  except psycopg.errors.DuplicateDatabase:
+                      pass
+          "
+
+      - name: Run test suite
+        run: uv run pytest

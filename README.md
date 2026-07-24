@@ -1,5 +1,7 @@
 # BP Tracker — FastAPI backend
 
+![CI](https://github.com/Alexsik76/bptracker-backend-fastapi/actions/workflows/ci.yml/badge.svg)
+
 An async REST backend for tracking blood-pressure measurements and medication
 prescriptions/intake. A Python/FastAPI rebuild of an earlier C# service.
 

@@ -91,7 +91,7 @@ async def analyze_measurement_photo(
     # 3. size over analyze_max_file_bytes -> 413
     if len(content) > settings.analyze_max_file_bytes:
         raise HTTPException(
-            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="File exceeds 10 MB"
+            status_code=status.HTTP_413_CONTENT_TOO_LARGE, detail="File exceeds 10 MB"
         )
 
     try:
@@ -111,6 +111,6 @@ async def analyze_measurement_photo(
     except RecognitionFailed as exc:
         logger.warning("Gemini recognition failed for user %s", user_id)
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="Could not recognise values from the image",
         ) from exc
