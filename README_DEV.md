@@ -132,7 +132,7 @@ prescriptions, sessions, credentials тощо) через `ON DELETE CASCADE`.
 | Метод | Шлях | Тіло запиту | Відповідь | Помилки |
 |---|---|---|---|---|
 | POST | `/measurements` | `{sys:int, dia:int, pulse:int, recorded_at?:timestamptz}` | 201, `{id, sys, dia, pulse, recorded_at}` | 422 — вихід за діапазон |
-| GET | `/measurements?days=90` | — | 200, список, найновіші перші | — |
+| GET | `/measurements?date_from=&date_to=&limit=100&offset=0` | — | 200, `{items, total, limit, offset}`, найновіші перші | 422 — `date_from >= date_to` |
 | GET | `/measurements/{id}` | — | 200 | 404 |
 | PATCH | `/measurements/{id}` | будь-яка підмножина `{sys,dia,pulse,recorded_at}` | 200 | 404 |
 | DELETE | `/measurements/{id}` | — | 204 | 404 |
@@ -141,7 +141,13 @@ prescriptions, sessions, credentials тощо) через `ON DELETE CASCADE`.
 Діапазони: `sys` 40–300, `dia` 20–200, `pulse` 30–250; вихід за межі — 422 ще
 до звернення до бази. `recorded_at` — опційне поле; якщо клієнт його не
 надішле, бек підставить `now()`. Відповідь ніколи не містить `user_id`.
-Параметр запиту `days` у списку — ціле число від 1 до 365, за замовчуванням 90.
+`GET /measurements` приймає опційні `date_from`/`date_to` (timezone-aware
+datetime, `date_from` включно, `date_to` виключно; обидва незалежні, без
+жодного з них повертається вся історія) та пагінацію `limit` (1–500, за
+замовчуванням 100) і `offset` (≥0, за замовчуванням 0). Значення
+порівнюються з `recorded_at` як є, без конвертації таймзони на сервері.
+Відповідь — конверт `{items, total, limit, offset}`, де `total` — кількість
+записів під фільтром до застосування `limit`/`offset`.
 
 `POST /measurements/analyze` — безстанційне розпізнавання показників тиску з
 фото через Gemini API. Приймає файл зображення (`image/*`, ≤ 10 МБ), повертає
