@@ -46,3 +46,12 @@ class MeasurementUpdate(SQLModel):
     dia: int | None = Field(default=None, ge=20, le=200)
     pulse: int | None = Field(default=None, ge=30, le=250)
     recorded_at: datetime | None = None
+
+
+class MeasurementListResponse(SQLModel):
+    """Paged envelope for GET /measurements."""
+
+    items: list[MeasurementRead]
+    total: int
+    limit: int
+    offset: int

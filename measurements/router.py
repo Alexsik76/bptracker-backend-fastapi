@@ -1,5 +1,5 @@
 import logging
-from collections.abc import Sequence
+from datetime import datetime
 from typing import Annotated
 from uuid import UUID
 
@@ -10,7 +10,13 @@ from config import Settings, get_settings
 from db import SessionDep
 from measurements import crud
 from measurements.analyze import AnalyzeResult, GeminiUnavailable, RecognitionFailed, analyze_image
-from measurements.models import Measurement, MeasurementCreate, MeasurementRead, MeasurementUpdate
+from measurements.models import (
+    Measurement,
+    MeasurementCreate,
+    MeasurementListResponse,
+    MeasurementRead,
+    MeasurementUpdate,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -26,13 +32,37 @@ async def create_measurement(
     return await crud.create_measurement(session, data, user_id)
 
 
-@router.get("", response_model=Sequence[MeasurementRead])
+@router.get("", response_model=MeasurementListResponse)
 async def list_measurements(
     session: SessionDep,
     user_id: CurrentUserId,
-    days: Annotated[int, Query(ge=1, le=365)] = 90,
-) -> Sequence[Measurement]:
-    return await crud.get_measurements(session, user_id, days)
+    date_from: Annotated[datetime | None, Query()] = None,
+    date_to: Annotated[datetime | None, Query()] = None,
+    limit: Annotated[int, Query(ge=1, le=500)] = 100,
+    offset: Annotated[int, Query(ge=0)] = 0,
+) -> MeasurementListResponse:
+    """List the current user's measurements, newest first, as a paged envelope.
+
+    `date_from` is inclusive, `date_to` is exclusive. Both are optional and
+    independent; omitting both returns the user's full history, paged. Values
+    are timezone-aware and compared directly against the stored `recorded_at`
+    moment — the server does not derive dates from timestamps or apply any
+    timezone conversion.
+    """
+    if date_from is not None and date_to is not None and date_from >= date_to:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="date_from must be earlier than date_to",
+        )
+    items, total = await crud.get_measurements(
+        session,
+        user_id,
+        date_from=date_from,
+        date_to=date_to,
+        limit=limit,
+        offset=offset,
+    )
+    return MeasurementListResponse(items=items, total=total, limit=limit, offset=offset)
 
 
 @router.get("/{measurement_id}", response_model=MeasurementRead)

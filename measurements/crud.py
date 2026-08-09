@@ -1,7 +1,8 @@
 from collections.abc import Sequence
-from datetime import UTC, datetime, timedelta
+from datetime import datetime
 from uuid import UUID
 
+from sqlalchemy import func
 from sqlmodel import col, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
@@ -25,21 +26,39 @@ async def create_measurement(
 async def get_measurements(
     session: AsyncSession,
     user_id: UUID,
-    days: int = 90,
-) -> Sequence[Measurement]:
-    """Return a user's measurements from the last N days, newest first."""
+    *,
+    date_from: datetime | None = None,
+    date_to: datetime | None = None,
+    limit: int = 100,
+    offset: int = 0,
+) -> tuple[Sequence[Measurement], int]:
+    """Return a page of a user's measurements, newest first, plus the total count.
+
+    `date_from` is inclusive, `date_to` is exclusive. Both are optional and
+    independent; omitting both returns the user's full history. Values are
+    compared as-received against `recorded_at` with no server-side timezone
+    conversion. `total` reflects the filter only, before `limit`/`offset` are
+    applied.
+    """
     # TODO: extract user-scoping when a 3rd query needs it
-    cutoff = datetime.now(UTC) - timedelta(days=days)
+    filters = [Measurement.user_id == user_id]
+    if date_from is not None:
+        filters.append(col(Measurement.recorded_at) >= date_from)
+    if date_to is not None:
+        filters.append(col(Measurement.recorded_at) < date_to)
+
+    count_statement = select(func.count()).select_from(Measurement).where(*filters)
+    total = (await session.exec(count_statement)).one()
+
     statement = (
         select(Measurement)
-        .where(
-            Measurement.user_id == user_id,
-            col(Measurement.recorded_at) >= cutoff,
-        )
+        .where(*filters)
         .order_by(col(Measurement.recorded_at).desc())
+        .limit(limit)
+        .offset(offset)
     )
     result = await session.exec(statement)
-    return result.all()
+    return result.all(), total
 
 
 async def get_measurement(
