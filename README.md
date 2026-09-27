@@ -34,10 +34,7 @@ uv run alembic upgrade head
 # 4. Run the app
 uv run fastapi dev main.py
 
-# 5. Create the test database (tests do not create it)
-docker exec bptracker-fa-db createdb -U bp bp_tracker_test
-
-# 6. Run tests (uses a separate <POSTGRES_DB>_test database)
+# 5. Run tests (starts the database container if not running, uses a separate <POSTGRES_DB>_test database)
 uv run pytest
 ```
 

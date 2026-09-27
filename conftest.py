@@ -1,7 +1,9 @@
 # conftest.py
 import asyncio
 import os
+import subprocess
 import sys
+from pathlib import Path
 
 os.environ["EMAIL_OUTBOX_WORKER_ENABLED"] = "False"
 os.environ["CLEANUP_WORKER_ENABLED"] = "False"
@@ -34,8 +36,11 @@ os.environ["ALLOWED_EMAILS"] = ",".join(
 from collections.abc import AsyncGenerator
 from uuid import UUID
 
+import psycopg
+import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
+from psycopg.errors import DuplicateDatabase
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlmodel import SQLModel
 from sqlmodel.ext.asyncio.session import AsyncSession
@@ -73,6 +78,64 @@ test_engine = create_async_engine(_test_url)
 test_session_factory = async_sessionmaker(
     bind=test_engine, class_=AsyncSession, expire_on_commit=False
 )
+
+
+def _run_docker_command(args: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
+    cmd_str = " ".join(args)
+    try:
+        return subprocess.run(
+            args,
+            cwd=cwd,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except FileNotFoundError as exc:
+        raise RuntimeError(f"Command '{args[0]}' not found while executing: '{cmd_str}'") from exc
+    except subprocess.CalledProcessError as exc:
+        err = exc.stderr.strip() if exc.stderr else exc.stdout.strip()
+        msg = f"Command '{cmd_str}' failed with exit code {exc.returncode}: {err}"
+        raise RuntimeError(msg) from exc
+
+
+@pytest.fixture(scope="session", autouse=True)
+def manage_database():
+    started_by_session = False
+    repo_root = Path(__file__).parent.resolve()
+
+    if not os.environ.get("CI"):
+        ps_result = _run_docker_command(
+            ["docker", "compose", "ps", "--status", "running", "-q", "db"],
+            cwd=repo_root,
+        )
+        if not ps_result.stdout.strip():
+            _run_docker_command(
+                ["docker", "compose", "up", "-d", "--wait", "db"],
+                cwd=repo_root,
+            )
+            started_by_session = True
+
+    try:
+        with psycopg.connect(
+            host=_settings.postgres_host,
+            port=_settings.postgres_port,
+            user=_settings.postgres_user,
+            password=_settings.postgres_password,
+            dbname=_settings.postgres_db,
+            autocommit=True,
+        ) as conn:
+            conn.execute(f'CREATE DATABASE "{_test_db_name}"')
+    except DuplicateDatabase:
+        pass
+
+    try:
+        yield
+    finally:
+        if started_by_session:
+            _run_docker_command(
+                ["docker", "compose", "stop", "db"],
+                cwd=repo_root,
+            )
 
 
 @pytest_asyncio.fixture

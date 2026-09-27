@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main, dev ]
   pull_request:
-    branches: [ main ]
+    branches: [ main, dev ]
 
 jobs:
   ci:
@@ -63,25 +63,6 @@ jobs:
 
       - name: Check code formatting and linting
         run: uv run ruff check .
-
-      - name: Create test database
-        run: |
-          uv run python -c "
-          import os, psycopg
-          user = os.environ['POSTGRES_USER']
-          password = os.environ['POSTGRES_PASSWORD']
-          host = os.environ['POSTGRES_HOST']
-          port = os.environ['POSTGRES_PORT']
-          db = os.environ['POSTGRES_DB']
-          test_db = f'{db}_test'
-          dsn = f'postgresql://{user}:{password}@{host}:{port}/{db}'
-          with psycopg.connect(dsn, autocommit=True) as conn:
-              with conn.cursor() as cur:
-                  try:
-                      cur.execute(f'CREATE DATABASE \"{test_db}\"')
-                  except psycopg.errors.DuplicateDatabase:
-                      pass
-          "
 
       - name: Run test suite
         run: uv run pytest
