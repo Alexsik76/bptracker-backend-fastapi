@@ -77,7 +77,7 @@ async def test_record_with_explicit_taken_at_stores_it_unaltered(client, config_
     assert response.status_code == 201
     body = response.json()
 
-    # Backend does not interpret/adjust the client-supplied moment (docs/conventions.md).
+    # The client owns timezone normalization; the server stores the moment as received.
     assert datetime.fromisoformat(body["taken_at"]) == datetime.fromisoformat(explicit_taken_at)
 
 
@@ -219,4 +219,3 @@ async def test_delete_another_users_intake_report_returns_404(
     client_a = client_factory(user_a)
     check = await client_a.get(f"/reminders/intake-reports/{rid}")
     assert check.status_code == 200
-

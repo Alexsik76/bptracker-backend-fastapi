@@ -3,6 +3,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, status
 
+from auth.deps import CurrentUserId
 from db import SessionDep
 from prescriptions import crud
 from prescriptions.models import (
@@ -11,7 +12,6 @@ from prescriptions.models import (
     MedicationItemRead,
     MedicationItemUpdate,
 )
-from prescriptions.router.deps import CurrentUserId
 
 # Nested under /prescriptions/{prescription_id}/items — a medication item
 # has no independent existence outside its prescription.

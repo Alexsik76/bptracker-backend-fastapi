@@ -2,7 +2,7 @@ import base64
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
-from sqlmodel import select
+from sqlmodel import delete, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from email_infra.models import EmailOutbox, EmailStatus
@@ -108,3 +108,19 @@ async def mark_failed(
 
     session.add(item)
     await session.commit()
+
+
+async def purge_sent_emails(
+    session: AsyncSession,
+    *,
+    now: datetime | None = None,
+) -> int:
+    """Delete SENT emails older than 30 days. Returns the count of deleted rows. Does not commit."""
+    if now is None:
+        now = datetime.now(UTC)
+    statement = delete(EmailOutbox).where(
+        EmailOutbox.status == EmailStatus.SENT,
+        EmailOutbox.created_at < now - timedelta(days=30),
+    )
+    result = await session.exec(statement)
+    return result.rowcount

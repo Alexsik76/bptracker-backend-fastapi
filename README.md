@@ -34,7 +34,10 @@ uv run alembic upgrade head
 # 4. Run the app
 uv run fastapi dev main.py
 
-# 5. Run tests (uses a separate <POSTGRES_DB>_test database)
+# 5. Create the test database (tests do not create it)
+docker exec bptracker-fa-db createdb -U bp bp_tracker_test
+
+# 6. Run tests (uses a separate <POSTGRES_DB>_test database)
 uv run pytest
 ```
 
@@ -48,11 +51,8 @@ uv run pytest
   plus photo recognition via Gemini API (`POST /measurements/analyze`).
 - **prescriptions** — a prescription (doctor, date, active flag) with its
   medication items (dose, frequency, time-of-day slots, course).
-- **reminders** — per-user reminder configuration (slot times) and an
-  append-only log of confirmed medication intakes.
+- **reminders** — per-user reminder configuration (slot times) and a log of  confirmed medication intakes, one record 
+  per user, slot and date.
 - **export** — CSV and print-ready PDF export of measurement history (with optional date range), delivered via email.
 - **email_infra** — SMTP delivery and async email outbox with retries.
-- **cleanup** — background worker for expired magic links, challenges, and sessions.
-
-See [README_DEV.md](README_DEV.md) for design rationale, technical debt, and the
-API contracts consumed by the frontend/native client.
+- **cleanup** — background worker for expired magic links, challenges, sessions and old sent emails.

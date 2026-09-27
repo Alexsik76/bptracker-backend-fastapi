@@ -2,6 +2,7 @@
 from prescriptions.crud.medication_item import (
     create_medication_item,
     delete_medication_item,
+    get_active_medication_items,
     get_medication_item,
     get_medication_items,
     update_medication_item,
@@ -17,6 +18,7 @@ from prescriptions.crud.prescription import (
 __all__ = [
     "create_medication_item",
     "delete_medication_item",
+    "get_active_medication_items",
     "get_medication_item",
     "get_medication_items",
     "update_medication_item",

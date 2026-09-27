@@ -1,14 +1,13 @@
 import asyncio
 import logging
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 
 from sqlalchemy.ext.asyncio import async_sessionmaker
-from sqlmodel import delete
 
-from auth.models import MagicLink, Session
-from auth.webauthn.models import WebAuthnChallenge
+from auth import crud as auth_crud
+from auth.webauthn import crud as webauthn_crud
 from config import Settings
-from email_infra.models import EmailOutbox, EmailStatus
+from email_infra import crud as email_infra_crud
 
 logger = logging.getLogger(__name__)
 
@@ -24,32 +23,10 @@ async def run_cleanup_worker(
             async with session_factory() as session:
                 now = datetime.now(UTC)
 
-                # 1. magic_links where expires_at < now(UTC)
-                magic_links_stmt = delete(MagicLink).where(MagicLink.expires_at < now)
-                magic_links_res = await session.exec(magic_links_stmt)
-                deleted_magic_links = magic_links_res.rowcount
-
-                # 2. webauthn_challenges where expires_at < now(UTC)
-                challenges_stmt = delete(WebAuthnChallenge).where(
-                    WebAuthnChallenge.expires_at < now
-                )
-                challenges_res = await session.exec(challenges_stmt)
-                deleted_challenges = challenges_res.rowcount
-
-                # 3. sessions where expires_at < now(UTC) - 30 days
-                # We keep recently expired session rows for a grace period so that refresh-token
-                # reuse detection still recognises tokens it has retired.
-                sessions_stmt = delete(Session).where(Session.expires_at < now - timedelta(days=30))
-                sessions_res = await session.exec(sessions_stmt)
-                deleted_sessions = sessions_res.rowcount
-
-                # 4. email_outbox where status = SENT and created_at < now(UTC) - 30 days
-                outbox_stmt = delete(EmailOutbox).where(
-                    EmailOutbox.status == EmailStatus.SENT,
-                    EmailOutbox.created_at < now - timedelta(days=30),
-                )
-                outbox_res = await session.exec(outbox_stmt)
-                deleted_outbox = outbox_res.rowcount
+                deleted_magic_links = await auth_crud.purge_expired_magic_links(session, now=now)
+                deleted_challenges = await webauthn_crud.purge_expired_challenges(session, now=now)
+                deleted_sessions = await auth_crud.purge_expired_sessions(session, now=now)
+                deleted_outbox = await email_infra_crud.purge_sent_emails(session, now=now)
 
                 await session.commit()
 

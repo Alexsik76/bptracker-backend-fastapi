@@ -10,6 +10,7 @@ from prescriptions.models import (
     MedicationItem,
     MedicationItemCreate,
     MedicationItemUpdate,
+    Prescription,
 )
 
 # Ownership is checked via the parent prescription (medication_items has no user_id).
@@ -33,6 +34,20 @@ async def create_medication_item(
     await session.commit()
     await session.refresh(item)
     return item
+
+
+async def get_active_medication_items(
+    session: AsyncSession,
+    user_id: UUID,
+) -> Sequence[MedicationItem]:
+    """Return all medication items of the user's active prescriptions."""
+    statement = (
+        select(MedicationItem)
+        .join(Prescription, Prescription.id == MedicationItem.prescription_id)
+        .where(Prescription.user_id == user_id, Prescription.is_active == True)  # noqa: E712
+    )
+    result = await session.exec(statement)
+    return result.all()
 
 
 async def get_medication_items(

@@ -6,10 +6,11 @@ import pytest
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from auth.models import User
 from config import get_settings
 from email_infra.models import EmailOutbox, EmailStatus
+from export.models import ExportState
 from measurements.models import Measurement
+from users.models import User
 
 
 @pytest.mark.asyncio
@@ -53,10 +54,11 @@ async def test_export_happy_path(
     assert data["message"] == "Export is queued"
     assert data["email"] == "happy@example.com"
 
-    # Check last_export_at was updated on the user
-    user = await session.get(User, user_id)
-    assert user.last_export_at is not None
-    assert abs((datetime.now(UTC) - user.last_export_at).total_seconds()) < 10
+    # Check last_export_at was updated on export_state
+    state = await session.get(ExportState, user_id)
+    assert state is not None
+    assert state.last_export_at is not None
+    assert abs((datetime.now(UTC) - state.last_export_at).total_seconds()) < 10
 
     # Query outbox
     statement = select(EmailOutbox).where(EmailOutbox.to == "happy@example.com")
@@ -323,7 +325,7 @@ def test_generate_measurements_pdf_with_data():
     import zoneinfo
     from uuid import uuid4
 
-    from export.service import generate_measurements_pdf
+    from export.formats import generate_measurements_pdf
 
     user_id = uuid4()
     tz = zoneinfo.ZoneInfo("UTC")
@@ -357,7 +359,7 @@ def test_generate_measurements_pdf_with_data():
 def test_generate_measurements_pdf_empty():
     import zoneinfo
 
-    from export.service import generate_measurements_pdf
+    from export.formats import generate_measurements_pdf
 
     tz = zoneinfo.ZoneInfo("Europe/Kyiv")
     pdf_bytes = generate_measurements_pdf(

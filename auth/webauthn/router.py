@@ -6,21 +6,22 @@ from fastapi import APIRouter, Header, HTTPException, Response, status
 
 from auth import service as auth_service
 from auth.deps import CurrentUserId
-from auth.models import TokenResponse, User
+from auth.models import TokenResponse
 from auth.webauthn import service
 from auth.webauthn.crud import delete_credential, list_credentials_by_user
 from auth.webauthn.models import WebAuthnCredential, WebAuthnCredentialRead
 from config import get_settings
 from db import SessionDep
+from users import crud as users_crud
 
 router = APIRouter(prefix="/auth/webauthn", tags=["auth"])
 logger = logging.getLogger(__name__)
-settings = get_settings()
 
 
 @router.post("/register/options", status_code=status.HTTP_200_OK)
 async def register_options(session: SessionDep, user_id: CurrentUserId) -> Response:
-    user = await session.get(User, user_id)
+    settings = get_settings()
+    user = await users_crud.get_user(session, user_id)
     if not user:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
     options_json = await service.start_registration(
@@ -38,6 +39,7 @@ async def register_options(session: SessionDep, user_id: CurrentUserId) -> Respo
 async def register_verify(
     session: SessionDep, user_id: CurrentUserId, body: dict
 ) -> WebAuthnCredential:
+    settings = get_settings()
     try:
         credential = await service.finish_registration(
             session,
@@ -55,6 +57,7 @@ async def register_verify(
 
 @router.post("/authenticate/options", status_code=status.HTTP_200_OK)
 async def authenticate_options(session: SessionDep) -> Response:
+    settings = get_settings()
     options_json = await service.start_authentication(
         session,
         settings=settings,
@@ -68,6 +71,7 @@ async def authenticate_verify(
     body: dict,
     user_agent: Annotated[str | None, Header()] = None,
 ) -> TokenResponse:
+    settings = get_settings()
     try:
         authenticated_user_id = await service.finish_authentication(
             session,

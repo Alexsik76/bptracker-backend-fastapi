@@ -1,9 +1,9 @@
 from fastapi import APIRouter, HTTPException, status
 
+from auth.deps import CurrentUserId
 from db import SessionDep
 from reminders import crud
 from reminders.models import ReminderConfig, ReminderConfigCreate, ReminderConfigRead
-from reminders.router.deps import CurrentUserId
 
 router = APIRouter(prefix="/reminders/config")
 

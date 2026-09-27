@@ -43,7 +43,6 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 # Models must be imported so their tables register on SQLModel.metadata.
 from auth import models as _a  # noqa: F401
 from auth.deps import get_current_user_id
-from auth.models import User
 from auth.webauthn import models as _w  # noqa: F401
 from config import get_settings
 from db import get_session
@@ -52,6 +51,7 @@ from main import app
 from measurements import models as _m  # noqa: F401
 from prescriptions import models as _p  # noqa: F401
 from reminders import models as _r  # noqa: F401
+from users.models import User
 
 if sys.platform == "win32":
     # psycopg (async) needs the Selector loop, not the default Proactor loop.

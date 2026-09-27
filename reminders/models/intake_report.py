@@ -30,8 +30,9 @@ class IntakeReport(IntakeReportBase, table=True):
             Uuid, ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False
         )
     )
-    # When the medication was actually taken (the real-world event). Client-supplied
-    # per docs/conventions.md — the backend stores it as received, never interprets it.
+    # When the medication was actually taken (the real-world event). The client owns
+    # timezone normalization — it sends full timestamptz moments and supplies date/period
+    # itself; the server stores them as received and never derives or adjusts them.
     taken_at: datetime | None = Field(
         default=None,
         sa_column=Column(DateTime(timezone=True), nullable=False),
@@ -48,7 +49,8 @@ class IntakeReport(IntakeReportBase, table=True):
 
 class IntakeReportCreate(IntakeReportBase):
     # Optional: absent means "just taken now" (server sets taken_at = now()).
-    # Present means client is recording a moment other than now (see docs/conventions.md).
+    # Present means client is recording a moment other than now, supplying a full
+    # timestamptz moment stored as received.
     taken_at: datetime | None = None
 
 

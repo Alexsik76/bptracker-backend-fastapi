@@ -3,10 +3,10 @@ from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, status
 
+from auth.deps import CurrentUserId
 from db import SessionDep
 from reminders import crud
 from reminders.models import IntakeReport, IntakeReportCreate, IntakeReportRead
-from reminders.router.deps import CurrentUserId
 
 router = APIRouter(prefix="/reminders/intake-reports")
 
@@ -54,4 +54,3 @@ async def delete_intake_report(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Intake report not found"
         )
-

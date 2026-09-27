@@ -16,36 +16,20 @@ def lowercase_email(v: str) -> str:
 NormalizedEmail = Annotated[EmailStr, AfterValidator(lowercase_email)]
 
 
-class UserBase(SQLModel):
-    email: EmailStr = Field(index=True, sa_column_kwargs={"unique": True})
+class MagicLinkRequest(SQLModel):
+    email: NormalizedEmail
 
 
-class User(UserBase, table=True):
-    __tablename__: ClassVar[str] = "users"
-
-    id: UUID | None = Field(
-        default=None,
-        sa_column=Column(Uuid, primary_key=True, server_default=text("uuidv7()")),
-    )
-    display_name: str | None = Field(
-        default=None,
-        sa_column=Column(String(120), nullable=True),
-    )
-    created_at: datetime | None = Field(
-        default=None,
-        sa_column=Column(DateTime(timezone=True), server_default=func.now()),
-    )
-    last_export_at: datetime | None = Field(
-        default=None,
-        sa_column=Column(DateTime(timezone=True), nullable=True),
-    )
+class MagicLinkConfirm(SQLModel):
+    token: str
 
 
-class UserRead(SQLModel):
-    id: UUID
-    email: EmailStr
-    display_name: str | None = None
-    created_at: datetime
+class RefreshRequest(SQLModel):
+    refresh_token: str
+
+
+class LogoutRequest(SQLModel):
+    refresh_token: str
 
 
 class TokenResponse(SQLModel):
@@ -58,7 +42,11 @@ class TokenResponse(SQLModel):
 class MagicLink(SQLModel, table=True):
     __tablename__: ClassVar[str] = "magic_links"
 
-    email: str = Field(sa_column=Column(String, primary_key=True))
+    email: str = Field(
+        sa_column=Column(
+            String, ForeignKey("users.email", ondelete="CASCADE"), primary_key=True
+        )
+    )
     token_hash: str = Field(sa_column=Column(String, unique=True, index=True, nullable=False))
     created_at: datetime | None = Field(
         default=None,

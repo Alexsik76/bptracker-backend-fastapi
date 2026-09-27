@@ -1,38 +1,23 @@
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Header, HTTPException, status
-from sqlmodel import SQLModel
 
 from auth import crud, service
 from auth.deps import CurrentUserId
-from auth.models import NormalizedEmail, SessionRead, TokenResponse
-from auth.security import (
-    generate_magic_token,
-    hash_token,
+from auth.models import (
+    LogoutRequest,
+    MagicLinkConfirm,
+    MagicLinkRequest,
+    RefreshRequest,
+    SessionRead,
+    TokenResponse,
 )
-from config import get_settings
+from auth.security import hash_token
 from db import SessionDep
-from email_infra import OutboxEmailSender
+from users import crud as users_crud
 
 router = APIRouter(prefix="/auth", tags=["auth"])
-settings = get_settings()
-
-
-class MagicLinkRequest(SQLModel):
-    email: NormalizedEmail
-
-
-class MagicLinkConfirm(SQLModel):
-    token: str
-
-
-class RefreshRequest(SQLModel):
-    refresh_token: str
-
-
-class LogoutRequest(SQLModel):
-    refresh_token: str
 
 
 @router.post("/magic-link/request", status_code=status.HTTP_202_ACCEPTED)
@@ -40,44 +25,7 @@ async def request_magic_link(
     data: MagicLinkRequest,
     session: SessionDep,
 ) -> dict[str, str]:
-    if data.email in settings.allowed_emails:
-        await crud.get_or_create_user_by_email(session, data.email)
-        raw_token = generate_magic_token()
-        token_hash = hash_token(raw_token)
-        expires_at = datetime.now(UTC) + timedelta(minutes=settings.magic_link_ttl_minutes)
-
-        await crud.upsert_magic_link(
-            session=session,
-            email=data.email,
-            token_hash=token_hash,
-            expires_at=expires_at,
-        )
-
-        magic_link = f"{settings.magic_link_base_url}?token={raw_token}"
-
-        subject = "Your Magic Login Link"
-        text = (
-            f"Hello,\n\n"
-            f"Use the link below to log in to your account:\n"
-            f"{magic_link}\n\n"
-            f"This link will expire in {settings.magic_link_ttl_minutes} minutes."
-        )
-        html = (
-            f"<p>Hello,</p>"
-            f"<p>Use the link below to log in to your account:</p>"
-            f'<p><a href="{magic_link}">Log in to BP Tracker</a></p>'
-            f"<p>This link will expire in {settings.magic_link_ttl_minutes} minutes.</p>"
-        )
-
-        email_sender = OutboxEmailSender(session)
-        await email_sender.send(
-            to=data.email,
-            subject=subject,
-            text=text,
-            html=html,
-        )
-        await session.commit()
-
+    await service.request_magic_link(session, data.email)
     return {"detail": "If the address is registered, a link has been sent"}
 
 
@@ -103,7 +51,7 @@ async def confirm_magic_link(
             detail="Incorrect or expired token",
         )
 
-    user = await crud.get_user_by_email(session, link.email)
+    user = await users_crud.get_user_by_email(session, link.email)
     if not user:
         await crud.delete_magic_link(session, link)
         raise HTTPException(

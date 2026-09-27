@@ -61,6 +61,29 @@ async def get_measurements(
     return result.all(), total
 
 
+async def get_measurements_for_export(
+    session: AsyncSession,
+    user_id: UUID,
+    *,
+    date_from: datetime | None = None,
+    date_to: datetime | None = None,
+) -> Sequence[Measurement]:
+    """Return all measurements for a user in the given half-open range, ordered ascending."""
+    filters = [Measurement.user_id == user_id]
+    if date_from is not None:
+        filters.append(col(Measurement.recorded_at) >= date_from)
+    if date_to is not None:
+        filters.append(col(Measurement.recorded_at) < date_to)
+
+    statement = (
+        select(Measurement)
+        .where(*filters)
+        .order_by(col(Measurement.recorded_at).asc())
+    )
+    result = await session.exec(statement)
+    return result.all()
+
+
 async def get_measurement(
     session: AsyncSession,
     measurement_id: UUID,

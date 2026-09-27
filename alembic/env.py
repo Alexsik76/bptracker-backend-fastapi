@@ -14,9 +14,11 @@ from auth import models as _auth_models  # noqa: F401
 from auth.webauthn import models as _webauthn_models  # noqa: F401
 from config import get_settings
 from email_infra import models as _email_models  # noqa: F401
+from export import models as _export_models  # noqa: F401
 from measurements import models as _measurements_models  # noqa: F401
 from prescriptions import models as _prescriptions_models  # noqa: F401
 from reminders import models as _reminders_models  # noqa: F401
+from users import models as _users_models  # noqa: F401
 
 config = context.config
 

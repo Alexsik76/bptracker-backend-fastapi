@@ -4,9 +4,10 @@ import pytest
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from auth.models import MagicLink, User
+from auth.models import MagicLink
 from auth.security import hash_token
 from email_infra.models import EmailOutbox
+from users.models import User
 
 
 @pytest.mark.asyncio

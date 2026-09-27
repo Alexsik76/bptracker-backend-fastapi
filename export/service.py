@@ -1,23 +1,15 @@
-import csv
-import io
 import zoneinfo
 from datetime import UTC, date, datetime, time, timedelta
-from pathlib import Path
 from uuid import UUID
 
-from fpdf import FPDF
-from fpdf.fonts import FontFace
-from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from auth.models import User
 from config import Settings
 from email_infra import EmailAttachment, OutboxEmailSender
-from measurements.models import Measurement
-
-FONTS_DIR = Path(__file__).parent / "fonts"
-DEJAVU_SANS = FONTS_DIR / "DejaVuSans.ttf"
-DEJAVU_SANS_BOLD = FONTS_DIR / "DejaVuSans-Bold.ttf"
+from export import crud as export_crud
+from export.formats import generate_measurements_csv, generate_measurements_pdf
+from measurements import crud as measurements_crud
+from users import crud as users_crud
 
 
 class UserNotFound(Exception):
@@ -26,108 +18,6 @@ class UserNotFound(Exception):
 
 class ExportCooldownActive(Exception):
     pass
-
-
-class BPReportPDF(FPDF):
-    def __init__(self, generated_at_str: str) -> None:
-        super().__init__(orientation="P", unit="mm", format="A4")
-        self.generated_at_str = generated_at_str
-        self.add_font("DejaVu", "", str(DEJAVU_SANS))
-        self.add_font("DejaVu", "B", str(DEJAVU_SANS_BOLD))
-        self.alias_nb_pages()
-
-    def footer(self) -> None:
-        self.set_y(-15)
-        self.set_font("DejaVu", "", 9)
-        self.set_text_color(100, 100, 100)
-        left_text = f"Сформовано: {self.generated_at_str}"
-        right_text = f"Сторінка {self.page_no()} з {{nb}}"
-        self.cell(0, 10, left_text, align="L")
-        self.set_x(self.l_margin)
-        self.cell(0, 10, right_text, align="R")
-
-
-def generate_measurements_pdf(
-    measurements: list[Measurement],
-    tz: zoneinfo.ZoneInfo,
-    *,
-    patient_label: str,
-    generated_at: datetime,
-) -> bytes:
-    gen_at_local = generated_at.astimezone(tz)
-    gen_at_str = gen_at_local.strftime("%d.%m.%Y %H:%M")
-
-    pdf = BPReportPDF(gen_at_str)
-    pdf.add_page()
-
-    # Title
-    pdf.set_font("DejaVu", "B", 16)
-    pdf.cell(0, 10, "Журнал артеріального тиску", new_x="LMARGIN", new_y="NEXT")
-
-    # Subtitles
-    pdf.set_font("DejaVu", "", 11)
-    pdf.cell(0, 6, f"Пацієнт: {patient_label}", new_x="LMARGIN", new_y="NEXT")
-
-    if measurements:
-        start_date = measurements[0].recorded_at.astimezone(tz).strftime("%d.%m.%Y")
-        end_date = measurements[-1].recorded_at.astimezone(tz).strftime("%d.%m.%Y")
-        period_str = f"Період: {start_date} — {end_date}"
-    else:
-        period_str = "Період: —"
-
-    pdf.cell(0, 6, period_str, new_x="LMARGIN", new_y="NEXT")
-    pdf.ln(4)
-
-    # Table headers and data
-    headers = ["Дата", "Час", "САТ, мм рт. ст.", "ДАТ, мм рт. ст.", "Пульс, уд/хв"]
-    headings_style = FontFace(
-        family="DejaVu",
-        emphasis="B",
-        size_pt=10,
-        fill_color=(220, 220, 220),
-    )
-
-    with pdf.table(
-        headings_style=headings_style,
-        col_widths=(25, 20, 40, 40, 35),
-        text_align=("CENTER", "CENTER", "CENTER", "CENTER", "CENTER"),
-        line_height=7,
-        cell_fill_color=(245, 245, 245),
-        cell_fill_mode="ROWS",
-    ) as table:
-        header_row = table.row()
-        for h in headers:
-            header_row.cell(h)
-
-        pdf.set_font("DejaVu", "", 10)
-        for m in measurements:
-            local_dt = m.recorded_at.astimezone(tz)
-            date_str = local_dt.strftime("%d.%m.%Y")
-            time_str = local_dt.strftime("%H:%M")
-            r = table.row()
-            r.cell(date_str)
-            r.cell(time_str)
-            r.cell(str(m.sys))
-            r.cell(str(m.dia))
-            r.cell(str(m.pulse))
-
-    return bytes(pdf.output())
-
-
-def generate_measurements_csv(measurements: list[Measurement], tz: zoneinfo.ZoneInfo) -> bytes:
-    output = io.StringIO()
-    writer = csv.writer(output, lineterminator="\n")
-    writer.writerow(["timestamp", "systolic", "diastolic", "pulse"])
-
-    for m in measurements:
-        # Convert the timestamp to the target local timezone supplied by the client.
-        # This renders the file server-side using the request-time timezone, ensuring
-        # the dates and times align with the client's current context.
-        local_dt = m.recorded_at.astimezone(tz)
-        timestamp_str = local_dt.strftime("%Y-%m-%d %H:%M:%S")
-        writer.writerow([timestamp_str, m.sys, m.dia, m.pulse])
-
-    return output.getvalue().encode("utf-8")
 
 
 async def export_measurements_to_csv(
@@ -141,43 +31,53 @@ async def export_measurements_to_csv(
 ) -> str:
     """Orchestrates the export process:
 
-    1. Fetches the user (with with_for_update() to prevent race conditions).
-    2. Performs cooldown validation.
+    1. Fetches the user (plain read, no lock).
+    2. Locks and checks cooldown via export_state (locks user if no state exists).
     3. Fetches all measurements for the user (filtered by date range if provided).
     4. Generates the CSV and PDF bytes formatted to the target timezone.
     5. Queues the email using OutboxEmailSender in the same transaction.
-    6. Stamping user.last_export_at.
+    6. Stamps export_state with the current timestamp.
     7. Commits the transaction atomically.
     """
-    # Fetch user with write lock to prevent concurrent export cooldown bypasses
-    statement = select(User).where(User.id == user_id).with_for_update()
-    result = await session.exec(statement)
-    user = result.first()
+    user = await users_crud.get_user(session, user_id)
     if not user:
         raise UserNotFound()
 
+    export_state = await export_crud.lock_export_state(session, user_id)
+    if export_state is None:
+        # When no export_state exists yet, lock the user row to serialize concurrent first exports
+        await users_crud.lock_user(session, user_id)
+        export_state = await export_crud.lock_export_state(session, user_id)
+
     now_utc = datetime.now(UTC)
-    if user.last_export_at is not None:
-        cooldown_limit = user.last_export_at + timedelta(minutes=settings.export_cooldown_minutes)
+    if export_state is not None and export_state.last_export_at is not None:
+        cooldown_limit = export_state.last_export_at + timedelta(
+            minutes=settings.export_cooldown_minutes
+        )
         if now_utc < cooldown_limit:
             raise ExportCooldownActive()
 
     tz_info = zoneinfo.ZoneInfo(tz)
 
-    # Fetch measurements ordered ascending, optionally filtered by date range
-    m_statement = select(Measurement).where(Measurement.user_id == user_id)
+    date_from_utc = (
+        datetime.combine(date_from, time.min, tzinfo=tz_info).astimezone(UTC)
+        if date_from is not None
+        else None
+    )
+    date_to_utc = (
+        datetime.combine(date_to + timedelta(days=1), time.min, tzinfo=tz_info).astimezone(UTC)
+        if date_to is not None
+        else None
+    )
 
-    if date_from is not None:
-        start_local = datetime.combine(date_from, time.min, tzinfo=tz_info)
-        m_statement = m_statement.where(Measurement.recorded_at >= start_local.astimezone(UTC))
-
-    if date_to is not None:
-        end_local = datetime.combine(date_to + timedelta(days=1), time.min, tzinfo=tz_info)
-        m_statement = m_statement.where(Measurement.recorded_at < end_local.astimezone(UTC))
-
-    m_statement = m_statement.order_by(Measurement.recorded_at.asc())
-    m_result = await session.exec(m_statement)
-    measurements = list(m_result.all())
+    measurements = list(
+        await measurements_crud.get_measurements_for_export(
+            session,
+            user_id,
+            date_from=date_from_utc,
+            date_to=date_to_utc,
+        )
+    )
 
     # Build CSV and PDF attachments
     csv_bytes = generate_measurements_csv(measurements, tz_info)
@@ -225,11 +125,10 @@ async def export_measurements_to_csv(
         attachments=[csv_attachment, pdf_attachment],
     )
 
-    # Update last_export_at timestamp
-    user.last_export_at = now_utc
-    session.add(user)
+    # Update export state timestamp
+    await export_crud.stamp_export(session, user_id, now_utc)
 
-    # Atomic commit of both outbox insert and user timestamp update
+    # Atomic commit of both outbox insert and export state update
     await session.commit()
 
     return user.email

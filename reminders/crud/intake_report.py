@@ -5,7 +5,8 @@ from uuid import UUID
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from prescriptions.models import MedicationItem, Prescription, WhenSlot
+from prescriptions.crud import get_active_medication_items
+from prescriptions.models import WhenSlot
 from reminders.models import IntakeReport, IntakeReportCreate
 
 
@@ -20,13 +21,7 @@ async def _build_snapshot(
     active prescriptions, and the report must stay readable after any of
     them changes or is deleted.
     """
-    statement = (
-        select(MedicationItem)
-        .join(Prescription, Prescription.id == MedicationItem.prescription_id)
-        .where(Prescription.user_id == user_id, Prescription.is_active == True)  # noqa: E712
-    )
-    result = await session.exec(statement)
-    items = result.all()
+    items = await get_active_medication_items(session, user_id)
     return [
         {"medicine": item.medicine, "amount": item.dose_amount, "condition": item.condition}
         for item in items
@@ -41,9 +36,10 @@ async def record_intake_report(
 ) -> IntakeReport:
     """Upsert an intake for (user_id, period, date) — create or overwrite, never conflict.
 
-    taken_at: the client-supplied moment if given, else now() (see docs/conventions.md
-    — absent taken_at means "just taken", present means the client is recording a
-    moment other than now).
+    taken_at: the client-supplied moment if given, else now(). The client owns
+    timezone normalization — it sends full timestamptz moments and supplies
+    date/period itself; the server stores them as received and never derives or adjusts them
+    (absent taken_at means "just taken", present means the client records a moment other than now).
     recorded_at: always now() on every write, whether this is a create or an edit.
     snapshot: always rebuilt from the user's current active prescriptions, even on
     edit, since "what's active" may have changed since the row was first written.
@@ -119,4 +115,3 @@ async def delete_intake_report(
     await session.delete(report)
     await session.commit()
     return True
-

@@ -113,3 +113,16 @@ async def consume_challenge(
         return row
     await session.rollback()
     return None
+
+
+async def purge_expired_challenges(
+    session: AsyncSession,
+    *,
+    now: datetime | None = None,
+) -> int:
+    """Delete expired webauthn challenges. Does not commit."""
+    if now is None:
+        now = datetime.now(UTC)
+    statement = delete(WebAuthnChallenge).where(WebAuthnChallenge.expires_at < now)
+    result = await session.exec(statement)
+    return result.rowcount

@@ -6,9 +6,17 @@ from uuid import UUID
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
+from auth import crud
 from auth.models import Session
-from auth.security import create_access_token, generate_refresh_token, hash_token
+from auth.security import (
+    create_access_token,
+    generate_magic_token,
+    generate_refresh_token,
+    hash_token,
+)
 from config import get_settings
+from email_infra import OutboxEmailSender
+from users import crud as users_crud
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +40,47 @@ class TokenPair:
     expires_in: int
 
 
+async def request_magic_link(db_session: AsyncSession, email: str) -> None:
+    settings = get_settings()
+    if email in settings.allowed_emails:
+        await users_crud.get_or_create_user_by_email(db_session, email)
+        raw_token = generate_magic_token()
+        token_hash = hash_token(raw_token)
+        expires_at = datetime.now(UTC) + timedelta(minutes=settings.magic_link_ttl_minutes)
+
+        await crud.upsert_magic_link(
+            session=db_session,
+            email=email,
+            token_hash=token_hash,
+            expires_at=expires_at,
+        )
+
+        magic_link = f"{settings.magic_link_base_url}?token={raw_token}"
+
+        subject = "Your Magic Login Link"
+        text = (
+            f"Hello,\n\n"
+            f"Use the link below to log in to your account:\n"
+            f"{magic_link}\n\n"
+            f"This link will expire in {settings.magic_link_ttl_minutes} minutes."
+        )
+        html = (
+            f"<p>Hello,</p>"
+            f"<p>Use the link below to log in to your account:</p>"
+            f'<p><a href="{magic_link}">Log in to BP Tracker</a></p>'
+            f"<p>This link will expire in {settings.magic_link_ttl_minutes} minutes.</p>"
+        )
+
+        email_sender = OutboxEmailSender(db_session)
+        await email_sender.send(
+            to=email,
+            subject=subject,
+            text=text,
+            html=html,
+        )
+        await db_session.commit()
+
+
 async def issue_session(
     db_session: AsyncSession,
     *,
@@ -45,7 +94,7 @@ async def issue_session(
 
     truncated_ua = user_agent[:255] if user_agent else None
 
-    session_row = Session(
+    session_row = Session(\
         user_id=user_id,
         token_hash=token_hash,
         expires_at=expires_at,

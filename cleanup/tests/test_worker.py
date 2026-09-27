@@ -18,6 +18,8 @@ from email_infra.models import EmailOutbox, EmailStatus
 async def test_cleanup_worker_deletes_expired_rows(session: AsyncSession, make_user):
     now = datetime.now(UTC)
     user_id = await make_user("cleanup_test@example.com")
+    await make_user("expired_link@example.com")
+    await make_user("fresh_link@example.com")
 
     # 1. Magic Links
     # - Expired (expires_at < now)
@@ -109,28 +111,28 @@ async def test_cleanup_worker_deletes_expired_rows(session: AsyncSession, make_u
     await session.commit()
 
     # Configure session factory for worker
-    session_factory = async_sessionmaker(
-        bind=session.bind,
-        class_=AsyncSession,
-        expire_on_commit=False,
+    session_factory = async_sessionmaker(\
+        bind=session.bind,\
+        class_=AsyncSession,\
+        expire_on_commit=False,\
     )
 
-    settings = Settings(
-        cleanup_interval_minutes=60,
-        cleanup_worker_enabled=True,
+    settings = Settings(\
+        cleanup_interval_minutes=60,\
+        cleanup_worker_enabled=True,\
         # Required BaseSettings
-        postgres_user="test",
-        postgres_password="test",
-        postgres_db="test",
-        jwt_secret="test",
-        smtp_host="test",
-        smtp_username="test",
-        smtp_password="test",
-        smtp_from="test",
-        magic_link_base_url="test",
-        export_sheets_template_url="test",
-        webauthn_rp_id="test",
-        webauthn_origins=["test"],
+        postgres_user="test",\
+        postgres_password="test",\
+        postgres_db="test",\
+        jwt_secret="test",\
+        smtp_host="test",\
+        smtp_username="test",\
+        smtp_password="test",\
+        smtp_from="test",\
+        magic_link_base_url="test",\
+        export_sheets_template_url="test",\
+        webauthn_rp_id="test",\
+        webauthn_origins=["test"],\
     )
 
     # Run worker cycle once by mocking asyncio.sleep to raise CancelledError

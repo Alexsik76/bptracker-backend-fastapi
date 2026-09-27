@@ -1,26 +1,9 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
-from sqlmodel import select
+from sqlmodel import delete, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from auth.models import MagicLink, User
-
-
-async def get_or_create_user_by_email(session: AsyncSession, email: str) -> User:
-    """Return an existing user by email, or create and return one if none exists."""
-    user = await get_user_by_email(session, email)
-    if not user:
-        user = User(email=email)
-        session.add(user)
-        await session.flush()
-    return user
-
-
-async def get_user_by_email(session: AsyncSession, email: str) -> User | None:
-    """Return one user by email, or None if no such user exists."""
-    statement = select(User).where(User.email == email)
-    result = await session.exec(statement)
-    return result.first()
+from auth.models import MagicLink, Session
 
 
 async def upsert_magic_link(
@@ -50,3 +33,23 @@ async def get_magic_link_by_hash(session: AsyncSession, token_hash: str) -> Magi
 async def delete_magic_link(session: AsyncSession, link: MagicLink) -> None:
     await session.delete(link)
     await session.commit()
+
+
+async def purge_expired_magic_links(session: AsyncSession, *, now: datetime | None = None) -> int:
+    """Delete expired magic links. Does not commit."""
+    if now is None:
+        now = datetime.now(UTC)
+    statement = delete(MagicLink).where(MagicLink.expires_at < now)
+    result = await session.exec(statement)
+    return result.rowcount
+
+
+async def purge_expired_sessions(session: AsyncSession, *, now: datetime | None = None) -> int:
+    """Delete sessions expired more than 30 days ago. Does not commit."""
+    if now is None:
+        now = datetime.now(UTC)
+    # We keep recently expired session rows for a grace period so that refresh-token
+    # reuse detection still recognises tokens it has retired.
+    statement = delete(Session).where(Session.expires_at < now - timedelta(days=30))
+    result = await session.exec(statement)
+    return result.rowcount
