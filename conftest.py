@@ -3,7 +3,18 @@ import asyncio
 import os
 import subprocess
 import sys
+from collections.abc import AsyncGenerator
 from pathlib import Path
+from uuid import UUID
+
+import psycopg
+import pytest
+import pytest_asyncio
+from httpx import ASGITransport, AsyncClient
+from psycopg.errors import DuplicateDatabase
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlmodel import SQLModel
+from sqlmodel.ext.asyncio.session import AsyncSession
 
 os.environ["EMAIL_OUTBOX_WORKER_ENABLED"] = "False"
 os.environ["CLEANUP_WORKER_ENABLED"] = "False"
@@ -33,17 +44,6 @@ os.environ["ALLOWED_EMAILS"] = ",".join(
         "test_session@example.com",
     ]
 )
-from collections.abc import AsyncGenerator
-from uuid import UUID
-
-import psycopg
-import pytest
-import pytest_asyncio
-from httpx import ASGITransport, AsyncClient
-from psycopg.errors import DuplicateDatabase
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
-from sqlmodel import SQLModel
-from sqlmodel.ext.asyncio.session import AsyncSession
 
 # Models must be imported so their tables register on SQLModel.metadata.
 from auth import models as _a  # noqa: F401
@@ -67,6 +67,7 @@ if sys.platform == "win32":
     # hidden-id factory — which trips a bug in VS Code's Python extension test-tree
     # builder (it treats any item with `.callspec` as parametrized and assumes its
     # display name contains "[", crashing when pytest hides a single-value id).
+    # noinspection PyDeprecation
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 # A dedicated test database URL: same server, name + "_test".
@@ -124,6 +125,7 @@ def manage_database():
             dbname=_settings.postgres_db,
             autocommit=True,
         ) as conn:
+            # noinspection SqlNoDataSourceInspection
             conn.execute(f'CREATE DATABASE "{_test_db_name}"')
     except DuplicateDatabase:
         pass
@@ -147,6 +149,7 @@ async def make_user(session: AsyncSession):
         session.add(user)
         await session.commit()
         await session.refresh(user)
+        assert user.id is not None
         return user.id
 
     return _create
@@ -163,19 +166,19 @@ async def client_factory(session: AsyncSession):
     # two different users and prove they can't see each other's data.
     # All three domain routers depend on the same auth.deps.get_current_user_id,
     # so overriding it once covers all of them.
-    clients = []
+    clients: list[AsyncClient] = []
 
     def _make(user_id: UUID) -> AsyncClient:
         app.dependency_overrides[get_session] = lambda: session
         app.dependency_overrides[get_current_user_id] = lambda: user_id
-        c = AsyncClient(transport=ASGITransport(app=app), base_url="http://test")
-        clients.append(c)
-        return c
+        new_client = AsyncClient(transport=ASGITransport(app=app), base_url="http://test")
+        clients.append(new_client)
+        return new_client
 
     yield _make
 
-    for c in clients:
-        await c.aclose()
+    for active_client in clients:
+        await active_client.aclose()
     app.dependency_overrides.clear()
 
 
@@ -183,10 +186,12 @@ async def client_factory(session: AsyncSession):
 async def session() -> AsyncGenerator[AsyncSession]:
     # Fresh schema for each test: create all tables, then drop them after.
     async with test_engine.begin() as conn:
+        # noinspection PyTypeChecker
         await conn.run_sync(SQLModel.metadata.create_all)
     async with test_session_factory() as s:
         yield s
     async with test_engine.begin() as conn:
+        # noinspection PyTypeChecker
         await conn.run_sync(SQLModel.metadata.drop_all)
 
 
@@ -197,6 +202,6 @@ async def client(session: AsyncSession, test_user_id: UUID) -> AsyncGenerator[As
     app.dependency_overrides[get_session] = lambda: session
     app.dependency_overrides[get_current_user_id] = lambda: test_user_id
     transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as c:
-        yield c
+    async with AsyncClient(transport=transport, base_url="http://test") as test_client:
+        yield test_client
     app.dependency_overrides.clear()
