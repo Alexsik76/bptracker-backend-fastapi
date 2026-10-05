@@ -90,8 +90,11 @@ class Settings(BaseSettings):
 
     gemini_api_key: str
     gemini_model: str = "gemini-2.0-flash"
+    gemini_menu_model: str = "gemini-2.0-flash"
     gemini_timeout_seconds: int = 30
     analyze_max_file_bytes: int = 10 * 1024 * 1024
+
+    menu_history_days: int = 3
 
     export_cooldown_minutes: int = 10
     export_sheets_template_url: str
@@ -105,6 +108,8 @@ class Settings(BaseSettings):
     # ALLOWED_EMAILS gates account creation. Only emails in this list can request a magic link.
     allowed_emails: Annotated[list[str], NoDecode]
 
+    cors_origins: Annotated[list[str], NoDecode]
+
     @field_validator("webauthn_origins", mode="before")
     @classmethod
     def parse_webauthn_origins(cls, v: Any) -> Any:
@@ -114,6 +119,11 @@ class Settings(BaseSettings):
     @classmethod
     def parse_allowed_emails(cls, v: Any) -> Any:
         return _parse_csv(v, field_name="allowed_emails", lowercase=True)
+
+    @field_validator("cors_origins", mode="before")
+    @classmethod
+    def parse_cors_origins(cls, v: Any) -> Any:
+        return _parse_csv(v, field_name="cors_origins")
 
     @property
     def is_dev(self) -> bool:

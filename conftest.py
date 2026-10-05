@@ -19,6 +19,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 os.environ["EMAIL_OUTBOX_WORKER_ENABLED"] = "False"
 os.environ["CLEANUP_WORKER_ENABLED"] = "False"
 os.environ["GEMINI_API_KEY"] = "dummy-test-key-12345"
+os.environ["CORS_ORIGINS"] = "http://localhost:5173"
 os.environ["ALLOWED_EMAILS"] = ",".join(
     [
         "testuser@example.com",
