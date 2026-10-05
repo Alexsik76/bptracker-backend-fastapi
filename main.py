@@ -3,6 +3,7 @@ import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from auth.router import router as auth_router
 from auth.webauthn import router as webauthn_router
@@ -68,6 +69,15 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="BP Tracker API", lifespan=lifespan)
+
+settings = get_settings()
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.cors_origins,
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
+    allow_headers=["Authorization", "Content-Type"],
+    allow_credentials=False,
+)
 
 app.include_router(auth_router)
 app.include_router(webauthn_router)
