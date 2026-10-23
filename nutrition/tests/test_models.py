@@ -1,6 +1,7 @@
-from datetime import date
+from datetime import UTC, date, datetime
 from uuid import UUID
 
+import pydantic
 import pytest
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
@@ -10,7 +11,11 @@ from nutrition.models import (
     DishComponent,
     DishKind,
     MealSchedule,
+    MenuNote,
+    MenuNoteKind,
     NutritionProfile,
+    OffPlanEntry,
+    OffPlanEntryCreate,
     Product,
     ProductAvailability,
     ProductPreference,
@@ -113,3 +118,65 @@ async def test_dish_and_components_persistence(session: AsyncSession, test_user_
     assert len(comps) == 2
     names = {c.name for c in comps}
     assert names == {"Вівсяні пластівці", "Яблуко"}
+
+
+@pytest.mark.asyncio
+async def test_menu_note_persistence(session: AsyncSession, test_user_id: UUID):
+    today = date.today()
+    note = MenuNote(
+        user_id=test_user_id,
+        date=today,
+        kind=MenuNoteKind.INFO,
+        text="Чи можна замінити гречку на бурий рис?",
+        answer="Так, бурий рис має близький глікемічний індекс.",
+    )
+    session.add(note)
+    await session.commit()
+    await session.refresh(note)
+
+    assert note.id is not None
+    assert note.created_at is not None
+
+    stmt = select(MenuNote).where(MenuNote.user_id == test_user_id)
+    saved = (await session.exec(stmt)).first()
+    assert saved is not None
+    assert saved.kind == MenuNoteKind.INFO
+    assert saved.date == today
+    assert saved.text == "Чи можна замінити гречку на бурий рис?"
+    assert saved.answer == "Так, бурий рис має близький глікемічний індекс."
+
+
+@pytest.mark.asyncio
+async def test_off_plan_entry_persistence(session: AsyncSession, test_user_id: UUID):
+    today = date.today()
+    now_dt = datetime.now(UTC)
+    entry = OffPlanEntry(
+        user_id=test_user_id,
+        date=today,
+        at=now_dt,
+        text="Яблуко зелене 150г",
+        kcal_est=78,
+    )
+    session.add(entry)
+    await session.commit()
+    await session.refresh(entry)
+
+    assert entry.id is not None
+
+    stmt = select(OffPlanEntry).where(OffPlanEntry.user_id == test_user_id)
+    saved = (await session.exec(stmt)).first()
+    assert saved is not None
+    assert saved.date == today
+    assert saved.text == "Яблуко зелене 150г"
+    assert saved.kcal_est == 78
+    assert saved.at == now_dt
+
+
+def test_off_plan_entry_create_requires_date():
+    with pytest.raises(pydantic.ValidationError):
+        OffPlanEntryCreate(
+            at=datetime.now(UTC),
+            text="Яблуко зелене 150г",
+        )
+
+

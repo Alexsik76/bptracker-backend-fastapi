@@ -38,3 +38,8 @@ class MenuStatus(StrEnum):
 class GenerationScope(StrEnum):
     DAY = "day"
     SLOT = "slot"
+
+
+class MenuNoteKind(StrEnum):
+    INFO = "info"
+    CORRECTION = "correction"

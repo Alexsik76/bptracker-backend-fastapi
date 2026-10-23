@@ -13,6 +13,7 @@ from nutrition.models.enums import (
     DishKind,
     GenerationScope,
     MenuItemOrigin,
+    MenuNoteKind,
     MenuStatus,
     ProductAvailability,
     ProductPreference,
@@ -31,6 +32,16 @@ from nutrition.models.menu import (
     MenuItemUpdate,
     MenuRead,
     MenuUpdate,
+)
+from nutrition.models.notes_and_offplan import (
+    MenuNote,
+    MenuNoteBase,
+    MenuNoteCreate,
+    MenuNoteRead,
+    OffPlanEntry,
+    OffPlanEntryBase,
+    OffPlanEntryCreate,
+    OffPlanEntryRead,
 )
 from nutrition.models.product import (
     Product,
@@ -86,4 +97,13 @@ __all__ = [
     "MenuItemRead",
     "MenuItemUpdate",
     "GenerationLog",
+    "MenuNoteKind",
+    "MenuNoteBase",
+    "MenuNote",
+    "MenuNoteCreate",
+    "MenuNoteRead",
+    "OffPlanEntryBase",
+    "OffPlanEntry",
+    "OffPlanEntryCreate",
+    "OffPlanEntryRead",
 ]
