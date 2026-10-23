@@ -21,7 +21,8 @@ services:
       retries: 5
 
   api:
-    build: .
+    image: bptracker-backend-dev-api
+    pull_policy: never
     container_name: bptracker-fa-api-dev
     restart: unless-stopped
     depends_on:
