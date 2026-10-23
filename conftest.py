@@ -13,6 +13,7 @@ import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from psycopg.errors import DuplicateDatabase
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.pool import NullPool
 from sqlmodel import SQLModel
 from sqlmodel.ext.asyncio.session import AsyncSession
 
@@ -77,7 +78,7 @@ _settings = get_settings()
 _test_db_name = f"{_settings.postgres_db}_test"
 _test_url = _settings.database_url.set(database=_test_db_name)
 
-test_engine = create_async_engine(_test_url)
+test_engine = create_async_engine(_test_url, poolclass=NullPool)
 test_session_factory = async_sessionmaker(
     bind=test_engine, class_=AsyncSession, expire_on_commit=False
 )
