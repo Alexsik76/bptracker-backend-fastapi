@@ -19,8 +19,8 @@ from nutrition.models import (
 from nutrition.service.context import build_generation_context
 from nutrition.service.prompt import PROMPT_VERSION, build_generation_prompt
 from nutrition.service.schema import (
-    GEMINI_RESPONSE_SCHEMA,
     GenerationResponse,
+    build_gemini_response_schema,
     validate_generation_response,
 )
 
@@ -87,7 +87,9 @@ async def generate_menu(
             prompt=prompt,
             model=settings.gemini_menu_model,
             settings=settings,
-            response_schema=GEMINI_RESPONSE_SCHEMA,
+            response_schema=build_gemini_response_schema(
+                context.dishes_map.keys(), context.products_map.keys()
+            ),
         )
         raw_response_text = gemini_result.raw_text
         input_tokens = gemini_result.input_tokens

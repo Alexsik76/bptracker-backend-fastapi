@@ -1,3 +1,5 @@
+from collections.abc import Iterable
+from copy import deepcopy
 from typing import Any
 from uuid import UUID
 
@@ -91,6 +93,26 @@ GEMINI_RESPONSE_SCHEMA: dict[str, Any] = {
     },
     "required": ["rationale", "shopping_list", "items"],
 }
+
+
+def build_gemini_response_schema(
+    dish_ids: Iterable[UUID],
+    product_ids: Iterable[UUID],
+) -> dict[str, Any]:
+    schema = deepcopy(GEMINI_RESPONSE_SCHEMA)
+    item_props = schema["properties"]["items"]["items"]["properties"]
+
+    dish_enum = [str(id) for id in dish_ids]
+    if dish_enum:
+        item_props["dish_id"]["format"] = "enum"
+        item_props["dish_id"]["enum"] = dish_enum
+
+    product_enum = [str(id) for id in product_ids]
+    if product_enum:
+        item_props["product_id"]["format"] = "enum"
+        item_props["product_id"]["enum"] = product_enum
+
+    return schema
 
 
 def validate_generation_response(

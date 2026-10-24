@@ -16,8 +16,10 @@ from nutrition.models import (
 from nutrition.service.context import GenerationContext
 from nutrition.service.prompt import PROMPT_VERSION, build_generation_prompt
 from nutrition.service.schema import (
+    GEMINI_RESPONSE_SCHEMA,
     GeneratedMenuItem,
     GenerationResponse,
+    build_gemini_response_schema,
     validate_generation_response,
 )
 
@@ -217,3 +219,47 @@ def test_build_generation_prompt():
     assert "Видалений жовчний міхур" in prompt
     assert "0,5–1 кг на тиждень" in prompt
     assert "вечірній перекус" in prompt
+
+
+def test_build_gemini_response_schema_enums_and_immutability():
+    dish_id_1, dish_id_2 = uuid4(), uuid4()
+    product_id_1 = uuid4()
+
+    schema = build_gemini_response_schema([dish_id_1, dish_id_2], [product_id_1])
+    item_props = schema["properties"]["items"]["items"]["properties"]
+
+    assert item_props["dish_id"]["format"] == "enum"
+    assert item_props["dish_id"]["enum"] == [str(dish_id_1), str(dish_id_2)]
+    assert item_props["dish_id"]["nullable"] is True
+
+    assert item_props["product_id"]["format"] == "enum"
+    assert item_props["product_id"]["enum"] == [str(product_id_1)]
+    assert item_props["product_id"]["nullable"] is True
+
+    # GEMINI_RESPONSE_SCHEMA must not be mutated
+    base_props = GEMINI_RESPONSE_SCHEMA["properties"]["items"]["items"]["properties"]
+    assert "enum" not in base_props["dish_id"]
+    assert "format" not in base_props["dish_id"]
+    assert "enum" not in base_props["product_id"]
+    assert "format" not in base_props["product_id"]
+
+
+def test_build_gemini_response_schema_empty_lists():
+    dish_id = uuid4()
+
+    # Both empty
+    schema_empty = build_gemini_response_schema([], [])
+    empty_props = schema_empty["properties"]["items"]["items"]["properties"]
+    assert "enum" not in empty_props["dish_id"]
+    assert "format" not in empty_props["dish_id"]
+    assert "enum" not in empty_props["product_id"]
+    assert "format" not in empty_props["product_id"]
+
+    # Only product_ids empty
+    schema_dishes_only = build_gemini_response_schema([dish_id], [])
+    dishes_only_props = schema_dishes_only["properties"]["items"]["items"]["properties"]
+    assert dishes_only_props["dish_id"]["enum"] == [str(dish_id)]
+    assert dishes_only_props["dish_id"]["format"] == "enum"
+    assert "enum" not in dishes_only_props["product_id"]
+    assert "format" not in dishes_only_props["product_id"]
+
