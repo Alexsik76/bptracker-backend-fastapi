@@ -18,6 +18,7 @@ from nutrition.crud.menu import (
     update_menu,
     update_menu_item,
 )
+from nutrition.crud.notes import create_menu_note, get_menu_notes
 from nutrition.crud.product import (
     create_product,
     delete_product,
@@ -29,6 +30,8 @@ from nutrition.crud.product import (
 from nutrition.crud.profile import get_nutrition_profile, upsert_nutrition_profile
 
 __all__ = [
+    "create_menu_note",
+    "get_menu_notes",
     "get_nutrition_profile",
     "upsert_nutrition_profile",
     "create_product",

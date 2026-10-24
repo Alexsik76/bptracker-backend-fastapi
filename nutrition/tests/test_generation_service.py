@@ -211,7 +211,7 @@ def test_build_generation_prompt():
         history_menus=[],
     )
 
-    assert PROMPT_VERSION == "2026-10-23.2"
+    assert PROMPT_VERSION == "2026-10-24.1"
     prompt = build_generation_prompt(context)
     assert "2026-10-23" in prompt
     assert "Видалений жовчний міхур" in prompt
