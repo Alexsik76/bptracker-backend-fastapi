@@ -43,7 +43,9 @@ async def test_add_manual_item_with_dish(client: AsyncClient):
     # Verify menu GET returns list of meals for the day
     menu_resp = await client.get("/nutrition/menus/2026-10-23")
     assert menu_resp.status_code == 200
-    day_menus = menu_resp.json()
+    day_data = menu_resp.json()
+    assert day_data["date"] == "2026-10-23"
+    day_menus = day_data["menus"]
     assert len(day_menus) == 1
     meal = day_menus[0]
     assert meal["date"] == "2026-10-23"
@@ -243,7 +245,7 @@ async def test_meal_becomes_incomplete_when_dish_exhausted_or_deleted(client: As
     )
 
     # Both lunch and dinner are planned
-    menus = (await client.get("/nutrition/menus/2026-10-23")).json()
+    menus = (await client.get("/nutrition/menus/2026-10-23")).json()["menus"]
     assert all(m["status"] == "planned" for m in menus)
 
     # Eat lunch -> remaining becomes 300g
@@ -256,14 +258,14 @@ async def test_meal_becomes_incomplete_when_dish_exhausted_or_deleted(client: As
     # Verify:
     # 1. Lunch (eaten) remains eaten with 200g!
     # 2. Dinner (planned) now becomes incomplete!
-    menus = (await client.get("/nutrition/menus/2026-10-23")).json()
+    menus = (await client.get("/nutrition/menus/2026-10-23")).json()["menus"]
     menu_by_slot = {m["slot"]: m for m in menus}
     assert menu_by_slot["Обід"]["status"] == "eaten"
     assert menu_by_slot["Вечеря"]["status"] == "incomplete"
 
     # Deleting potato dish leaves Lunch eaten with title, Dinner incomplete
     await client.delete(f"/nutrition/dishes/{p_id}")
-    menus = (await client.get("/nutrition/menus/2026-10-23")).json()
+    menus = (await client.get("/nutrition/menus/2026-10-23")).json()["menus"]
     menu_by_slot = {m["slot"]: m for m in menus}
     assert menu_by_slot["Обід"]["status"] == "eaten"
     assert menu_by_slot["Обід"]["items"][0]["dish_id"] is None

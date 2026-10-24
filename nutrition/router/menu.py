@@ -9,6 +9,7 @@ from config import Settings, get_settings
 from db import SessionDep
 from nutrition import crud
 from nutrition.models import (
+    DayMenuRead,
     GenerationRequest,
     GenerationResultRead,
     MenuItemCreate,
@@ -18,6 +19,7 @@ from nutrition.models import (
     MenuNoteRead,
     MenuRead,
     MenuUpdate,
+    OffPlanEntryRead,
 )
 from nutrition.service.generator import (
     ProfileNotFoundError,
@@ -31,19 +33,26 @@ menus_router = APIRouter(prefix="/menus")
 items_router = APIRouter(prefix="/menu-items")
 
 
-@menus_router.get("/{menu_date}", response_model=list[MenuRead])
+@menus_router.get("/{menu_date}", response_model=DayMenuRead)
 async def get_day_menus(
     menu_date: date,
     session: SessionDep,
     user_id: CurrentUserId,
-) -> list[MenuRead]:
+) -> DayMenuRead:
     menus = await crud.get_day_menus(session, user_id, menu_date)
-    if not menus:
+    notes = await crud.get_menu_notes(session, user_id, menu_date)
+    off_plan = await crud.get_off_plan_entries(session, user_id, menu_date)
+    if not menus and not notes and not off_plan:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Menu not found",
         )
-    return menus
+    return DayMenuRead(
+        date=menu_date,
+        menus=menus,
+        notes=[MenuNoteRead.model_validate(n) for n in notes],
+        off_plan=[OffPlanEntryRead.model_validate(e) for e in off_plan],
+    )
 
 
 @menus_router.patch("/{menu_id}", response_model=MenuRead)

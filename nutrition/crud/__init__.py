@@ -19,6 +19,11 @@ from nutrition.crud.menu import (
     update_menu_item,
 )
 from nutrition.crud.notes import create_menu_note, get_menu_notes
+from nutrition.crud.off_plan import (
+    create_off_plan_entry,
+    delete_off_plan_entry,
+    get_off_plan_entries,
+)
 from nutrition.crud.product import (
     create_product,
     delete_product,
@@ -32,6 +37,9 @@ from nutrition.crud.profile import get_nutrition_profile, upsert_nutrition_profi
 __all__ = [
     "create_menu_note",
     "get_menu_notes",
+    "create_off_plan_entry",
+    "get_off_plan_entries",
+    "delete_off_plan_entry",
     "get_nutrition_profile",
     "upsert_nutrition_profile",
     "create_product",

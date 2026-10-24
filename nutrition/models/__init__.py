@@ -21,6 +21,7 @@ from nutrition.models.enums import (
 )
 from nutrition.models.generation_log import GenerationLog
 from nutrition.models.menu import (
+    DayMenuRead,
     GenerationRequest,
     GenerationResultRead,
     Menu,
@@ -90,6 +91,7 @@ __all__ = [
     "MenuBase",
     "Menu",
     "MenuRead",
+    "DayMenuRead",
     "MenuUpdate",
     "MenuItemBase",
     "MenuItem",

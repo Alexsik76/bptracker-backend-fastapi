@@ -191,7 +191,7 @@ async def test_menu_note_correction_regenerates_unmarked_items(
         # Check menus of the day
         menu_resp = await client.get("/nutrition/menus/2026-10-24")
         assert menu_resp.status_code == 200
-        menus = menu_resp.json()
+        menus = menu_resp.json()["menus"]
         menu_by_slot = {m["slot"]: m for m in menus}
 
         # Breakfast (eaten) must still be eaten and intact!
