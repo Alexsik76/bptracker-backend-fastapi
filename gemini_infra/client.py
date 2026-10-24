@@ -80,7 +80,11 @@ async def generate_json(
         raise GeminiUnavailable() from exc
 
     if response.status_code != 200:
-        logger.error("Gemini returned non-200 status code: %d.", response.status_code)
+        logger.error(
+            "Gemini returned non-200 status code %d: %s",
+            response.status_code,
+            response.text,
+        )
         raise GeminiUnavailable()
 
     try:
@@ -93,12 +97,18 @@ async def generate_json(
         ) from exc
 
     raw_text: str | None = None
+    finish_reason: str | None = None
     try:
         candidate = response_data["candidates"][0]
+        finish_reason = candidate.get("finishReason") if isinstance(candidate, dict) else None
         part = candidate["content"]["parts"][0]
         raw_text = part["text"]
     except (KeyError, IndexError, TypeError) as exc:
-        logger.warning("Failed to extract text from Gemini response: %s", response.text)
+        logger.warning(
+            "Failed to extract text from Gemini response (finishReason=%s): %s",
+            finish_reason,
+            response.text,
+        )
         raise GeminiInvalidResponse(
             "Missing candidates/parts/text in Gemini response",
             raw_text=response.text,
@@ -109,7 +119,11 @@ async def generate_json(
     try:
         parsed_data = json.loads(cleaned_text)
     except (ValueError, json.JSONDecodeError) as exc:
-        logger.warning("Gemini output was not valid JSON: %s", raw_text)
+        logger.warning(
+            "Gemini output was not valid JSON (finishReason=%s): %s",
+            finish_reason,
+            raw_text,
+        )
         raise GeminiInvalidResponse(
             "Gemini output was not valid JSON",
             raw_text=raw_text,

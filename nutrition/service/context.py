@@ -11,6 +11,7 @@ from nutrition.models import (
     MenuNoteKind,
     MenuRead,
     NutritionProfileRead,
+    OffPlanEntryRead,
     ProductRead,
 )
 
@@ -28,6 +29,7 @@ class GenerationContext:
     existing_day_menus: list[MenuRead]
     history_menus: list[MenuRead]
     corrections: list[str] = field(default_factory=list)
+    off_plan_entries: list[OffPlanEntryRead] = field(default_factory=list)
 
     @property
     def dishes_map(self) -> dict[UUID, DishRead]:
@@ -77,6 +79,10 @@ async def build_generation_context(
     )
     corrections = [c.text for c in correction_notes]
 
+    # Off-plan entries for today
+    off_plan_rows = await crud.get_off_plan_entries(session, user_id, menu_date)
+    off_plan_entries = [OffPlanEntryRead.model_validate(o) for o in off_plan_rows]
+
     return GenerationContext(
         user_id=user_id,
         date=menu_date,
@@ -89,4 +95,5 @@ async def build_generation_context(
         existing_day_menus=existing_day_menus,
         history_menus=history_menus,
         corrections=corrections,
+        off_plan_entries=off_plan_entries,
     )

@@ -7,6 +7,10 @@ from nutrition.models import (
     DishKind,
     DishRead,
     MealSchedule,
+    MenuItemOrigin,
+    MenuItemRead,
+    MenuRead,
+    MenuStatus,
     NutritionProfileRead,
     ProductAvailability,
     ProductPreference,
@@ -279,4 +283,79 @@ def test_build_gemini_response_schema_empty_lists():
     assert dishes_only_props["dish_id"]["format"] == "enum"
     assert "enum" not in dishes_only_props["product_id"]
     assert "format" not in dishes_only_props["product_id"]
+
+
+def test_validate_generation_response_eaten_dish_not_double_counted():
+    user_id = uuid4()
+    dish_id = uuid4()
+    menu_id = uuid4()
+    now = datetime.now(UTC)
+
+    # Ready dish had 500g cooked, 250g already eaten at Lunch -> remaining_g in DB is 250g
+    couscous = DishRead(
+        id=dish_id,
+        user_id=user_id,
+        name="каша кускус",
+        kind=DishKind.READY,
+        cooked_weight_g=500,
+        remaining_g=250,
+        created_at=now,
+        updated_at=now,
+    )
+    eaten_lunch = MenuRead(
+        id=menu_id,
+        user_id=user_id,
+        date=date(2026, 10, 24),
+        slot="Обід",
+        status=MenuStatus.EATEN,
+        eaten_at=now,
+        regenerations=1,
+        created_at=now,
+        updated_at=now,
+        items=[
+            MenuItemRead(
+                id=uuid4(),
+                menu_id=menu_id,
+                dish_id=dish_id,
+                title="каша кускус",
+                portion_g=250,
+                portion_text="250 г",
+                kcal_est=280,
+                origin=MenuItemOrigin.GENERATED,
+                position=1,
+            )
+        ],
+    )
+
+    # Even if Gemini echoes the eaten Lunch item and proposes 200g for Dinner,
+    # validation succeeds because Lunch is already deducted from remaining_g and locked.
+    resp = GenerationResponse(
+        rationale="Залишок кускусу на вечерю",
+        items=[
+            GeneratedMenuItem(
+                slot="Обід (13:00)",
+                dish_id=dish_id,
+                title="каша кускус",
+                portion_g=250,
+                kcal_est=280,
+            ),
+            GeneratedMenuItem(
+                slot="Вечеря (19:00)",
+                dish_id=dish_id,
+                title="каша кускус",
+                portion_g=200,
+                kcal_est=225,
+            ),
+        ],
+    )
+    assert resp.items[0].slot == "Обід"
+    assert resp.items[1].slot == "Вечеря"
+
+    validate_generation_response(
+        response=resp,
+        dishes_map={dish_id: couscous},
+        products_map={},
+        existing_menus=[eaten_lunch],
+    )
+
 

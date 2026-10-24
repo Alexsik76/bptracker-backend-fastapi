@@ -47,6 +47,7 @@ def build_info_note_prompt(
     existing_day_menus: list[Any],
     menu_date: date,
     question: str,
+    off_plan_entries: list[Any] | None = None,
 ) -> str:
     profile_data = {
         "sex": profile.sex.value if profile.sex else "unknown",
@@ -69,8 +70,31 @@ def build_info_note_prompt(
             {
                 "slot": m.slot,
                 "status": m.status.value,
-                "items": [it.title for it in m.items],
+                "items": [
+                    {
+                        "title": it.title,
+                        "portion_g": it.portion_g,
+                        "portion_text": it.portion_text,
+                        "kcal_est": it.kcal_est,
+                    }
+                    for it in m.items
+                ],
             }
+        )
+
+    off_plan_block = ""
+    if off_plan_entries:
+        off_plan_data = [
+            {
+                "text": o.text,
+                "portion_g": o.portion_g,
+                "kcal_est": o.kcal_est,
+            }
+            for o in off_plan_entries
+        ]
+        off_plan_block = (
+            f"\nПОЗАПЛАНОВЕ СПОЖИВАННЯ ({menu_date}):\n"
+            f"{json.dumps(off_plan_data, ensure_ascii=False, indent=2)}\n"
         )
 
     return f"""Ти — професійний дієтолог і консультант із щоденного харчування.
@@ -82,7 +106,7 @@ def build_info_note_prompt(
 
 РАЦІОН НА ЦЕЙ ДЕНЬ ({menu_date}):
 {json.dumps(meals_summary, ensure_ascii=False, indent=2)}
-
+{off_plan_block}
 ЗАПИТАННЯ КОРИСТУВАЧА:
 "{question}"
 
@@ -108,7 +132,10 @@ async def answer_info_note(
 
     profile_read = NutritionProfileRead.model_validate(profile)
     existing_menus = await crud.get_day_menus(session, user_id, menu_date)
-    prompt = build_info_note_prompt(profile_read, existing_menus, menu_date, text)
+    off_plan_rows = await crud.get_off_plan_entries(session, user_id, menu_date)
+    prompt = build_info_note_prompt(
+        profile_read, existing_menus, menu_date, text, off_plan_entries=off_plan_rows
+    )
 
     try:
         gemini_result = await gemini_infra.generate_json(

@@ -1,3 +1,4 @@
+import re
 from collections.abc import Iterable
 from copy import deepcopy
 from typing import Any
@@ -15,11 +16,14 @@ class GeneratedMenuItem(BaseModel):
     title: str
     portion_g: int = Field(gt=0)
     portion_text: str | None = None
-    kcal_est: int
-    position: int = 1
+    kcal_est: int = Field(ge=0)
+    position: int = Field(default=1, ge=1)
 
     @model_validator(mode="after")
     def validate_reference(self) -> "GeneratedMenuItem":
+        self.slot = re.sub(r"\s*\(\d{1,2}:\d{2}\)\s*$", "", self.slot).strip()
+        if not self.slot:
+            raise ValueError("Slot name must not be empty")
         if (self.dish_id is None and self.product_id is None) or (
             self.dish_id is not None and self.product_id is not None
         ):
@@ -54,7 +58,10 @@ GEMINI_RESPONSE_SCHEMA: dict[str, Any] = {
                 "properties": {
                     "slot": {
                         "type": "STRING",
-                        "description": "Назва прийому їжі (Сніданок, Обід, Вечеря, Перекус)",
+                        "description": (
+                            "Точна назва прийому їжі без часу "
+                            "(наприклад 'Сніданок', 'Обід', 'Вечеря', 'Перекус')"
+                        ),
                     },
                     "dish_id": {
                         "type": "STRING",
@@ -76,7 +83,9 @@ GEMINI_RESPONSE_SCHEMA: dict[str, Any] = {
                     },
                     "portion_text": {
                         "type": "STRING",
-                        "description": "Текстовий опис порції (наприклад '200 г' чи '1 шт (150 г)')",
+                        "description": (
+                            "Текстовий опис порції (наприклад '200 г' чи '1 шт (150 г)')"
+                        ),
                     },
                     "kcal_est": {
                         "type": "INTEGER",
@@ -135,12 +144,23 @@ def validate_generation_response(
 
     Raises ValueError on validation failure.
     """
-    # Track dish portions already consumed in eaten meals
+    # Ready dish remaining_g in DB already has EATEN meals deducted (via crud.update_menu).
+    # Product daily_limit_g is a daily cap, so EATEN meals still count toward product_portions_used.
     dish_portions_used: dict[UUID, int] = {}
     product_portions_used: dict[UUID, int] = {}
+    locked_slots: set[str] = set()
 
     for menu in existing_menus:
-        if menu.status == MenuStatus.EATEN:
+        if menu.status in (MenuStatus.EATEN, MenuStatus.SKIPPED):
+            locked_slots.add(menu.slot)
+            if menu.status == MenuStatus.EATEN:
+                for item in menu.items:
+                    if item.product_id and item.portion_g:
+                        product_portions_used[item.product_id] = (
+                            product_portions_used.get(item.product_id, 0) + item.portion_g
+                        )
+        elif target_slot and menu.slot != target_slot:
+            # Regenerating a single slot: other planned slots on the same day keep reservations
             for item in menu.items:
                 if item.dish_id and item.portion_g:
                     dish_portions_used[item.dish_id] = (
@@ -151,12 +171,15 @@ def validate_generation_response(
                         product_portions_used.get(item.product_id, 0) + item.portion_g
                     )
 
-    # Filter items: if target_slot is set, consider only items for this slot
-    relevant_items = (
-        [it for it in response.items if it.slot == target_slot]
-        if target_slot
-        else response.items
-    )
+    # Ignore items for locked (eaten/skipped) slots since generator never overwrites them
+    if target_slot:
+        relevant_items = [
+            it for it in response.items if it.slot == target_slot and it.slot not in locked_slots
+        ]
+        if target_slot not in locked_slots and not relevant_items:
+            raise ValueError(f"No items generated for target slot '{target_slot}'")
+    else:
+        relevant_items = [it for it in response.items if it.slot not in locked_slots]
 
     for item in relevant_items:
         if item.dish_id is not None:

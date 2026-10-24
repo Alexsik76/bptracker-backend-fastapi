@@ -154,6 +154,21 @@ def build_generation_prompt(context: GenerationContext) -> str:
             f"\nКОРИГУВАЛЬНІ УТОЧНЕННЯ ДНЯ (СУВОРО ВРАХУВАТИ):\n{corrections_list}\n"
         )
 
+    off_plan_block = ""
+    if context.off_plan_entries:
+        off_plan_data = [
+            {
+                "text": o.text,
+                "portion_g": o.portion_g,
+                "kcal_est": o.kcal_est,
+            }
+            for o in context.off_plan_entries
+        ]
+        off_plan_block = (
+            "\nПОЗАПЛАНОВЕ СПОЖИВАННЯ СЬОГОДНІ (врахувати у добовому балансі калорій):\n"
+            f"{json.dumps(off_plan_data, ensure_ascii=False, indent=2)}\n"
+        )
+
     prompt = f"""Ти — професійний дієтолог і помічник зі складання щоденного меню.
 
 ПРАВИЛА ГЕНЕРАТОРА (СУВОРО ДОТРИМУВАТИСЯ):
@@ -167,7 +182,8 @@ def build_generation_prompt(context: GenerationContext) -> str:
 ПРИЙОМИ ЇЖІ ЗА РОЗКЛАДОМ:
 {", ".join(meals_info)}
 
-НАЯВНІ ГОТОВІ СТРАВИ (використати в першу чергу, не перевищуючи remaining_g):
+НАЯВНІ ГОТОВІ СТРАВИ (використати в першу чергу; remaining_g — поточний залишок
+з урахуванням уже з'їденого, сума порцій у НЕз'їдених прийомах не має перевищувати remaining_g):
 {json.dumps(ready_dishes_data, ensure_ascii=False, indent=2)}
 
 ПОСТІЙНІ СТРАВИ:
@@ -178,7 +194,7 @@ def build_generation_prompt(context: GenerationContext) -> str:
 
 МЕНЮ ПОТОЧНОГО ДНЯ:
 {json.dumps(existing_meals_data, ensure_ascii=False, indent=2)}
-
+{off_plan_block}
 ФАКТИЧНЕ СПОЖИВАННЯ ПОПЕРЕДНІХ ДНІВ:
 {json.dumps(history_summary, ensure_ascii=False, indent=2)}
 
@@ -188,7 +204,8 @@ def build_generation_prompt(context: GenerationContext) -> str:
 Сформуй збалансоване меню та поверни JSON, що містить:
 - rationale: коротке зрозуміле пояснення вибору та калорійності;
 - shopping_list: список продуктів, які варто докупити (якщо все є, пустий список);
-- items: масив позицій меню (slot, dish_id, product_id, title, portion_g,
-  portion_text, kcal_est, position).
+- items: масив позицій меню (slot — назва прийому їжі без часу, dish_id, product_id,
+  title, portion_g, portion_text, kcal_est, position). Generating items for meals already
+  marked 'eaten' or 'skipped' is not required.
 """
     return prompt
