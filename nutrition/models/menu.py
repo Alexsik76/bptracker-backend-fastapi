@@ -21,6 +21,7 @@ from sqlalchemy import (
 from sqlmodel import Field, SQLModel
 
 from nutrition.models.enums import GenerationScope, MenuItemOrigin, MenuStatus
+from nutrition.models.notes_and_offplan import MenuNoteRead, OffPlanEntryRead
 
 
 class MenuBase(SQLModel):
@@ -188,3 +189,11 @@ class GenerationResultRead(SQLModel):
     menus: list[MenuRead]
     rationale: str = ""
     shopping_list: list[str] = []
+
+
+class DayMenuRead(SQLModel):
+    date: dt_date
+    menus: list[MenuRead] = []
+    notes: list[MenuNoteRead] = []
+    off_plan: list[OffPlanEntryRead] = []
+

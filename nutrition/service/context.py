@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, timedelta
 from uuid import UUID
 
@@ -8,6 +8,7 @@ from nutrition import crud
 from nutrition.models import (
     DishKind,
     DishRead,
+    MenuNoteKind,
     MenuRead,
     NutritionProfileRead,
     ProductRead,
@@ -26,6 +27,7 @@ class GenerationContext:
     products: list[ProductRead]
     existing_day_menus: list[MenuRead]
     history_menus: list[MenuRead]
+    corrections: list[str] = field(default_factory=list)
 
     @property
     def dishes_map(self) -> dict[UUID, DishRead]:
@@ -69,6 +71,12 @@ async def build_generation_context(
         prev_day_menus = await crud.get_day_menus(session, user_id, prev_date)
         history_menus.extend(prev_day_menus)
 
+    # Daily corrections
+    correction_notes = await crud.get_menu_notes(
+        session, user_id, menu_date, kind=MenuNoteKind.CORRECTION
+    )
+    corrections = [c.text for c in correction_notes]
+
     return GenerationContext(
         user_id=user_id,
         date=menu_date,
@@ -80,4 +88,5 @@ async def build_generation_context(
         products=products,
         existing_day_menus=existing_day_menus,
         history_menus=history_menus,
+        corrections=corrections,
     )

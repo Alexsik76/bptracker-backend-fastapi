@@ -9,13 +9,17 @@ from config import Settings, get_settings
 from db import SessionDep
 from nutrition import crud
 from nutrition.models import (
+    DayMenuRead,
     GenerationRequest,
     GenerationResultRead,
     MenuItemCreate,
     MenuItemRead,
     MenuItemUpdate,
+    MenuNoteCreate,
+    MenuNoteRead,
     MenuRead,
     MenuUpdate,
+    OffPlanEntryRead,
 )
 from nutrition.service.generator import (
     ProfileNotFoundError,
@@ -23,24 +27,32 @@ from nutrition.service.generator import (
     ServiceGenerationInvalidResponse,
     generate_menu,
 )
+from nutrition.service.notes import process_menu_note
 
 menus_router = APIRouter(prefix="/menus")
 items_router = APIRouter(prefix="/menu-items")
 
 
-@menus_router.get("/{menu_date}", response_model=list[MenuRead])
+@menus_router.get("/{menu_date}", response_model=DayMenuRead)
 async def get_day_menus(
     menu_date: date,
     session: SessionDep,
     user_id: CurrentUserId,
-) -> list[MenuRead]:
+) -> DayMenuRead:
     menus = await crud.get_day_menus(session, user_id, menu_date)
-    if not menus:
+    notes = await crud.get_menu_notes(session, user_id, menu_date)
+    off_plan = await crud.get_off_plan_entries(session, user_id, menu_date)
+    if not menus and not notes and not off_plan:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Menu not found",
         )
-    return menus
+    return DayMenuRead(
+        date=menu_date,
+        menus=menus,
+        notes=[MenuNoteRead.model_validate(n) for n in notes],
+        off_plan=[OffPlanEntryRead.model_validate(e) for e in off_plan],
+    )
 
 
 @menus_router.patch("/{menu_id}", response_model=MenuRead)
@@ -74,6 +86,48 @@ async def generate_menu_items(
             menu_date=menu_date,
             scope=data.scope,
             slot=data.slot,
+            settings=settings,
+        )
+    except ProfileNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(exc),
+        ) from exc
+    except ServiceGeminiUnavailable as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Gemini service is unavailable",
+        ) from exc
+    except ServiceGenerationInvalidResponse as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=str(exc),
+        ) from exc
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+
+
+@menus_router.post(
+    "/{menu_date}/notes",
+    response_model=MenuNoteRead,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_menu_note(
+    menu_date: date,
+    data: MenuNoteCreate,
+    session: SessionDep,
+    user_id: CurrentUserId,
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> MenuNoteRead:
+    try:
+        return await process_menu_note(
+            session=session,
+            user_id=user_id,
+            menu_date=menu_date,
+            data=data,
             settings=settings,
         )
     except ProfileNotFoundError as exc:

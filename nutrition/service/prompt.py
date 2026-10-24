@@ -3,7 +3,7 @@ import json
 from nutrition.models import MenuStatus
 from nutrition.service.context import GenerationContext
 
-PROMPT_VERSION = "2026-10-23.2"
+PROMPT_VERSION = "2026-10-24.1"
 
 
 def build_generation_prompt(context: GenerationContext) -> str:
@@ -120,6 +120,13 @@ def build_generation_prompt(context: GenerationContext) -> str:
             "Прийоми їжі зі статусом 'eaten' чи 'skipped' є незмінними фактами — "
             "врахуй їх і не змінюй."
         )
+    elif context.scope == "unmarked":
+        scope_instructions += (
+            " Перегенерувати лише непозначені прийоми їжі "
+            "(ті, які ще не мають статусу 'eaten' чи 'skipped'). "
+            "Прийоми їжі зі статусом 'eaten' чи 'skipped' є незмінними фактами — "
+            "врахуй їх і не змінюй."
+        )
 
     rules = (
         "1. Постійні страви із закріпленим прийомом (fixed_slot) не змінюються:\n"
@@ -140,11 +147,18 @@ def build_generation_prompt(context: GenerationContext) -> str:
         "9. Якщо виникає дисбаланс раціону, додай це у shopping_list (рекомендації докупити)."
     )
 
+    corrections_block = ""
+    if context.corrections:
+        corrections_list = "\n".join(f"- {c}" for c in context.corrections)
+        corrections_block = (
+            f"\nКОРИГУВАЛЬНІ УТОЧНЕННЯ ДНЯ (СУВОРО ВРАХУВАТИ):\n{corrections_list}\n"
+        )
+
     prompt = f"""Ти — професійний дієтолог і помічник зі складання щоденного меню.
 
 ПРАВИЛА ГЕНЕРАТОРА (СУВОРО ДОТРИМУВАТИСЯ):
 {rules}
-
+{corrections_block}
 ДАТА МЕНЮ: {context.date}
 
 ПРОФІЛЬ КОРИСТУВАЧА:

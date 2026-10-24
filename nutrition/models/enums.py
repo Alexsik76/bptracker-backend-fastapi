@@ -38,6 +38,7 @@ class MenuStatus(StrEnum):
 class GenerationScope(StrEnum):
     DAY = "day"
     SLOT = "slot"
+    UNMARKED = "unmarked"
 
 
 class MenuNoteKind(StrEnum):
