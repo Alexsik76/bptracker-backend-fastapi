@@ -28,30 +28,46 @@ def test_schema_item_validation_dish_or_product():
     dish_id = uuid4()
     prod_id = uuid4()
 
-    # Valid: only dish_id
+    # Valid: only dish_id (portion_text auto-filled from portion_g)
     item1 = GeneratedMenuItem(
         slot="Сніданок",
         dish_id=dish_id,
         title="Вівсянка",
+        portion_g=200,
         kcal_est=300,
     )
     assert item1.dish_id == dish_id
     assert item1.product_id is None
+    assert item1.portion_g == 200
+    assert item1.portion_text == "200 г"
 
     # Valid: only product_id
     item2 = GeneratedMenuItem(
         slot="Перекус",
         product_id=prod_id,
         title="Яблуко",
+        portion_g=150,
+        portion_text="1 шт",
         kcal_est=60,
     )
     assert item2.product_id == prod_id
+    assert item2.portion_text == "1 шт"
+
+    # Invalid: missing portion_g
+    with pytest.raises(ValueError):
+        GeneratedMenuItem(
+            slot="Сніданок",
+            dish_id=dish_id,
+            title="Вівсянка",
+            kcal_est=300,
+        )
 
     # Invalid: neither
     with pytest.raises(ValueError, match="Exactly one of dish_id or product_id"):
         GeneratedMenuItem(
             slot="Сніданок",
             title="Ніщо",
+            portion_g=100,
             kcal_est=100,
         )
 
@@ -62,6 +78,7 @@ def test_schema_item_validation_dish_or_product():
             dish_id=dish_id,
             product_id=prod_id,
             title="Обидва",
+            portion_g=100,
             kcal_est=100,
         )
 

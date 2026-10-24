@@ -13,7 +13,7 @@ class GeneratedMenuItem(BaseModel):
     dish_id: UUID | None = None
     product_id: UUID | None = None
     title: str
-    portion_g: int | None = None
+    portion_g: int = Field(gt=0)
     portion_text: str | None = None
     kcal_est: int
     position: int = 1
@@ -24,6 +24,8 @@ class GeneratedMenuItem(BaseModel):
             self.dish_id is not None and self.product_id is not None
         ):
             raise ValueError("Exactly one of dish_id or product_id must be provided")
+        if not self.portion_text:
+            self.portion_text = f"{self.portion_g} г"
         return self
 
 
@@ -70,13 +72,11 @@ GEMINI_RESPONSE_SCHEMA: dict[str, Any] = {
                     },
                     "portion_g": {
                         "type": "INTEGER",
-                        "nullable": True,
-                        "description": "Вага порції у грамах",
+                        "description": "Вага порції у грамах (обов'язково додатне число)",
                     },
                     "portion_text": {
                         "type": "STRING",
-                        "nullable": True,
-                        "description": "Текстовий опис порції (наприклад '200 г' чи '1 шт')",
+                        "description": "Текстовий опис порції (наприклад '200 г' чи '1 шт (150 г)')",
                     },
                     "kcal_est": {
                         "type": "INTEGER",
@@ -87,7 +87,16 @@ GEMINI_RESPONSE_SCHEMA: dict[str, Any] = {
                         "description": "Порядковий номер позиції в межах прийому їжі (1, 2, ...)",
                     },
                 },
-                "required": ["slot", "title", "kcal_est", "position"],
+                "required": [
+                    "slot",
+                    "dish_id",
+                    "product_id",
+                    "title",
+                    "portion_g",
+                    "portion_text",
+                    "kcal_est",
+                    "position",
+                ],
             },
         },
     },
