@@ -95,6 +95,7 @@ class Settings(BaseSettings):
     analyze_max_file_bytes: int = 10 * 1024 * 1024
 
     menu_history_days: int = 3
+    llm_exchange_log: bool = True
 
     export_cooldown_minutes: int = 10
     export_sheets_template_url: str

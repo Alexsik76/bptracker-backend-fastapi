@@ -1,4 +1,5 @@
 import logging
+import time
 from collections import defaultdict
 from datetime import date
 from uuid import UUID
@@ -25,6 +26,39 @@ from nutrition.service.schema import (
 )
 
 logger = logging.getLogger(__name__)
+llm_logger = logging.getLogger("nutrition.llm")
+
+
+def log_llm_exchange(
+    settings: Settings,
+    user_id: UUID,
+    menu_date: date,
+    scope: str,
+    model: str,
+    prompt_version: str,
+    duration_ms: int | None,
+    input_tokens: int | None,
+    output_tokens: int | None,
+    prompt: str,
+    raw_response: str | None,
+) -> None:
+    """Emit full LLM prompt and response exchange record to nutrition.llm at INFO."""
+    if not settings.llm_exchange_log:
+        return
+    llm_logger.info(
+        "user_id=%s date=%s scope=%s model=%s prompt_version=%s duration_ms=%s "
+        "tokens=(input=%s, output=%s)\nPROMPT:\n%s\nRAW RESPONSE:\n%s",
+        user_id,
+        menu_date,
+        scope,
+        model,
+        prompt_version,
+        duration_ms,
+        input_tokens,
+        output_tokens,
+        prompt,
+        raw_response,
+    )
 
 
 class GenerationError(Exception):
@@ -77,11 +111,16 @@ async def generate_menu(
     # 2. Build prompt
     prompt = build_generation_prompt(context)
 
+    # End read transaction before calling Gemini so the connection is not idle in transaction
+    await session.commit()
+
     # 3. Call Gemini (outside open transaction)
     raw_response_text: str | None
     input_tokens: int | None = None
     output_tokens: int | None = None
+    duration_ms: int | None = None
 
+    start_time = time.perf_counter()
     try:
         gemini_result = await gemini_infra.generate_json(
             prompt=prompt,
@@ -91,14 +130,39 @@ async def generate_menu(
                 context.dishes_map.keys(), context.products_map.keys()
             ),
         )
+        duration_ms = int(round((time.perf_counter() - start_time) * 1000))
         raw_response_text = gemini_result.raw_text
         input_tokens = gemini_result.input_tokens
         output_tokens = gemini_result.output_tokens
+        log_llm_exchange(
+            settings=settings,
+            user_id=user_id,
+            menu_date=menu_date,
+            scope=scope.value,
+            model=settings.gemini_menu_model,
+            prompt_version=PROMPT_VERSION,
+            duration_ms=duration_ms,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            prompt=prompt,
+            raw_response=raw_response_text,
+        )
     except GeminiUnavailable as exc:
+        duration_ms = int(round((time.perf_counter() - start_time) * 1000))
         logger.error("Gemini unavailable during menu generation for user %s: %s", user_id, exc)
-        raise ServiceGeminiUnavailable("Gemini service is unavailable") from exc
-    except GeminiInvalidResponse as exc:
-        raw_response_text = exc.raw_text
+        log_llm_exchange(
+            settings=settings,
+            user_id=user_id,
+            menu_date=menu_date,
+            scope=scope.value,
+            model=settings.gemini_menu_model,
+            prompt_version=PROMPT_VERSION,
+            duration_ms=duration_ms,
+            input_tokens=None,
+            output_tokens=None,
+            prompt=prompt,
+            raw_response=None,
+        )
         await crud.add_generation_log(
             session=session,
             user_id=user_id,
@@ -106,6 +170,39 @@ async def generate_menu(
             scope=scope.value,
             model=settings.gemini_menu_model,
             prompt_version=PROMPT_VERSION,
+            prompt=prompt,
+            duration_ms=duration_ms,
+            input_tokens=None,
+            output_tokens=None,
+            raw_response=None,
+        )
+        await session.commit()
+        raise ServiceGeminiUnavailable("Gemini service is unavailable") from exc
+    except GeminiInvalidResponse as exc:
+        duration_ms = int(round((time.perf_counter() - start_time) * 1000))
+        raw_response_text = exc.raw_text
+        log_llm_exchange(
+            settings=settings,
+            user_id=user_id,
+            menu_date=menu_date,
+            scope=scope.value,
+            model=settings.gemini_menu_model,
+            prompt_version=PROMPT_VERSION,
+            duration_ms=duration_ms,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            prompt=prompt,
+            raw_response=raw_response_text,
+        )
+        await crud.add_generation_log(
+            session=session,
+            user_id=user_id,
+            menu_date=menu_date,
+            scope=scope.value,
+            model=settings.gemini_menu_model,
+            prompt_version=PROMPT_VERSION,
+            prompt=prompt,
+            duration_ms=duration_ms,
             input_tokens=input_tokens,
             output_tokens=output_tokens,
             raw_response=raw_response_text,
@@ -134,6 +231,8 @@ async def generate_menu(
             scope=scope.value,
             model=settings.gemini_menu_model,
             prompt_version=PROMPT_VERSION,
+            prompt=prompt,
+            duration_ms=duration_ms,
             input_tokens=input_tokens,
             output_tokens=output_tokens,
             raw_response=raw_response_text,
@@ -192,6 +291,8 @@ async def generate_menu(
         scope=scope.value,
         model=settings.gemini_menu_model,
         prompt_version=PROMPT_VERSION,
+        prompt=prompt,
+        duration_ms=duration_ms,
         input_tokens=input_tokens,
         output_tokens=output_tokens,
         raw_response=raw_response_text,

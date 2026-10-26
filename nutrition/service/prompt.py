@@ -158,8 +158,8 @@ def build_generation_prompt(context: GenerationContext) -> str:
     if context.off_plan_entries:
         off_plan_data = [
             {
+                "at": o.at.isoformat() if hasattr(o.at, "isoformat") else str(o.at),
                 "text": o.text,
-                "portion_g": o.portion_g,
                 "kcal_est": o.kcal_est,
             }
             for o in context.off_plan_entries
