@@ -1,9 +1,9 @@
 import json
 
-from nutrition.models import MenuStatus
+from nutrition.models import MenuItemStatus
 from nutrition.service.context import GenerationContext
 
-PROMPT_VERSION = "2026-10-24.1"
+PROMPT_VERSION = "2026-10-26.1"
 
 
 def build_generation_prompt(context: GenerationContext) -> str:
@@ -83,6 +83,7 @@ def build_generation_prompt(context: GenerationContext) -> str:
                 "items": [
                     {
                         "title": it.title,
+                        "status": it.status.value if it.status else None,
                         "dish_id": str(it.dish_id) if it.dish_id else None,
                         "product_id": str(it.product_id) if it.product_id else None,
                         "portion_g": it.portion_g,
@@ -94,17 +95,18 @@ def build_generation_prompt(context: GenerationContext) -> str:
             }
         )
 
-    # History summary (only eaten meals as facts)
+    # History summary (only eaten items as facts)
     history_summary = []
     for h in context.history_menus:
-        if h.status == MenuStatus.EATEN:
+        eaten_items = [it for it in h.items if it.status == MenuItemStatus.EATEN]
+        if eaten_items:
             history_summary.append(
                 {
                     "date": str(h.date),
                     "slot": h.slot,
                     "items": [
                         f"{i.title} ({i.portion_g}g)" if i.portion_g else i.title
-                        for i in h.items
+                        for i in eaten_items
                     ],
                 }
             )
@@ -114,18 +116,28 @@ def build_generation_prompt(context: GenerationContext) -> str:
         scope_instructions += (
             f" Згенерувати або оновити пропозиції лише для прийому: '{context.target_slot}'."
         )
-    elif context.scope == "day":
+    elif context.scope in ("day", "unmarked"):
+        # 'unmarked' is an alias for 'day': in the per-item model,
+        # generation always targets unmarked items
         scope_instructions += (
-            " Скласти меню на весь день для всіх запланованих прийомів їжі. "
-            "Прийоми їжі зі статусом 'eaten' чи 'skipped' є незмінними фактами — "
-            "врахуй їх і не змінюй."
+            " Скласти меню на день для всіх запланованих прийомів їжі. "
+            "Позиції зі статусом 'eaten' чи 'skipped' є незмінними фактами — "
+            "врахуй їх і не змінюй; замінюй лише непозначені позиції."
         )
-    elif context.scope == "unmarked":
-        scope_instructions += (
-            " Перегенерувати лише непозначені прийоми їжі "
-            "(ті, які ще не мають статусу 'eaten' чи 'skipped'). "
-            "Прийоми їжі зі статусом 'eaten' чи 'skipped' є незмінними фактами — "
-            "врахуй їх і не змінюй."
+
+    has_evening_snack = any(
+        "перекус" in m.name.lower()
+        for m in (profile.meals if profile else [])
+    )
+    if has_evening_snack:
+        rule_6 = (
+            "6. Обід і вечеря мають бути ситними та білковими. Запланувати вечірній перекус\n"
+            "   (вікно, коли тягне на солодке), оскільки такий прийом є в розкладі профілю.\n"
+        )
+    else:
+        rule_6 = (
+            "6. Обід і вечеря мають бути ситними та білковими. Запланувати вечірній перекус\n"
+            "   лише якщо такий прийом їжі є в розкладі профілю (наразі відсутній).\n"
         )
 
     rules = (
@@ -139,8 +151,7 @@ def build_generation_prompt(context: GenerationContext) -> str:
         "   потім нейтральні (neutral); небажані (avoid) — лише якщо немає інших.\n"
         "4. Денні ліміти продуктів (daily_limit_g) НЕ перевищуються.\n"
         f"5. Помірна кількість жиру за один прийом.{restrictions_note}\n"
-        "6. Обід і вечеря мають бути ситними та білковими. Запланувати вечірній перекус\n"
-        "   (вікно, коли тягне на солодке).\n"
+        f"{rule_6}"
         "7. Добова ціль — з дефіцитом відносно підтримання для темпу 0,5–1 кг на тиждень.\n"
         "8. Кожна згенерована позиція містить рівно одне посилання: dish_id АБО product_id.\n"
         "   Назва (title) має відповідати назві обраної страви чи продукту.\n"

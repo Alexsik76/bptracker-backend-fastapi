@@ -9,7 +9,6 @@ from nutrition.crud.menu import (
     add_generation_log,
     add_menu_item,
     delete_menu_item,
-    evaluate_active_menus_completeness,
     get_day_menus,
     get_menu,
     get_menu_by_id,
@@ -63,5 +62,4 @@ __all__ = [
     "delete_menu_item",
     "replace_unmarked_slot_items",
     "add_generation_log",
-    "evaluate_active_menus_completeness",
 ]
