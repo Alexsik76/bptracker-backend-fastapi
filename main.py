@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import sys
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -20,6 +21,13 @@ from reminders.router import router as reminders_router
 from users.router import router as users_router
 
 logger = logging.getLogger(__name__)
+
+llm_logger = logging.getLogger("nutrition.llm")
+llm_logger.setLevel(logging.INFO)
+if not any(isinstance(h, logging.StreamHandler) for h in llm_logger.handlers):
+    llm_handler = logging.StreamHandler(sys.stdout)
+    llm_handler.setLevel(logging.INFO)
+    llm_logger.addHandler(llm_handler)
 
 
 @asynccontextmanager

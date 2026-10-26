@@ -1,4 +1,5 @@
-from datetime import date
+import logging
+from datetime import UTC, date, datetime
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -6,7 +7,9 @@ from httpx import AsyncClient
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
+from config import get_settings
 from gemini_infra.types import GeminiInvalidResponse, GeminiResult, GeminiUnavailable
+from main import app
 from nutrition.models import GenerationLog, MenuNote, MenuNoteKind
 
 
@@ -370,4 +373,329 @@ async def test_correction_note_persists_on_invalid_response_422(
         notes = (await session.exec(stmt)).all()
         assert len(notes) == 1
         assert notes[0].text == "додай яблуко"
+
+
+@pytest.mark.asyncio
+async def test_menu_generation_with_off_plan_entry_succeeds(
+    client: AsyncClient, session: AsyncSession
+):
+    env = await setup_test_environment(client)
+    dish_id = env["dish_id"]
+
+    # Add off-plan entry for 2026-10-24
+    at_str = datetime(2026, 10, 24, 15, 0, tzinfo=UTC).isoformat()
+    off_resp = await client.post(
+        "/nutrition/off-plan",
+        json={
+            "date": "2026-10-24",
+            "at": at_str,
+            "text": "Кава з печивом 2 шт.",
+            "kcal_est": 180,
+        },
+    )
+    assert off_resp.status_code == 201
+
+    mock_result = GeminiResult(
+        data={
+            "rationale": "Меню сформовано",
+            "shopping_list": [],
+            "items": [
+                {
+                    "slot": "Сніданок",
+                    "dish_id": dish_id,
+                    "product_id": None,
+                    "title": "Індичка запечена",
+                    "portion_g": 200,
+                    "portion_text": "200 г",
+                    "kcal_est": 260,
+                    "position": 1,
+                }
+            ],
+        },
+        raw_text='{"rationale": "Меню сформовано", "shopping_list": [], "items": []}',
+        model="gemini-2.0-flash",
+        input_tokens=1000,
+        output_tokens=150,
+    )
+
+    with patch("gemini_infra.generate_json", new_callable=AsyncMock) as mock_generate:
+        mock_generate.return_value = mock_result
+
+        resp = await client.post(
+            "/nutrition/menus/2026-10-24/generate",
+            json={"scope": "day"},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data["menus"]) >= 1
+
+        prompt_sent = mock_generate.call_args.kwargs["prompt"]
+        assert "Кава з печивом 2 шт." in prompt_sent
+        assert at_str in prompt_sent
+        off_plan_section = prompt_sent.split("ПОЗАПЛАНОВЕ СПОЖИВАННЯ")[1]
+        off_plan_part = off_plan_section.split("ФАКТИЧНЕ СПОЖИВАННЯ")[0]
+        assert "portion_g" not in off_plan_part
+
+
+@pytest.mark.asyncio
+async def test_info_note_with_off_plan_entry_succeeds(
+    client: AsyncClient, session: AsyncSession
+):
+    await setup_test_environment(client)
+
+    at_str = datetime(2026, 10, 24, 16, 0, tzinfo=UTC).isoformat()
+    off_resp = await client.post(
+        "/nutrition/off-plan",
+        json={
+            "date": "2026-10-24",
+            "at": at_str,
+            "text": "Яблуко",
+            "kcal_est": 60,
+        },
+    )
+    assert off_resp.status_code == 201
+
+    mock_result = GeminiResult(
+        data={"answer": "Яблуко добре вписується в денну норму."},
+        raw_text='{"answer": "Яблуко добре вписується в денну норму."}',
+        model="gemini-2.0-flash",
+        input_tokens=800,
+        output_tokens=40,
+    )
+
+    with patch("gemini_infra.generate_json", new_callable=AsyncMock) as mock_generate:
+        mock_generate.return_value = mock_result
+
+        resp = await client.post(
+            "/nutrition/menus/2026-10-24/notes",
+            json={"kind": "info", "text": "чи можна ще банан?"},
+        )
+        assert resp.status_code == 201
+        assert resp.json()["answer"] == "Яблуко добре вписується в денну норму."
+
+        prompt_sent = mock_generate.call_args.kwargs["prompt"]
+        assert "Яблуко" in prompt_sent
+        assert at_str in prompt_sent
+        off_plan_section = prompt_sent.split("ПОЗАПЛАНОВЕ СПОЖИВАННЯ")[1]
+        off_plan_part = off_plan_section.split("ЗАПИТАННЯ КОРИСТУВАЧА")[0]
+        assert "portion_g" not in off_plan_part
+
+
+@pytest.mark.asyncio
+async def test_gemini_called_outside_transaction(
+    client: AsyncClient, session: AsyncSession
+):
+    env = await setup_test_environment(client)
+    dish_id = env["dish_id"]
+
+    gen_result = GeminiResult(
+        data={
+            "rationale": "Меню сформовано",
+            "shopping_list": [],
+            "items": [
+                {
+                    "slot": "Сніданок",
+                    "dish_id": dish_id,
+                    "product_id": None,
+                    "title": "Індичка запечена",
+                    "portion_g": 200,
+                    "portion_text": "200 г",
+                    "kcal_est": 260,
+                    "position": 1,
+                }
+            ],
+        },
+        raw_text='{"rationale": "Меню сформовано", "shopping_list": [], "items": []}',
+        model="gemini-2.0-flash",
+        input_tokens=500,
+        output_tokens=50,
+    )
+
+    # 1. Assert session.in_transaction() is False when generate_menu calls Gemini
+    gen_in_tx = None
+
+    async def mock_generate_menu(*args, **kwargs):
+        nonlocal gen_in_tx
+        gen_in_tx = session.in_transaction()
+        return gen_result
+
+    with patch("gemini_infra.generate_json", side_effect=mock_generate_menu):
+        resp = await client.post(
+            "/nutrition/menus/2026-10-24/generate",
+            json={"scope": "day"},
+        )
+        assert resp.status_code == 200
+        assert gen_in_tx is False
+
+    # 2. Assert session.in_transaction() is False when answer_info_note calls Gemini
+    note_result = GeminiResult(
+        data={"answer": "Відповідь дієтолога"},
+        raw_text='{"answer": "Відповідь дієтолога"}',
+        model="gemini-2.0-flash",
+        input_tokens=400,
+        output_tokens=30,
+    )
+    note_in_tx = None
+
+    async def mock_generate_note(*args, **kwargs):
+        nonlocal note_in_tx
+        note_in_tx = session.in_transaction()
+        return note_result
+
+    with patch("gemini_infra.generate_json", side_effect=mock_generate_note):
+        resp = await client.post(
+            "/nutrition/menus/2026-10-24/notes",
+            json={"kind": "info", "text": "тестове питання"},
+        )
+        assert resp.status_code == 201
+        assert note_in_tx is False
+
+
+@pytest.mark.asyncio
+async def test_llm_exchange_log_db_and_stdout(
+    client: AsyncClient, session: AsyncSession, caplog: pytest.LogCaptureFixture
+):
+    await setup_test_environment(client)
+
+    raw_text = '{"answer": "Тестова відповідь про раціон."}'
+    mock_result = GeminiResult(
+        data={"answer": "Тестова відповідь про раціон."},
+        raw_text=raw_text,
+        model="gemini-2.0-flash",
+        input_tokens=950,
+        output_tokens=45,
+    )
+
+    with caplog.at_level(logging.INFO, logger="nutrition.llm"):
+        with patch("gemini_infra.generate_json", new_callable=AsyncMock) as mock_gen:
+            mock_gen.return_value = mock_result
+            resp = await client.post(
+                "/nutrition/menus/2026-10-24/notes",
+                json={"kind": "info", "text": "питання про лог"},
+            )
+            assert resp.status_code == 201
+
+    # Verify DB generation_log columns: prompt and duration_ms
+    stmt = select(GenerationLog).where(
+        GenerationLog.date == date(2026, 10, 24),
+        GenerationLog.scope == "info",
+    )
+    logs = (await session.exec(stmt)).all()
+    assert len(logs) == 1
+    log_entry = logs[0]
+    assert log_entry.prompt is not None
+    assert "питання про лог" in log_entry.prompt
+    assert log_entry.duration_ms is not None
+    assert isinstance(log_entry.duration_ms, int)
+    assert log_entry.duration_ms >= 0
+    assert log_entry.raw_response == raw_text
+
+    # Verify stdout logger nutrition.llm emitted record
+    llm_records = [r for r in caplog.records if r.name == "nutrition.llm"]
+    assert len(llm_records) == 1
+    record_msg = llm_records[0].getMessage()
+    assert f"user_id={log_entry.user_id}" in record_msg
+    assert "date=2026-10-24" in record_msg
+    assert "scope=info" in record_msg
+    assert "model=gemini-2.0-flash" in record_msg
+    assert "prompt_version=" in record_msg
+    assert f"duration_ms={log_entry.duration_ms}" in record_msg
+    assert "tokens=(input=950, output=45)" in record_msg
+    assert log_entry.prompt in record_msg
+    assert raw_text in record_msg
+
+
+@pytest.mark.asyncio
+async def test_llm_exchange_log_disabled_switches_stdout_off(
+    client: AsyncClient, session: AsyncSession, caplog: pytest.LogCaptureFixture
+):
+    await setup_test_environment(client)
+
+    mock_result = GeminiResult(
+        data={"answer": "Відповідь"},
+        raw_text='{"answer": "Відповідь"}',
+        model="gemini-2.0-flash",
+        input_tokens=200,
+        output_tokens=20,
+    )
+
+    current_settings = get_settings().model_copy()
+    current_settings.llm_exchange_log = False
+    app.dependency_overrides[get_settings] = lambda: current_settings
+
+    try:
+        with caplog.at_level(logging.INFO, logger="nutrition.llm"):
+            with patch("gemini_infra.generate_json", new_callable=AsyncMock) as mock_gen:
+                mock_gen.return_value = mock_result
+                resp = await client.post(
+                    "/nutrition/menus/2026-10-24/notes",
+                    json={"kind": "info", "text": "тест відключеного логу"},
+                )
+                assert resp.status_code == 201
+    finally:
+        app.dependency_overrides.pop(get_settings, None)
+
+    # Stdout record was switched off
+    llm_records = [r for r in caplog.records if r.name == "nutrition.llm"]
+    assert len(llm_records) == 0
+
+    # DB columns were still written
+    stmt = select(GenerationLog).where(
+        GenerationLog.date == date(2026, 10, 24),
+        GenerationLog.scope == "info",
+    )
+    logs = (await session.exec(stmt)).all()
+    assert len(logs) == 1
+    assert logs[0].prompt is not None
+    assert logs[0].duration_ms is not None
+
+
+@pytest.mark.asyncio
+async def test_gemini_unavailable_logs_to_db(
+    client: AsyncClient, session: AsyncSession
+):
+    await setup_test_environment(client)
+
+    # 1. Info note unavailable -> 502, writes row with raw_response = NULL
+    with patch("gemini_infra.generate_json", new_callable=AsyncMock) as mock_gen:
+        mock_gen.side_effect = GeminiUnavailable("Timeout connecting to Gemini")
+        resp = await client.post(
+            "/nutrition/menus/2026-10-24/notes",
+            json={"kind": "info", "text": "таймаут тест"},
+        )
+        assert resp.status_code == 502
+
+    stmt = select(GenerationLog).where(
+        GenerationLog.date == date(2026, 10, 24),
+        GenerationLog.scope == "info",
+    )
+    logs = (await session.exec(stmt)).all()
+    assert len(logs) == 1
+    assert logs[0].raw_response is None
+    assert logs[0].prompt is not None
+    assert "таймаут тест" in logs[0].prompt
+    assert logs[0].duration_ms is not None
+    assert logs[0].input_tokens is None
+    assert logs[0].output_tokens is None
+
+    # 2. Menu generation unavailable -> 502, writes row with raw_response = NULL
+    with patch("gemini_infra.generate_json", new_callable=AsyncMock) as mock_gen:
+        mock_gen.side_effect = GeminiUnavailable("Service down")
+        resp2 = await client.post(
+            "/nutrition/menus/2026-10-24/generate",
+            json={"scope": "day"},
+        )
+        assert resp2.status_code == 502
+
+    stmt_gen = select(GenerationLog).where(
+        GenerationLog.date == date(2026, 10, 24),
+        GenerationLog.scope == "day",
+    )
+    gen_logs = (await session.exec(stmt_gen)).all()
+    assert len(gen_logs) == 1
+    assert gen_logs[0].raw_response is None
+    assert gen_logs[0].prompt is not None
+    assert gen_logs[0].duration_ms is not None
+    assert gen_logs[0].input_tokens is None
+    assert gen_logs[0].output_tokens is None
 

@@ -30,6 +30,8 @@ class GenerationLog(SQLModel, table=True):
     scope: str = Field(sa_column=Column(String, nullable=False))
     model: str = Field(sa_column=Column(String, nullable=False))
     prompt_version: str = Field(sa_column=Column(String, nullable=False))
+    prompt: str | None = Field(default=None, sa_column=Column(Text, nullable=True))
+    duration_ms: int | None = Field(default=None, sa_column=Column(Integer, nullable=True))
     input_tokens: int | None = Field(default=None, sa_column=Column(Integer, nullable=True))
     output_tokens: int | None = Field(default=None, sa_column=Column(Integer, nullable=True))
     raw_response: str | None = Field(default=None, sa_column=Column(Text, nullable=True))

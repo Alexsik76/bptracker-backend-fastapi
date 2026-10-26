@@ -549,9 +549,11 @@ async def add_generation_log(
     scope: str,
     model: str,
     prompt_version: str,
-    input_tokens: int | None,
-    output_tokens: int | None,
-    raw_response: str | None,
+    prompt: str | None = None,
+    duration_ms: int | None = None,
+    input_tokens: int | None = None,
+    output_tokens: int | None = None,
+    raw_response: str | None = None,
 ) -> None:
     """Record an entry in generation_log via the CRUD layer."""
     log_entry = GenerationLog(
@@ -560,6 +562,8 @@ async def add_generation_log(
         scope=scope,
         model=model,
         prompt_version=prompt_version,
+        prompt=prompt,
+        duration_ms=duration_ms,
         input_tokens=input_tokens,
         output_tokens=output_tokens,
         raw_response=raw_response,

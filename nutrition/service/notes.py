@@ -1,5 +1,6 @@
 import json
 import logging
+import time
 from datetime import date
 from typing import Any
 from uuid import UUID
@@ -22,6 +23,7 @@ from nutrition.service.generator import (
     ServiceGeminiUnavailable,
     ServiceGenerationInvalidResponse,
     generate_menu,
+    log_llm_exchange,
 )
 
 INFO_NOTE_PROMPT_VERSION = "2026-10-24.1"
@@ -86,8 +88,8 @@ def build_info_note_prompt(
     if off_plan_entries:
         off_plan_data = [
             {
+                "at": o.at.isoformat() if hasattr(o.at, "isoformat") else str(o.at),
                 "text": o.text,
-                "portion_g": o.portion_g,
                 "kcal_est": o.kcal_est,
             }
             for o in off_plan_entries
@@ -137,6 +139,11 @@ async def answer_info_note(
         profile_read, existing_menus, menu_date, text, off_plan_entries=off_plan_rows
     )
 
+    # End read transaction before calling Gemini so the connection is not idle in transaction
+    await session.commit()
+
+    duration_ms: int | None = None
+    start_time = time.perf_counter()
     try:
         gemini_result = await gemini_infra.generate_json(
             prompt=prompt,
@@ -144,10 +151,36 @@ async def answer_info_note(
             settings=settings,
             response_schema=INFO_NOTE_RESPONSE_SCHEMA,
         )
+        duration_ms = int(round((time.perf_counter() - start_time) * 1000))
+        log_llm_exchange(
+            settings=settings,
+            user_id=user_id,
+            menu_date=menu_date,
+            scope="info",
+            model=settings.gemini_menu_model,
+            prompt_version=INFO_NOTE_PROMPT_VERSION,
+            duration_ms=duration_ms,
+            input_tokens=gemini_result.input_tokens,
+            output_tokens=gemini_result.output_tokens,
+            prompt=prompt,
+            raw_response=gemini_result.raw_text,
+        )
     except GeminiUnavailable as exc:
+        duration_ms = int(round((time.perf_counter() - start_time) * 1000))
         logger.error("Gemini unavailable during info note for user %s: %s", user_id, exc)
-        raise ServiceGeminiUnavailable("Gemini service is unavailable") from exc
-    except GeminiInvalidResponse as exc:
+        log_llm_exchange(
+            settings=settings,
+            user_id=user_id,
+            menu_date=menu_date,
+            scope="info",
+            model=settings.gemini_menu_model,
+            prompt_version=INFO_NOTE_PROMPT_VERSION,
+            duration_ms=duration_ms,
+            input_tokens=None,
+            output_tokens=None,
+            prompt=prompt,
+            raw_response=None,
+        )
         await crud.add_generation_log(
             session=session,
             user_id=user_id,
@@ -155,6 +188,38 @@ async def answer_info_note(
             scope="info",
             model=settings.gemini_menu_model,
             prompt_version=INFO_NOTE_PROMPT_VERSION,
+            prompt=prompt,
+            duration_ms=duration_ms,
+            input_tokens=None,
+            output_tokens=None,
+            raw_response=None,
+        )
+        await session.commit()
+        raise ServiceGeminiUnavailable("Gemini service is unavailable") from exc
+    except GeminiInvalidResponse as exc:
+        duration_ms = int(round((time.perf_counter() - start_time) * 1000))
+        log_llm_exchange(
+            settings=settings,
+            user_id=user_id,
+            menu_date=menu_date,
+            scope="info",
+            model=settings.gemini_menu_model,
+            prompt_version=INFO_NOTE_PROMPT_VERSION,
+            duration_ms=duration_ms,
+            input_tokens=None,
+            output_tokens=None,
+            prompt=prompt,
+            raw_response=exc.raw_text,
+        )
+        await crud.add_generation_log(
+            session=session,
+            user_id=user_id,
+            menu_date=menu_date,
+            scope="info",
+            model=settings.gemini_menu_model,
+            prompt_version=INFO_NOTE_PROMPT_VERSION,
+            prompt=prompt,
+            duration_ms=duration_ms,
             input_tokens=None,
             output_tokens=None,
             raw_response=exc.raw_text,
@@ -176,6 +241,8 @@ async def answer_info_note(
             scope="info",
             model=settings.gemini_menu_model,
             prompt_version=INFO_NOTE_PROMPT_VERSION,
+            prompt=prompt,
+            duration_ms=duration_ms,
             input_tokens=gemini_result.input_tokens,
             output_tokens=gemini_result.output_tokens,
             raw_response=gemini_result.raw_text,
@@ -193,6 +260,8 @@ async def answer_info_note(
         scope="info",
         model=settings.gemini_menu_model,
         prompt_version=INFO_NOTE_PROMPT_VERSION,
+        prompt=prompt,
+        duration_ms=duration_ms,
         input_tokens=gemini_result.input_tokens,
         output_tokens=gemini_result.output_tokens,
         raw_response=gemini_result.raw_text,
