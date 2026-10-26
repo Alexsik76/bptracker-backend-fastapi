@@ -15,7 +15,6 @@ from nutrition.models import (
     GenerationResultRead,
     GenerationScope,
     MenuItemCreate,
-    MenuStatus,
 )
 from nutrition.service.context import build_generation_context
 from nutrition.service.prompt import PROMPT_VERSION, build_generation_prompt
@@ -65,6 +64,10 @@ class GenerationError(Exception):
     """Base exception for generation service errors."""
 
 
+class InvalidGenerationRequest(GenerationError):
+    """Client request parameters are invalid (e.g. missing slot in slot scope)."""
+
+
 class ProfileNotFoundError(GenerationError):
     """Nutrition profile not found."""
 
@@ -91,7 +94,7 @@ async def generate_menu(
 ) -> GenerationResultRead:
     """Generate or update nutrition menu propositions for the specified scope."""
     if scope == GenerationScope.SLOT and not slot:
-        raise ValueError("Slot name is required when scope is 'slot'")
+        raise InvalidGenerationRequest("Slot name is required when scope is 'slot'")
 
     # 1. Build context using CRUD
     context = await build_generation_context(
@@ -115,6 +118,12 @@ async def generate_menu(
     await session.commit()
 
     # 3. Call Gemini (outside open transaction)
+    allowed_slots = (
+        [m.name for m in context.profile.meals]
+        if (context.profile and context.profile.meals)
+        else ["Сніданок", "Обід", "Вечеря"]
+    )
+
     raw_response_text: str | None
     input_tokens: int | None = None
     output_tokens: int | None = None
@@ -127,7 +136,9 @@ async def generate_menu(
             model=settings.gemini_menu_model,
             settings=settings,
             response_schema=build_gemini_response_schema(
-                context.dishes_map.keys(), context.products_map.keys()
+                context.dishes_map.keys(),
+                context.products_map.keys(),
+                allowed_slots=allowed_slots,
             ),
         )
         duration_ms = int(round((time.perf_counter() - start_time) * 1000))
@@ -221,6 +232,7 @@ async def generate_menu(
             products_map=context.products_map,
             existing_menus=context.existing_day_menus,
             target_slot=slot if scope == GenerationScope.SLOT else None,
+            allowed_slots=allowed_slots,
         )
     except (ValidationError, ValueError) as exc:
         logger.warning("Generation response schema validation failed for user %s: %s", user_id, exc)
@@ -264,10 +276,9 @@ async def generate_menu(
 
     for target_meal_slot, new_items in items_by_slot.items():
         existing_menu_read = existing_menus_by_slot.get(target_meal_slot)
-        # If meal is already eaten or skipped, never overwrite it
-        if existing_menu_read and existing_menu_read.status in (
-            MenuStatus.EATEN,
-            MenuStatus.SKIPPED,
+        # If all items in this slot are marked (eaten/skipped), skip it entirely
+        if existing_menu_read and existing_menu_read.items and all(
+            it.status is not None for it in existing_menu_read.items
         ):
             continue
 
@@ -297,9 +308,6 @@ async def generate_menu(
         output_tokens=output_tokens,
         raw_response=raw_response_text,
     )
-
-    # Check completeness of all active meals in session
-    await crud.evaluate_active_menus_completeness(session, user_id)
 
     # Commit all changes atomically
     await session.commit()

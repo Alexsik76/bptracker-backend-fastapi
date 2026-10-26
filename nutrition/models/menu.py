@@ -1,6 +1,6 @@
 from datetime import date as dt_date
 from datetime import datetime
-from typing import ClassVar
+from typing import ClassVar, Literal
 from uuid import UUID
 
 import sqlalchemy as sa
@@ -20,30 +20,22 @@ from sqlalchemy import (
 )
 from sqlmodel import Field, SQLModel
 
-from nutrition.models.enums import GenerationScope, MenuItemOrigin, MenuStatus
+from nutrition.models.enums import (
+    GenerationScope,
+    MenuItemOrigin,
+    MenuItemStatus,
+    MenuStatus,
+)
 from nutrition.models.notes_and_offplan import MenuNoteRead, OffPlanEntryRead
 
 
 class MenuBase(SQLModel):
-    date: dt_date = Field(sa_column=Column(Date, nullable=False))
+    date: dt_date = Field(sa_column=Column(Date, nullable=False, index=True))
     slot: str = Field(sa_column=Column(String, nullable=False))
-    status: MenuStatus = Field(
-        default=MenuStatus.PLANNED,
-        sa_column=Column(
-            sa.Enum(
-                MenuStatus,
-                name="menustatus",
-                values_callable=lambda x: [e.value for e in x],
-            ),
-            nullable=False,
-            default=MenuStatus.PLANNED,
-        ),
+    regenerations: int = Field(
+        default=0,
+        sa_column=Column(Integer, nullable=False, server_default=text("0")),
     )
-    eaten_at: datetime | None = Field(
-        default=None,
-        sa_column=Column(DateTime(timezone=True), nullable=True),
-    )
-    regenerations: int = Field(default=0, sa_column=Column(Integer, nullable=False))
 
 
 class Menu(MenuBase, table=True):
@@ -105,7 +97,25 @@ class MenuItemBase(SQLModel):
             nullable=False,
         ),
     )
-    position: int = Field(default=0, sa_column=Column(Integer, nullable=False))
+    position: int = Field(
+        default=0,
+        sa_column=Column(Integer, nullable=False, server_default=text("0")),
+    )
+    status: MenuItemStatus | None = Field(
+        default=None,
+        sa_column=Column(
+            sa.Enum(
+                MenuItemStatus,
+                name="menuitemstatus",
+                values_callable=lambda x: [e.value for e in x],
+            ),
+            nullable=True,
+        ),
+    )
+    eaten_at: datetime | None = Field(
+        default=None,
+        sa_column=Column(DateTime(timezone=True), nullable=True),
+    )
 
 
 class MenuItem(MenuItemBase, table=True):
@@ -137,6 +147,8 @@ class MenuItemCreate(SQLModel):
     portion_text: str | None = None
     kcal_est: int | None = None
     position: int = 0
+    status: MenuItemStatus | None = None
+    eaten_at: datetime | None = None
 
     @model_validator(mode="after")
     def validate_reference(self) -> "MenuItemCreate":
@@ -150,6 +162,7 @@ class MenuItemCreate(SQLModel):
 class MenuItemRead(MenuItemBase):
     id: UUID
     menu_id: UUID
+    incomplete: bool = False
 
 
 class MenuItemUpdate(SQLModel):
@@ -160,6 +173,8 @@ class MenuItemUpdate(SQLModel):
     portion_text: str | None = None
     kcal_est: int | None = None
     position: int | None = None
+    status: MenuItemStatus | None = None
+    eaten_at: datetime | None = None
 
 
 class MenuRead(SQLModel):
@@ -176,7 +191,7 @@ class MenuRead(SQLModel):
 
 
 class MenuUpdate(SQLModel):
-    status: MenuStatus | None = None
+    status: Literal["eaten", "skipped", "planned"] | None = None
     eaten_at: datetime | None = None
 
 

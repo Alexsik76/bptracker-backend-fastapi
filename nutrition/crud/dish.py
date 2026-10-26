@@ -5,7 +5,6 @@ from uuid import UUID
 from sqlmodel import col, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from nutrition.crud.menu import evaluate_active_menus_completeness
 from nutrition.models import (
     Dish,
     DishComponent,
@@ -118,13 +117,12 @@ async def update_dish(
     user_id: UUID,
     data: DishUpdate,
 ) -> DishRead | None:
-    """Update a dish and re-evaluate active menus if remaining_g changed."""
+    """Update a dish and its components."""
     statement = select(Dish).where(Dish.id == dish_id, Dish.user_id == user_id)
     dish = (await session.exec(statement)).first()
     if dish is None:
         return None
 
-    old_remaining = dish.remaining_g
     updates = data.model_dump(exclude_unset=True, exclude={"components"})
     for field, value in updates.items():
         setattr(dish, field, value)
@@ -141,9 +139,6 @@ async def update_dish(
             comp = DishComponent.model_validate(comp_in, update={"dish_id": dish.id})
             session.add(comp)
 
-    if "remaining_g" in updates and updates["remaining_g"] != old_remaining:
-        await evaluate_active_menus_completeness(session, user_id)
-
     await session.commit()
     await session.refresh(dish)
 
@@ -157,13 +152,11 @@ async def delete_dish(
     dish_id: UUID,
     user_id: UUID,
 ) -> bool:
-    """Delete a user's dish. Cascades to components; triggers completeness check on active menus."""
+    """Delete a user's dish. Cascades to components."""
     statement = select(Dish).where(Dish.id == dish_id, Dish.user_id == user_id)
     dish = (await session.exec(statement)).first()
     if dish is None:
         return False
     await session.delete(dish)
-    await session.flush()
-    await evaluate_active_menus_completeness(session, user_id)
     await session.commit()
     return True

@@ -26,7 +26,11 @@ from nutrition.service.generator import (
     log_llm_exchange,
 )
 
-INFO_NOTE_PROMPT_VERSION = "2026-10-24.1"
+INFO_NOTE_PROMPT_VERSION = "2026-10-26.1"
+
+
+class InvalidNoteRequest(Exception):
+    """Note request validation error (e.g. empty text, unsupported note kind)."""
 
 logger = logging.getLogger(__name__)
 
@@ -75,6 +79,7 @@ def build_info_note_prompt(
                 "items": [
                     {
                         "title": it.title,
+                        "status": it.status.value if it.status else None,
                         "portion_g": it.portion_g,
                         "portion_text": it.portion_text,
                         "kcal_est": it.kcal_est,
@@ -326,7 +331,7 @@ async def process_menu_note(
 ) -> MenuNoteRead:
     text = data.text.strip()
     if not text:
-        raise ValueError("Note text cannot be empty")
+        raise InvalidNoteRequest("Note text cannot be empty")
 
     if data.kind == MenuNoteKind.INFO:
         return await answer_info_note(
@@ -344,4 +349,4 @@ async def process_menu_note(
             text=text,
             settings=settings,
         )
-    raise ValueError(f"Unsupported note kind: {data.kind}")
+    raise InvalidNoteRequest(f"Unsupported note kind: {data.kind}")

@@ -5,7 +5,6 @@ from uuid import UUID
 from sqlmodel import col, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from nutrition.crud.menu import evaluate_active_menus_completeness
 from nutrition.models import Product, ProductAvailability, ProductCreate, ProductUpdate
 
 
@@ -72,19 +71,15 @@ async def update_product(
     user_id: UUID,
     data: ProductUpdate,
 ) -> Product | None:
-    """Apply partial updates to a user's product and evaluate active menus completeness."""
+    """Apply partial updates to a user's product."""
     product = await get_product(session, product_id, user_id)
     if product is None:
         return None
-    old_availability = product.availability
     updates = data.model_dump(exclude_unset=True)
     for field, value in updates.items():
         setattr(product, field, value)
     product.updated_at = datetime.now(UTC)
     session.add(product)
-
-    if "availability" in updates and updates["availability"] != old_availability:
-        await evaluate_active_menus_completeness(session, user_id)
 
     await session.commit()
     await session.refresh(product)
@@ -96,12 +91,10 @@ async def delete_product(
     product_id: UUID,
     user_id: UUID,
 ) -> bool:
-    """Delete a user's product and evaluate active menus completeness."""
+    """Delete a user's product."""
     product = await get_product(session, product_id, user_id)
     if product is None:
         return False
     await session.delete(product)
-    await session.flush()
-    await evaluate_active_menus_completeness(session, user_id)
     await session.commit()
     return True

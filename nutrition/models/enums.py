@@ -28,11 +28,17 @@ class MenuItemOrigin(StrEnum):
     MANUAL = "manual"
 
 
+class MenuItemStatus(StrEnum):
+    EATEN = "eaten"
+    SKIPPED = "skipped"
+
+
 class MenuStatus(StrEnum):
     PLANNED = "planned"
     INCOMPLETE = "incomplete"
     EATEN = "eaten"
     SKIPPED = "skipped"
+    PARTIAL = "partial"
 
 
 class GenerationScope(StrEnum):

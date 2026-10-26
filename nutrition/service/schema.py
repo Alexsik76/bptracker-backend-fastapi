@@ -6,7 +6,13 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field, model_validator
 
-from nutrition.models import DishKind, DishRead, MenuRead, MenuStatus, ProductRead
+from nutrition.models import (
+    DishKind,
+    DishRead,
+    MenuItemStatus,
+    MenuRead,
+    ProductRead,
+)
 
 
 class GeneratedMenuItem(BaseModel):
@@ -116,9 +122,14 @@ GEMINI_RESPONSE_SCHEMA: dict[str, Any] = {
 def build_gemini_response_schema(
     dish_ids: Iterable[UUID],
     product_ids: Iterable[UUID],
+    allowed_slots: Iterable[str] | None = None,
 ) -> dict[str, Any]:
     schema = deepcopy(GEMINI_RESPONSE_SCHEMA)
     item_props = schema["properties"]["items"]["items"]["properties"]
+
+    if allowed_slots:
+        item_props["slot"]["format"] = "enum"
+        item_props["slot"]["enum"] = list(allowed_slots)
 
     dish_enum = [str(id) for id in dish_ids]
     if dish_enum:
@@ -139,39 +150,53 @@ def validate_generation_response(
     products_map: dict[UUID, ProductRead],
     existing_menus: list[MenuRead],
     target_slot: str | None = None,
+    allowed_slots: Iterable[str] | None = None,
 ) -> None:
     """Validate that generated items reference available entities and obey limits.
 
     Raises ValueError on validation failure.
     """
-    # Ready dish remaining_g in DB already has EATEN meals deducted (via crud.update_menu).
-    # Product daily_limit_g is a daily cap, so EATEN meals still count toward product_portions_used.
+    if allowed_slots:
+        allowed_slots_set = set(allowed_slots)
+        for item in response.items:
+            if item.slot not in allowed_slots_set:
+                raise ValueError(
+                    f"Generated slot '{item.slot}' is not allowed in profile schedule. "
+                    f"Allowed slots: {sorted(allowed_slots_set)}"
+                )
+
+    # Ready dish remaining_g in DB already has EATEN items deducted.
+    # Product daily_limit_g is a daily cap, so EATEN items still count toward product_portions_used.
     dish_portions_used: dict[UUID, int] = {}
     product_portions_used: dict[UUID, int] = {}
     locked_slots: set[str] = set()
 
     for menu in existing_menus:
-        if menu.status in (MenuStatus.EATEN, MenuStatus.SKIPPED):
+        # A slot whose items are all marked (eaten/skipped) is locked/skipped
+        if menu.items and all(it.status is not None for it in menu.items):
             locked_slots.add(menu.slot)
-            if menu.status == MenuStatus.EATEN:
-                for item in menu.items:
-                    if item.product_id and item.portion_g:
-                        product_portions_used[item.product_id] = (
-                            product_portions_used.get(item.product_id, 0) + item.portion_g
-                        )
-        elif target_slot and menu.slot != target_slot:
-            # Regenerating a single slot: other planned slots on the same day keep reservations
-            for item in menu.items:
-                if item.dish_id and item.portion_g:
-                    dish_portions_used[item.dish_id] = (
-                        dish_portions_used.get(item.dish_id, 0) + item.portion_g
-                    )
+
+        for item in menu.items:
+            if item.status == MenuItemStatus.EATEN:
                 if item.product_id and item.portion_g:
                     product_portions_used[item.product_id] = (
                         product_portions_used.get(item.product_id, 0) + item.portion_g
                     )
 
-    # Ignore items for locked (eaten/skipped) slots since generator never overwrites them
+        if target_slot and menu.slot != target_slot:
+            # In slot scope, unmarked items of other slots keep reserving portions
+            for item in menu.items:
+                if item.status is None:
+                    if item.dish_id and item.portion_g:
+                        dish_portions_used[item.dish_id] = (
+                            dish_portions_used.get(item.dish_id, 0) + item.portion_g
+                        )
+                    if item.product_id and item.portion_g:
+                        product_portions_used[item.product_id] = (
+                            product_portions_used.get(item.product_id, 0) + item.portion_g
+                        )
+
+    # Ignore items for locked slots since generator never overwrites them
     if target_slot:
         relevant_items = [
             it for it in response.items if it.slot == target_slot and it.slot not in locked_slots
