@@ -9,62 +9,47 @@ from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from config import get_settings
-from gemini_infra.types import GeminiInvalidResponse, GeminiResult, GeminiUnavailable
+from gemini_infra import GeminiInvalidResponse, GeminiResult, GeminiUnavailable
 from nutrition import crud
 from nutrition.models import (
     DayMenuRead,
     GenerationLog,
-    KcalSource,
     MealType,
     MenuItem,
     MenuItemCreate,
     MenuItemUpdate,
     MenuUpdate,
+    NutritionSource,
 )
 from nutrition.service.estimator import (
     ESTIMATE_PROMPT_VERSION,
     estimate_day_kcal,
 )
-from nutrition.service.generator import (
-    ServiceGenerationInvalidResponse,
-)
+from nutrition.service.generator import ServiceGenerationInvalidResponse
 
 
 @pytest.mark.asyncio
 async def test_estimate_stores_model_values(
-    client: AsyncClient, session: AsyncSession, test_user_id: UUID
+    session: AsyncSession, test_user_id: UUID
 ):
     settings = get_settings()
     test_date = date(2026, 10, 27)
     user_id = test_user_id
 
-    # 1. Create a ready dish
-    dish = (
-        await client.post(
-            "/nutrition/dishes",
-            json={
-                "name": "Гречка відварна",
-                "kind": "ready",
-                "cooked_weight_g": 500,
-                "cooked_on": "2026-10-27",
-            },
-        )
-    ).json()
-
-    # 2. Add dish item without kcal_est
+    # 1. Add free-text item without kcal
     item1 = await crud.add_menu_item(
         session,
         user_id,
         test_date,
         MealType.BREAKFAST,
         MenuItemCreate(
-            dish_id=UUID(dish["id"]),
+            title="Гречка відварна",
             portion_g=200,
             portion_text="200 г",
         ),
     )
 
-    # 3. Add free-text item without kcal_est
+    # 2. Add another free-text item without kcal
     item2 = await crud.add_menu_item(
         session,
         user_id,
@@ -77,7 +62,7 @@ async def test_estimate_stores_model_values(
         ),
     )
 
-    # 4. Add user-provided kcal item
+    # 3. Add user-provided kcal item
     item3 = await crud.add_menu_item(
         session,
         user_id,
@@ -86,11 +71,11 @@ async def test_estimate_stores_model_values(
         MenuItemCreate(
             title="Кава чорна",
             portion_text="1 чашка",
-            kcal_est=5,
+            kcal=5.0,
         ),
     )
 
-    # 5. Add item to Lunch, mark Lunch eaten without kcal_est
+    # 4. Add item to Lunch, mark Lunch eaten without kcal
     item4 = await crud.add_menu_item(
         session,
         user_id,
@@ -113,15 +98,39 @@ async def test_estimate_stores_model_values(
     mock_gemini = GeminiResult(
         data={
             "items": [
-                {"id": str(item1.id), "kcal_est": 220},
-                {"id": str(item2.id), "kcal_est": 15},
+                {
+                    "id": str(item1.id),
+                    "kcal": 220.0,
+                    "protein_g": 6.0,
+                    "fat_g": 2.0,
+                    "carbs_g": 40.0,
+                },
+                {
+                    "id": str(item2.id),
+                    "kcal": 15.0,
+                    "protein_g": 0.8,
+                    "fat_g": 0.1,
+                    "carbs_g": 3.0,
+                },
             ]
         },
         raw_text=json.dumps(
             {
                 "items": [
-                    {"id": str(item1.id), "kcal_est": 220},
-                    {"id": str(item2.id), "kcal_est": 15},
+                    {
+                        "id": str(item1.id),
+                        "kcal": 220.0,
+                        "protein_g": 6.0,
+                        "fat_g": 2.0,
+                        "carbs_g": 40.0,
+                    },
+                    {
+                        "id": str(item2.id),
+                        "kcal": 15.0,
+                        "protein_g": 0.8,
+                        "fat_g": 0.1,
+                        "carbs_g": 3.0,
+                    },
                 ]
             }
         ),
@@ -150,17 +159,17 @@ async def test_estimate_stores_model_values(
 
     # Verify return day_menu items
     items_by_id = {it.id: it for m in day_menu.menus for it in m.items}
-    assert items_by_id[item1.id].kcal_est == 220
-    assert items_by_id[item1.id].kcal_source == KcalSource.MODEL
+    assert items_by_id[item1.id].kcal == 220.0
+    assert items_by_id[item1.id].nutrition_source == NutritionSource.MODEL
 
-    assert items_by_id[item2.id].kcal_est == 15
-    assert items_by_id[item2.id].kcal_source == KcalSource.MODEL
+    assert items_by_id[item2.id].kcal == 15.0
+    assert items_by_id[item2.id].nutrition_source == NutritionSource.MODEL
 
-    assert items_by_id[item3.id].kcal_est == 5
-    assert items_by_id[item3.id].kcal_source == KcalSource.USER
+    assert items_by_id[item3.id].kcal == 5.0
+    assert items_by_id[item3.id].nutrition_source == NutritionSource.USER
 
-    assert items_by_id[item4.id].kcal_est is None
-    assert items_by_id[item4.id].kcal_source is None
+    assert items_by_id[item4.id].kcal is None
+    assert items_by_id[item4.id].nutrition_source is None
 
     # Check generation_log
     log_stmt = select(GenerationLog).where(
@@ -183,7 +192,7 @@ async def test_nothing_to_estimate_makes_no_gemini_call(
     test_date = date(2026, 10, 28)
     user_id = test_user_id
 
-    # Item with kcal_est already populated
+    # Item with kcal already populated
     await crud.add_menu_item(
         session,
         user_id,
@@ -192,10 +201,10 @@ async def test_nothing_to_estimate_makes_no_gemini_call(
         MenuItemCreate(
             title="Суп",
             portion_g=300,
-            kcal_est=180,
+            kcal=180.0,
         ),
     )
-    # Item with kcal_est already populated
+    # Item with kcal already populated
     await crud.add_menu_item(
         session,
         user_id,
@@ -204,7 +213,7 @@ async def test_nothing_to_estimate_makes_no_gemini_call(
         MenuItemCreate(
             title="Десерт",
             portion_g=100,
-            kcal_est=250,
+            kcal=250.0,
         ),
     )
 
@@ -249,7 +258,17 @@ async def test_invalid_ids_rejected(session: AsyncSession, test_user_id: UUID):
     # 1. Unknown ID returned by Gemini
     unknown_id = str(uuid4())
     mock_gemini = GeminiResult(
-        data={"items": [{"id": unknown_id, "kcal_est": 180}]},
+        data={
+            "items": [
+                {
+                    "id": unknown_id,
+                    "kcal": 180.0,
+                    "protein_g": 18.0,
+                    "fat_g": 5.0,
+                    "carbs_g": 3.0,
+                }
+            ]
+        },
         raw_text="{}",
         model=settings.gemini_menu_model,
         input_tokens=100,
@@ -269,8 +288,20 @@ async def test_invalid_ids_rejected(session: AsyncSession, test_user_id: UUID):
     mock_gemini_dup = GeminiResult(
         data={
             "items": [
-                {"id": str(item.id), "kcal_est": 180},
-                {"id": str(item.id), "kcal_est": 180},
+                {
+                    "id": str(item.id),
+                    "kcal": 180.0,
+                    "protein_g": 18.0,
+                    "fat_g": 5.0,
+                    "carbs_g": 3.0,
+                },
+                {
+                    "id": str(item.id),
+                    "kcal": 180.0,
+                    "protein_g": 18.0,
+                    "fat_g": 5.0,
+                    "carbs_g": 3.0,
+                },
             ]
         },
         raw_text="{}",
@@ -290,7 +321,17 @@ async def test_invalid_ids_rejected(session: AsyncSession, test_user_id: UUID):
 
     # 3. Negative kcal returned
     mock_gemini_neg = GeminiResult(
-        data={"items": [{"id": str(item.id), "kcal_est": -50}]},
+        data={
+            "items": [
+                {
+                    "id": str(item.id),
+                    "kcal": -50.0,
+                    "protein_g": 10.0,
+                    "fat_g": 1.0,
+                    "carbs_g": 2.0,
+                }
+            ]
+        },
         raw_text="{}",
         model=settings.gemini_menu_model,
         input_tokens=100,
@@ -339,14 +380,14 @@ async def test_reset_after_manual_edit(session: AsyncSession, test_user_id: UUID
         MenuItemCreate(
             title="Рагу овочеве",
             portion_g=250,
-            kcal_est=180,
+            kcal=180.0,
         ),
     )
     # Simulate that it was estimated by model
     item_db = (
         await session.exec(select(MenuItem).where(MenuItem.id == item.id))
     ).first()
-    item_db.kcal_source = KcalSource.MODEL
+    item_db.nutrition_source = NutritionSource.MODEL
     session.add(item_db)
     await session.commit()
 
@@ -357,25 +398,25 @@ async def test_reset_after_manual_edit(session: AsyncSession, test_user_id: UUID
         user_id,
         MenuItemUpdate(portion_g=250, title="Рагу овочеве"),
     )
-    assert unchanged.kcal_est == 180
-    assert unchanged.kcal_source == KcalSource.MODEL
+    assert unchanged.kcal == 180.0
+    assert unchanged.nutrition_source == NutritionSource.MODEL
 
-    # Edit portion_g with CHANGED value -> resets kcal_est & kcal_source to None
+    # Edit portion_g with CHANGED value -> resets kcal & nutrition_source to None
     updated = await crud.update_menu_item(
         session,
         item.id,
         user_id,
         MenuItemUpdate(portion_g=300),
     )
-    assert updated.kcal_est is None
-    assert updated.kcal_source is None
+    assert updated.kcal is None
+    assert updated.nutrition_source is None
 
     # Restore model estimate
     item_db = (
         await session.exec(select(MenuItem).where(MenuItem.id == item.id))
     ).first()
-    item_db.kcal_est = 200
-    item_db.kcal_source = KcalSource.MODEL
+    item_db.kcal = 200.0
+    item_db.nutrition_source = NutritionSource.MODEL
     session.add(item_db)
     await session.commit()
 
@@ -386,15 +427,15 @@ async def test_reset_after_manual_edit(session: AsyncSession, test_user_id: UUID
         user_id,
         MenuItemUpdate(title="Рагу з квасолею"),
     )
-    assert updated.kcal_est is None
-    assert updated.kcal_source is None
+    assert updated.kcal is None
+    assert updated.nutrition_source is None
 
     # Restore model estimate
     item_db = (
         await session.exec(select(MenuItem).where(MenuItem.id == item.id))
     ).first()
-    item_db.kcal_est = 200
-    item_db.kcal_source = KcalSource.MODEL
+    item_db.kcal = 200.0
+    item_db.nutrition_source = NutritionSource.MODEL
     session.add(item_db)
     await session.commit()
 
@@ -405,18 +446,18 @@ async def test_reset_after_manual_edit(session: AsyncSession, test_user_id: UUID
         user_id,
         MenuItemUpdate(position=2),
     )
-    assert updated.kcal_est == 200
-    assert updated.kcal_source == KcalSource.MODEL
+    assert updated.kcal == 200.0
+    assert updated.nutrition_source == NutritionSource.MODEL
 
-    # Edit portion_g AND set kcal_est -> sets user kcal
+    # Edit portion_g AND set kcal -> sets user kcal
     updated = await crud.update_menu_item(
         session,
         item.id,
         user_id,
-        MenuItemUpdate(portion_g=350, kcal_est=280),
+        MenuItemUpdate(portion_g=350, kcal=280.0),
     )
-    assert updated.kcal_est == 280
-    assert updated.kcal_source == KcalSource.USER
+    assert updated.kcal == 280.0
+    assert updated.nutrition_source == NutritionSource.USER
 
     # Now item has USER kcal -> editing portion_g alone keeps user kcal
     updated = await crud.update_menu_item(
@@ -425,8 +466,8 @@ async def test_reset_after_manual_edit(session: AsyncSession, test_user_id: UUID
         user_id,
         MenuItemUpdate(portion_g=400),
     )
-    assert updated.kcal_est == 280
-    assert updated.kcal_source == KcalSource.USER
+    assert updated.kcal == 280.0
+    assert updated.nutrition_source == NutritionSource.USER
 
 
 @pytest.mark.asyncio
@@ -434,7 +475,7 @@ async def test_kcal_incomplete_flags(session: AsyncSession, test_user_id: UUID):
     test_date = date(2026, 10, 31)
     user_id = test_user_id
 
-    # 1. Unmarked item without kcal_est -> both menu and day_menu are kcal_incomplete
+    # 1. Unmarked item without kcal -> both menu and day_menu are kcal_incomplete
     item = await crud.add_menu_item(
         session,
         user_id,
@@ -452,11 +493,11 @@ async def test_kcal_incomplete_flags(session: AsyncSession, test_user_id: UUID):
     day_read = DayMenuRead(date=test_date, menus=day_menus)
     assert day_read.kcal_incomplete is True
 
-    # 2. Item with kcal_est populated (e.g. by model estimation) -> kcal_incomplete is False
+    # 2. Item with kcal populated (e.g. by model estimation) -> kcal_incomplete is False
     item_db = (
         await session.exec(select(MenuItem).where(MenuItem.id == item.id))
     ).first()
-    item_db.kcal_est = 160
+    item_db.kcal = 160.0
     session.add(item_db)
     await session.commit()
     day_menus = await crud.get_day_menus(session, user_id, test_date)
@@ -501,7 +542,17 @@ async def test_endpoint_happy_path_and_errors(client: AsyncClient):
 
     # 3. Happy path: estimate only one meal type
     mock_gemini_slot = GeminiResult(
-        data={"items": [{"id": item1_id, "kcal_est": 340}]},
+        data={
+            "items": [
+                {
+                    "id": item1_id,
+                    "kcal": 340.0,
+                    "protein_g": 8.0,
+                    "fat_g": 10.0,
+                    "carbs_g": 50.0,
+                }
+            ]
+        },
         raw_text="{}",
         model="gemini-2.0-flash",
         input_tokens=100,
@@ -513,8 +564,8 @@ async def test_endpoint_happy_path_and_errors(client: AsyncClient):
         assert est_resp.status_code == 200
         data = est_resp.json()
         breakfast = [m for m in data["menus"] if m["meal_type"] == "breakfast"][0]
-        assert breakfast["items"][0]["kcal_est"] == 340
-        assert breakfast["items"][0]["kcal_source"] == "model"
+        assert breakfast["items"][0]["kcal"] == 340.0
+        assert breakfast["items"][0]["nutrition_source"] == "model"
         assert breakfast["kcal_incomplete"] is False
         # Lunch still incomplete, so day is incomplete
         lunch = [m for m in data["menus"] if m["meal_type"] == "lunch"][0]
@@ -523,7 +574,17 @@ async def test_endpoint_happy_path_and_errors(client: AsyncClient):
 
     # 4. Happy path: estimate remaining items for day
     mock_gemini_day = GeminiResult(
-        data={"items": [{"id": item2_id, "kcal_est": 250}]},
+        data={
+            "items": [
+                {
+                    "id": item2_id,
+                    "kcal": 250.0,
+                    "protein_g": 10.0,
+                    "fat_g": 8.0,
+                    "carbs_g": 30.0,
+                }
+            ]
+        },
         raw_text="{}",
         model="gemini-2.0-flash",
         input_tokens=100,
@@ -536,8 +597,8 @@ async def test_endpoint_happy_path_and_errors(client: AsyncClient):
         data = est_resp.json()
         assert data["kcal_incomplete"] is False
         lunch = [m for m in data["menus"] if m["meal_type"] == "lunch"][0]
-        assert lunch["items"][0]["kcal_est"] == 250
-        assert lunch["items"][0]["kcal_source"] == "model"
+        assert lunch["items"][0]["kcal"] == 250.0
+        assert lunch["items"][0]["nutrition_source"] == "model"
         assert lunch["kcal_incomplete"] is False
 
 
@@ -554,7 +615,17 @@ async def test_unchanged_patch_keeps_model_estimate(client: AsyncClient):
 
     # 2. Estimate with Gemini
     mock_gemini = GeminiResult(
-        data={"items": [{"id": item_id, "kcal_est": 210}]},
+        data={
+            "items": [
+                {
+                    "id": item_id,
+                    "kcal": 210.0,
+                    "protein_g": 8.0,
+                    "fat_g": 5.0,
+                    "carbs_g": 35.0,
+                }
+            ]
+        },
         raw_text="{}",
         model="gemini-2.0-flash",
         input_tokens=100,
@@ -565,8 +636,8 @@ async def test_unchanged_patch_keeps_model_estimate(client: AsyncClient):
         est_resp = await client.post(f"/nutrition/menus/{date_str}/estimate")
         assert est_resp.status_code == 200
         breakfast = [m for m in est_resp.json()["menus"] if m["meal_type"] == "breakfast"][0]
-        assert breakfast["items"][0]["kcal_est"] == 210
-        assert breakfast["items"][0]["kcal_source"] == "model"
+        assert breakfast["items"][0]["kcal"] == 210.0
+        assert breakfast["items"][0]["nutrition_source"] == "model"
 
     # 3. PATCH simulating web client sending portion_g and portion_text unchanged
     patch_resp = await client.patch(
@@ -579,8 +650,8 @@ async def test_unchanged_patch_keeps_model_estimate(client: AsyncClient):
     )
     assert patch_resp.status_code == 200
     patched_item = patch_resp.json()
-    assert patched_item["kcal_est"] == 210
-    assert patched_item["kcal_source"] == "model"
+    assert patched_item["kcal"] == 210.0
+    assert patched_item["nutrition_source"] == "model"
 
     menu_id = resp.json()["menu_id"]
 
@@ -612,5 +683,5 @@ async def test_unchanged_patch_keeps_model_estimate(client: AsyncClient):
     )
     assert change_resp.status_code == 200
     changed_item = change_resp.json()
-    assert changed_item["kcal_est"] is None
-    assert changed_item["kcal_source"] is None
+    assert changed_item["kcal"] is None
+    assert changed_item["nutrition_source"] is None

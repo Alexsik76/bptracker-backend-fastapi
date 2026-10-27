@@ -46,31 +46,14 @@ async def test_pin_crud_and_slot_validation(client: AsyncClient):
         "/nutrition/pinned-meals/afternoon_snack",
         json={
             "active": True,
-            "items": [{"title": "Яблуко", "portion_g": 150, "kcal_est": 80}],
+            "items": [{"title": "Яблуко", "portion_g": 150, "kcal": 80.0}],
         },
     )
     assert resp.status_code == 400
     assert "not in the profile schedule" in resp.json()["detail"]
 
     # 2. Reference validation on items:
-    # A) Both dish_id and product_id -> 422
-    dummy_uuid = "01940000-0000-7000-8000-000000000001"
-    resp = await client.put(
-        "/nutrition/pinned-meals/breakfast",
-        json={
-            "active": True,
-            "items": [
-                {
-                    "dish_id": dummy_uuid,
-                    "product_id": dummy_uuid,
-                    "portion_g": 100,
-                }
-            ],
-        },
-    )
-    assert resp.status_code == 422
-
-    # B) Neither dish_id nor product_id and empty title -> 422
+    # A) Empty title when dish_id is not provided -> 422
     resp = await client.put(
         "/nutrition/pinned-meals/breakfast",
         json={
@@ -80,7 +63,7 @@ async def test_pin_crud_and_slot_validation(client: AsyncClient):
     )
     assert resp.status_code == 422
 
-    # 3. Create a dish and a product to test title auto-population
+    # 3. Create a dish to test title auto-population
     dish_resp = await client.post(
         "/nutrition/dishes",
         json={
@@ -93,19 +76,7 @@ async def test_pin_crud_and_slot_validation(client: AsyncClient):
     assert dish_resp.status_code == 201
     dish_id = dish_resp.json()["id"]
 
-    prod_resp = await client.post(
-        "/nutrition/products",
-        json={
-            "name": "Горіхи волоські",
-            "availability": "in_stock",
-            "preference": "preferred",
-            "eat_raw": True,
-        },
-    )
-    assert prod_resp.status_code == 201
-    prod_id = prod_resp.json()["id"]
-
-    # 4. Successfully PUT pinned meal with dish, product, and free text
+    # 4. Successfully PUT pinned meal with dish and free text
     put_resp = await client.put(
         "/nutrition/pinned-meals/breakfast",
         json={
@@ -115,20 +86,20 @@ async def test_pin_crud_and_slot_validation(client: AsyncClient):
                     "dish_id": dish_id,
                     "portion_g": 200,
                     "portion_text": "200 г",
-                    "kcal_est": 250,
+                    "kcal": 250.0,
                     "position": 1,
                 },
                 {
-                    "product_id": prod_id,
+                    "title": "Горіхи волоські",
                     "portion_g": 30,
                     "portion_text": "30 г",
-                    "kcal_est": 195,
+                    "kcal": 195.0,
                     "position": 2,
                 },
                 {
                     "title": "Кава чорна",
                     "portion_text": "1 горнятко",
-                    "kcal_est": 5,
+                    "kcal": 5.0,
                     "position": 3,
                 },
             ],
@@ -142,7 +113,6 @@ async def test_pin_crud_and_slot_validation(client: AsyncClient):
     assert pin_data["items"][0]["title"] == "Вівсянка з медом"
     assert pin_data["items"][0]["dish_id"] == dish_id
     assert pin_data["items"][1]["title"] == "Горіхи волоські"
-    assert pin_data["items"][1]["product_id"] == prod_id
     assert pin_data["items"][2]["title"] == "Кава чорна"
 
     # 5. GET /pinned-meals lists the pinned meal
@@ -179,7 +149,7 @@ async def test_materialization_on_read(client: AsyncClient, session: AsyncSessio
         json={
             "active": True,
             "items": [
-                {"title": "Омлет", "portion_g": 180, "kcal_est": 270, "position": 1},
+                {"title": "Омлет", "portion_g": 180, "kcal": 270.0, "position": 1},
                 {"title": "Чай", "portion_text": "250 мл", "position": 2},
             ],
         },
@@ -211,11 +181,11 @@ async def test_materialization_on_read(client: AsyncClient, session: AsyncSessio
     assert len(today_breakfast["items"]) == 2
     assert today_breakfast["items"][0]["title"] == "Омлет"
     assert today_breakfast["items"][0]["origin"] == "manual"
-    assert today_breakfast["items"][0]["kcal_source"] == "user"
-    assert today_breakfast["items"][0]["kcal_est"] == 270
+    assert today_breakfast["items"][0]["nutrition_source"] == "user"
+    assert today_breakfast["items"][0]["kcal"] == 270.0
     assert today_breakfast["items"][1]["title"] == "Чай"
-    assert today_breakfast["items"][1]["kcal_source"] is None
-    assert today_breakfast["items"][1]["kcal_est"] is None
+    assert today_breakfast["items"][1]["nutrition_source"] is None
+    assert today_breakfast["items"][1]["kcal"] is None
     # Because it is currently pinned, it is NOT in available_pins
     assert not any(p["meal_type"] == "breakfast" for p in today_day["available_pins"])
 
@@ -246,7 +216,7 @@ async def test_pin_update_resyncs_untouched_future_rows(client: AsyncClient):
         "/nutrition/pinned-meals/breakfast",
         json={
             "active": True,
-            "items": [{"title": "Сирники", "portion_g": 150, "kcal_est": 320}],
+            "items": [{"title": "Сирники", "portion_g": 150, "kcal": 320.0}],
         },
     )
 
@@ -272,7 +242,7 @@ async def test_pin_update_resyncs_untouched_future_rows(client: AsyncClient):
         "/nutrition/pinned-meals/breakfast",
         json={
             "active": True,
-            "items": [{"title": "Млинці з сиром", "portion_g": 200, "kcal_est": 410}],
+            "items": [{"title": "Млинці з сиром", "portion_g": 200, "kcal": 410.0}],
         },
     )
 
@@ -288,7 +258,7 @@ async def test_pin_update_resyncs_untouched_future_rows(client: AsyncClient):
     fut_b = next(m for m in fut_res2.json()["menus"] if m["meal_type"] == "breakfast")
     assert len(fut_b["items"]) == 1
     assert fut_b["items"][0]["title"] == "Млинці з сиром"
-    assert fut_b["items"][0]["kcal_est"] == 410
+    assert fut_b["items"][0]["kcal"] == 410.0
 
 
 @pytest.mark.asyncio
@@ -301,7 +271,7 @@ async def test_cross_pinned_meal_and_available_pins_and_restore(client: AsyncCli
         "/nutrition/pinned-meals/breakfast",
         json={
             "active": True,
-            "items": [{"title": "Гречка", "portion_g": 200, "kcal_est": 220}],
+            "items": [{"title": "Гречка", "portion_g": 200, "kcal": 220.0}],
         },
     )
 
@@ -373,8 +343,8 @@ async def test_restore_preserves_marked_items(client: AsyncClient):
         json={
             "active": True,
             "items": [
-                {"title": "Омлет", "portion_g": 150, "kcal_est": 220, "position": 1},
-                {"title": "Тост", "portion_g": 50, "kcal_est": 130, "position": 2},
+                {"title": "Омлет", "portion_g": 150, "kcal": 220.0, "position": 1},
+                {"title": "Тост", "portion_g": 50, "kcal": 130.0, "position": 2},
             ],
         },
     )
@@ -402,7 +372,7 @@ async def test_restore_preserves_marked_items(client: AsyncClient):
     # Add a manual item
     await client.post(
         f"/nutrition/menus/{today}/items?meal_type=breakfast",
-        json={"title": "Апельсин", "portion_g": 100, "kcal_est": 45},
+        json={"title": "Апельсин", "portion_g": 100, "kcal": 45.0},
     )
 
     # Call restore now succeeds
@@ -482,14 +452,27 @@ async def test_generation_leaves_pinned_meal_untouched_and_counts_it_as_context(
 
     # Mock Gemini for estimate and menu generation
     def fake_generate_json(prompt: str, **kwargs):
-        if "оцінити калорійність" in prompt:
+        if "оцінити" in prompt:
             # Estimator called
             item_id = kwargs["response_schema"]["properties"]["items"]["items"]["properties"][
                 "id"
             ]["enum"][0]
             return GeminiResult(
                 model="gemini-2.0-flash",
-                data={"items": [{"id": item_id, "kcal_est": 310}]},
+                data={
+                    "items": [
+                        {
+                            "id": item_id,
+                            "kcal": 310.0,
+                            "protein_g": 10.0,
+                            "fat_g": 5.0,
+                            "carbs_g": 50.0,
+                            "fiber_g": 4.0,
+                            "sugar_g": 2.0,
+                            "sodium_mg": 10.0,
+                        }
+                    ]
+                },
                 raw_text="{}",
                 input_tokens=100,
                 output_tokens=50,
@@ -511,7 +494,6 @@ async def test_generation_leaves_pinned_meal_untouched_and_counts_it_as_context(
                         "title": "Борщ український",
                         "portion_g": 300,
                         "portion_text": "300 г",
-                        "kcal_est": 250,
                         "position": 1,
                     },
                     {
@@ -520,7 +502,6 @@ async def test_generation_leaves_pinned_meal_untouched_and_counts_it_as_context(
                         "title": "Борщ український",
                         "portion_g": 350,
                         "portion_text": "350 г",
-                        "kcal_est": 300,
                         "position": 1,
                     },
                 ],
@@ -555,7 +536,7 @@ async def test_generation_leaves_pinned_meal_untouched_and_counts_it_as_context(
     assert len(breakfast["items"]) == 1
     assert breakfast["items"][0]["title"] == "Вівсянка з ягодами"
     # Its kcal was estimated by estimator
-    assert breakfast["items"][0]["kcal_est"] == 310
+    assert breakfast["items"][0]["kcal"] == 310.0
 
     # Obid was generated with Borshch
     assert obid["pinned"] is False

@@ -65,7 +65,14 @@ async def test_product_persistence(session: AsyncSession, test_user_id: UUID):
         availability=ProductAvailability.IN_STOCK,
         preference=ProductPreference.PREFERRED,
         eat_raw=False,
-        daily_limit_g=100,
+        stock_g=1000,
+        kcal=350.0,
+        protein_g=12.0,
+        fat_g=6.0,
+        carbs_g=60.0,
+        fiber_g=10.0,
+        sugar_g=1.0,
+        sodium_mg=5.0,
     )
     session.add(product)
     await session.commit()
@@ -82,11 +89,20 @@ async def test_product_persistence(session: AsyncSession, test_user_id: UUID):
     assert saved.availability == ProductAvailability.IN_STOCK
     assert saved.preference == ProductPreference.PREFERRED
     assert saved.eat_raw is False
-    assert saved.daily_limit_g == 100
+    assert saved.stock_g == 1000
+    assert saved.kcal == 350.0
+    assert saved.protein_g == 12.0
 
 
 @pytest.mark.asyncio
 async def test_dish_and_components_persistence(session: AsyncSession, test_user_id: UUID):
+    p1 = Product(user_id=test_user_id, name="Вівсяні пластівці")
+    p2 = Product(user_id=test_user_id, name="Яблуко")
+    session.add_all([p1, p2])
+    await session.commit()
+    await session.refresh(p1)
+    await session.refresh(p2)
+
     dish = Dish(
         user_id=test_user_id,
         name="Вівсянка з яблуком",
@@ -103,13 +119,13 @@ async def test_dish_and_components_persistence(session: AsyncSession, test_user_
 
     comp1 = DishComponent(
         dish_id=dish.id,
-        name="Вівсяні пластівці",
-        raw_weight_g=45,
+        product_id=p1.id,
+        weight_g=45,
     )
     comp2 = DishComponent(
         dish_id=dish.id,
-        name="Яблуко",
-        raw_weight_g=100,
+        product_id=p2.id,
+        weight_g=100,
     )
     session.add_all([comp1, comp2])
     await session.commit()
@@ -117,8 +133,8 @@ async def test_dish_and_components_persistence(session: AsyncSession, test_user_
     stmt = select(DishComponent).where(DishComponent.dish_id == dish.id)
     comps = (await session.exec(stmt)).all()
     assert len(comps) == 2
-    names = {c.name for c in comps}
-    assert names == {"Вівсяні пластівці", "Яблуко"}
+    comp_map = {c.product_id: c.weight_g for c in comps}
+    assert comp_map == {p1.id: 45, p2.id: 100}
 
 
 @pytest.mark.asyncio

@@ -1,8 +1,10 @@
+from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
 
 from auth.deps import CurrentUserId
+from config import Settings, get_settings
 from db import SessionDep
 from nutrition import crud
 from nutrition.models import DishCreate, DishKind, DishRead, DishUpdate
@@ -15,8 +17,9 @@ async def create_dish(
     data: DishCreate,
     session: SessionDep,
     user_id: CurrentUserId,
+    settings: Annotated[Settings, Depends(get_settings)],
 ) -> DishRead:
-    return await crud.create_dish(session, user_id, data)
+    return await crud.create_dish(session, user_id, data, settings=settings)
 
 
 @router.get("", response_model=list[DishRead])
@@ -50,8 +53,9 @@ async def update_dish(
     data: DishUpdate,
     session: SessionDep,
     user_id: CurrentUserId,
+    settings: Annotated[Settings, Depends(get_settings)],
 ) -> DishRead:
-    dish = await crud.update_dish(session, dish_id, user_id, data)
+    dish = await crud.update_dish(session, dish_id, user_id, data, settings=settings)
     if dish is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

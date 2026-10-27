@@ -19,12 +19,16 @@ from sqlalchemy import (
 from sqlmodel import Field, SQLModel
 
 from nutrition.models.enums import DishKind, MealType
+from nutrition.models.nutrition import NutritionSet
 
 
 class DishComponentBase(SQLModel):
-    name: str = Field(sa_column=Column(String, nullable=False))
-    raw_weight_g: int | None = Field(default=None, sa_column=Column(Integer, nullable=True))
-    cooked_weight_g: int | None = Field(default=None, sa_column=Column(Integer, nullable=True))
+    product_id: UUID = Field(
+        sa_column=Column(
+            Uuid, ForeignKey("products.id", ondelete="CASCADE"), index=True, nullable=False
+        )
+    )
+    weight_g: int = Field(sa_column=Column(Integer, nullable=False))
 
 
 class DishComponent(DishComponentBase, table=True):
@@ -40,9 +44,30 @@ class DishComponent(DishComponentBase, table=True):
         )
     )
 
+    __table_args__ = (
+        CheckConstraint("weight_g > 0", name="chk_dish_components_weight_g_positive"),
+    )
 
-class DishComponentCreate(DishComponentBase):
-    pass
+
+class NewProductInput(SQLModel):
+    name: str
+    stock_g: int | None = None
+
+
+class DishComponentCreate(SQLModel):
+    product_id: UUID | None = None
+    new_product: NewProductInput | None = None
+    weight_g: int
+
+    @model_validator(mode="after")
+    def validate_component(self) -> "DishComponentCreate":
+        if self.product_id is None and self.new_product is None:
+            raise ValueError("Either product_id or new_product must be provided")
+        if self.product_id is not None and self.new_product is not None:
+            raise ValueError("Cannot provide both product_id and new_product")
+        if self.weight_g <= 0:
+            raise ValueError("weight_g must be > 0")
+        return self
 
 
 class DishComponentRead(DishComponentBase):
@@ -131,7 +156,7 @@ class DishCreate(DishBase):
         return self
 
 
-class DishRead(DishBase):
+class DishRead(DishBase, NutritionSet):
     id: UUID
     user_id: UUID
     created_at: datetime

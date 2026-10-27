@@ -82,7 +82,7 @@ def build_info_note_prompt(
                         "title": it.title,
                         "portion_g": it.portion_g,
                         "portion_text": it.portion_text,
-                        "kcal_est": it.kcal_est,
+                        "kcal": it.kcal,
                     }
                     for it in m.items
                 ],

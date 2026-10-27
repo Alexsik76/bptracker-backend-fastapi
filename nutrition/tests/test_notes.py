@@ -51,8 +51,7 @@ async def setup_test_environment(client: AsyncClient):
         "/nutrition/products",
         json={
             "name": "Яблуко",
-            "category": "Фрукти",
-            "daily_limit_g": 300,
+            "stock_g": 300,
         },
     )
     prod_id = prod_resp.json()["id"]
@@ -116,12 +115,11 @@ async def test_menu_note_correction_regenerates_unmarked_items(
 ):
     env = await setup_test_environment(client)
     dish_id = env["dish_id"]
-    prod_id = env["prod_id"]
 
     # 1. Setup Breakfast as eaten
     breakfast_resp = await client.post(
         "/nutrition/menus/2026-10-24/items?meal_type=breakfast",
-        json={"product_id": prod_id, "portion_g": 100, "kcal_est": 50},
+        json={"title": "Яблуко", "portion_g": 100, "kcal": 50.0},
     )
     breakfast_menu_id = breakfast_resp.json()["menu_id"]
     await client.patch(
@@ -132,7 +130,7 @@ async def test_menu_note_correction_regenerates_unmarked_items(
     # 2. Setup Lunch as planned (with apple)
     lunch_resp = await client.post(
         "/nutrition/menus/2026-10-24/items?meal_type=lunch",
-        json={"product_id": prod_id, "portion_g": 150, "kcal_est": 75},
+        json={"title": "Яблуко", "portion_g": 150, "kcal": 75.0},
     )
     lunch_item_id = lunch_resp.json()["id"]
 
@@ -145,21 +143,17 @@ async def test_menu_note_correction_regenerates_unmarked_items(
                 {
                     "meal_type": "lunch",
                     "dish_id": dish_id,
-                    "product_id": None,
                     "title": "Індичка запечена",
                     "portion_g": 200,
                     "portion_text": "200 г",
-                    "kcal_est": 260,
                     "position": 1,
                 },
                 {
                     "meal_type": "dinner",
                     "dish_id": dish_id,
-                    "product_id": None,
                     "title": "Індичка запечена",
                     "portion_g": 180,
                     "portion_text": "180 г",
-                    "kcal_est": 230,
                     "position": 1,
                 },
             ],
@@ -406,11 +400,9 @@ async def test_menu_generation_with_off_plan_entry_succeeds(
                 {
                     "meal_type": "breakfast",
                     "dish_id": dish_id,
-                    "product_id": None,
                     "title": "Індичка запечена",
                     "portion_g": 200,
                     "portion_text": "200 г",
-                    "kcal_est": 260,
                     "position": 1,
                 }
             ],
@@ -499,11 +491,9 @@ async def test_gemini_called_outside_transaction(
                 {
                     "meal_type": "breakfast",
                     "dish_id": dish_id,
-                    "product_id": None,
                     "title": "Індичка запечена",
                     "portion_g": 200,
                     "portion_text": "200 г",
-                    "kcal_est": 260,
                     "position": 1,
                 }
             ],
@@ -569,6 +559,7 @@ async def test_llm_exchange_log_db_and_stdout(
         output_tokens=45,
     )
 
+    caplog.clear()
     with caplog.at_level(logging.INFO, logger="nutrition.llm"):
         with patch("gemini_infra.generate_json", new_callable=AsyncMock) as mock_gen:
             mock_gen.return_value = mock_result
@@ -627,6 +618,7 @@ async def test_llm_exchange_log_disabled_switches_stdout_off(
     app.dependency_overrides[get_settings] = lambda: current_settings
 
     try:
+        caplog.clear()
         with caplog.at_level(logging.INFO, logger="nutrition.llm"):
             with patch("gemini_infra.generate_json", new_callable=AsyncMock) as mock_gen:
                 mock_gen.return_value = mock_result

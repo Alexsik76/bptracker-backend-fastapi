@@ -1,9 +1,9 @@
 import json
 
-from nutrition.models import MEAL_TYPE_LABELS, KcalSource, MealType, MenuStatus
+from nutrition.models import MEAL_TYPE_LABELS, MealType, MenuStatus, NutritionSource
 from nutrition.service.context import GenerationContext
 
-PROMPT_VERSION = "2026-10-27.3"
+PROMPT_VERSION = "2026-10-27.4"
 
 
 def build_generation_prompt(context: GenerationContext) -> str:
@@ -52,6 +52,12 @@ def build_generation_prompt(context: GenerationContext) -> str:
             else ""
         )
 
+    products_map = {p.id: p.name for p in context.products}
+
+    def _comp_str(c) -> str:
+        name = products_map.get(c.product_id)
+        return f"{name} ({c.weight_g} г)" if name else f"{c.weight_g} г"
+
     ready_dishes_data = [
         {
             "id": str(d.id),
@@ -59,7 +65,7 @@ def build_generation_prompt(context: GenerationContext) -> str:
             "cooked_on": str(d.cooked_on) if d.cooked_on else None,
             "remaining_g": d.remaining_g,
             "cooked_weight_g": d.cooked_weight_g,
-            "components": [c.name for c in d.components],
+            "components": [_comp_str(c) for c in d.components],
         }
         for d in context.ready_dishes
     ]
@@ -70,7 +76,7 @@ def build_generation_prompt(context: GenerationContext) -> str:
             "name": d.name,
             "fixed_meal_type": d.fixed_meal_type.value if d.fixed_meal_type else None,
             "notes": d.notes,
-            "components": [c.name for c in d.components],
+            "components": [_comp_str(c) for c in d.components],
         }
         for d in context.constant_dishes
     ]
@@ -80,7 +86,8 @@ def build_generation_prompt(context: GenerationContext) -> str:
             "id": str(p.id),
             "name": p.name,
             "preference": p.preference.value,
-            "daily_limit_g": p.daily_limit_g,
+            "stock_g": p.stock_g,
+            "available_g": p.available_g,
             "eat_raw": p.eat_raw,
         }
         for p in context.products
@@ -98,22 +105,21 @@ def build_generation_prompt(context: GenerationContext) -> str:
                     {
                         "title": it.title,
                         "dish_id": str(it.dish_id) if it.dish_id else None,
-                        "product_id": str(it.product_id) if it.product_id else None,
                         "portion_g": it.portion_g,
                         "portion_text": it.portion_text,
-                        "kcal_est": (
+                        "kcal": (
                             "not calculated"
-                            if it.kcal_est is None
+                            if it.kcal is None
                             else (
-                                f"{it.kcal_est} (approximate estimate)"
-                                if it.kcal_source == KcalSource.MODEL
-                                else it.kcal_est
+                                f"{it.kcal} (approximate estimate)"
+                                if it.nutrition_source == NutritionSource.MODEL
+                                else it.kcal
                             )
                         ),
-                        "kcal_source": (
+                        "nutrition_source": (
                             "approximate estimate"
-                            if it.kcal_source == KcalSource.MODEL
-                            else (it.kcal_source.value if it.kcal_source else None)
+                            if it.nutrition_source == NutritionSource.MODEL
+                            else (it.nutrition_source.value if it.nutrition_source else None)
                         ),
                     }
                     for it in menu.items
@@ -179,14 +185,13 @@ def build_generation_prompt(context: GenerationContext) -> str:
         "   з розподілом на кілька днів з урахуванням строку зберігання "
         "(риба 1–2 дні, м'ясо до 3 днів).\n"
         "   Сумарна порція готової страви НЕ повинна перевищувати її наявний залишок remaining_g.\n"
-        "3. Додатково використовуються наявні продукти: спочатку бажані (preferred),\n"
-        "   потім нейтральні (neutral); небажані (avoid) — лише якщо немає інших.\n"
-        "4. Денні ліміти продуктів (daily_limit_g) НЕ перевищуються.\n"
+        "3. Постійні страви розподіляються в межах наявного залишку їхніх продуктів.\n"
+        "4. Модель розподіляє тільки наявні страви і ніколи не пропонує нових страв чи продуктів.\n"
         f"5. Помірна кількість жиру за один прийом.{restrictions_note}\n"
         f"{rule_6}"
         "7. Добова ціль — з дефіцитом відносно підтримання для темпу 0,5–1 кг на тиждень.\n"
-        "8. Кожна згенерована позиція містить рівно одне посилання: dish_id АБО product_id.\n"
-        "   Назва (title) має відповідати назві обраної страви чи продукту.\n"
+        "8. Кожна згенерована позиція містить посилання на наявну страву (dish_id).\n"
+        "   Назва (title) має відповідати назві обраної страви.\n"
         "9. Якщо виникає дисбаланс раціону, додай це у shopping_list (рекомендації докупити)."
     )
 
@@ -249,7 +254,9 @@ def build_generation_prompt(context: GenerationContext) -> str:
 - shopping_list: список продуктів, які варто докупити (якщо все є, пустий список);
 - items: масив позицій меню (meal_type — тип прийому їжі:
   breakfast, lunch, dinner, morning_snack, afternoon_snack, evening_snack;
-  dish_id, product_id, title, portion_g, portion_text, kcal_est, position).
+  dish_id, title, portion_g, portion_text, position).
+  Модель розподіляє лише наявні готові та постійні страви;
+  не пропонує нових страв чи продуктів.
   Generating items for meals already marked 'eaten' or pinned is not required.
 """
     return prompt

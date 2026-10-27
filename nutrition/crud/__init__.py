@@ -47,6 +47,7 @@ from nutrition.crud.pinned_meal import (
 from nutrition.crud.product import (
     create_product,
     delete_product,
+    estimate_product,
     get_available_products,
     get_product,
     get_products,
@@ -63,6 +64,7 @@ __all__ = [
     "get_nutrition_profile",
     "upsert_nutrition_profile",
     "create_product",
+    "estimate_product",
     "get_products",
     "get_available_products",
     "get_product",
