@@ -1,19 +1,29 @@
+import re
 from datetime import datetime
 from typing import Any, ClassVar
 from uuid import UUID
 
 import sqlalchemy as sa
+from pydantic import field_validator
 from sqlalchemy import Column, DateTime, ForeignKey, Uuid, func
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.types import TypeDecorator
 from sqlmodel import Field, SQLModel
 
-from nutrition.models.enums import Sex
+from nutrition.models.enums import MealType, Sex
 
 
 class MealSchedule(SQLModel):
-    name: str
+    type: MealType
     time: str
+
+    @field_validator("time")
+    @classmethod
+    def validate_time(cls, v: str) -> str:
+        v = v.strip()
+        if not re.match(r"^(?:[01]\d|2[0-3]):[0-5]\d$", v):
+            raise ValueError("Time must be in HH:MM format (00:00 to 23:59)")
+        return v
 
 
 class MealsJSON(TypeDecorator):
@@ -24,20 +34,25 @@ class MealsJSON(TypeDecorator):
         if value is None:
             return []
         if isinstance(value, list):
-            return [
-                item.model_dump() if hasattr(item, "model_dump") else item
+            res = [
+                item.model_dump(mode="json") if hasattr(item, "model_dump") else item
                 for item in value
             ]
+            return sorted(
+                res,
+                key=lambda m: m.get("time", "") if isinstance(m, dict) else getattr(m, "time", ""),
+            )
         return value
 
     def process_result_value(self, value: Any, dialect: Any) -> Any:
         if value is None:
             return []
         if isinstance(value, list):
-            return [
+            items = [
                 MealSchedule.model_validate(item) if isinstance(item, dict) else item
                 for item in value
             ]
+            return sorted(items, key=lambda m: m.time)
         return value
 
 
@@ -59,6 +74,14 @@ class NutritionProfileBase(SQLModel):
         default=[],
         sa_column=Column(MealsJSON, nullable=False),
     )
+
+    @field_validator("meals")
+    @classmethod
+    def validate_meals(cls, meals: list[MealSchedule]) -> list[MealSchedule]:
+        types = [m.type for m in meals]
+        if len(types) != len(set(types)):
+            raise ValueError("Duplicate meal types are not allowed")
+        return sorted(meals, key=lambda m: m.time)
 
 
 class NutritionProfile(NutritionProfileBase, table=True):

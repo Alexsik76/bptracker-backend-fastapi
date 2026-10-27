@@ -33,18 +33,18 @@ async def materialize_pinned_meals(
 
     stmt = select(Menu).where(Menu.user_id == user_id, Menu.date == menu_date)
     existing_menus = list((await session.exec(stmt)).all())
-    existing_slots = {m.slot for m in existing_menus}
+    existing_meal_types = {m.meal_type for m in existing_menus}
 
-    profile_meals_map = {m.name: m for m in profile.meals}
+    profile_meals_map = {m.type: m for m in profile.meals}
 
     materialized_any = False
     for pin in active_pins:
-        if pin.slot in profile_meals_map and pin.slot not in existing_slots:
-            profile_meal = profile_meals_map[pin.slot]
+        if pin.meal_type in profile_meals_map and pin.meal_type not in existing_meal_types:
+            profile_meal = profile_meals_map[pin.meal_type]
             menu = Menu(
                 user_id=user_id,
                 date=menu_date,
-                slot=pin.slot,
+                meal_type=pin.meal_type,
                 time=profile_meal.time,
                 pinned_meal_id=pin.id,
                 pin_dismissed=False,
@@ -70,7 +70,7 @@ async def materialize_pinned_meals(
                 )
                 session.add(menu_item)
             materialized_any = True
-            existing_slots.add(pin.slot)
+            existing_meal_types.add(pin.meal_type)
 
     if materialized_any:
         await session.commit()

@@ -24,9 +24,9 @@ async def setup_nutrition_data(client: AsyncClient):
             "restrictions": "Без жовчного міхура",
             "dislikes": "Печінка",
             "meals": [
-                {"name": "Сніданок", "time": "08:00"},
-                {"name": "Обід", "time": "13:00"},
-                {"name": "Вечеря", "time": "19:00"},
+                {"type": "breakfast", "time": "08:00"},
+                {"type": "lunch", "time": "13:00"},
+                {"type": "dinner", "time": "19:00"},
             ],
         },
     )
@@ -68,7 +68,7 @@ async def test_generate_menu_success(client: AsyncClient, session: AsyncSession)
         "shopping_list": ["Огірки", "Зелень"],
         "items": [
             {
-                "slot": "Обід",
+                "meal_type": "lunch",
                 "dish_id": dish_id,
                 "product_id": None,
                 "title": "Індичка запечена",
@@ -78,7 +78,7 @@ async def test_generate_menu_success(client: AsyncClient, session: AsyncSession)
                 "position": 1,
             },
             {
-                "slot": "Сніданок",
+                "meal_type": "breakfast",
                 "dish_id": None,
                 "product_id": prod_id,
                 "title": "Яблуко",
@@ -112,11 +112,11 @@ async def test_generate_menu_success(client: AsyncClient, session: AsyncSession)
         assert data["shopping_list"] == ["Огірки", "Зелень"]
         menus = data["menus"]
         assert len(menus) == 3
-        slots = [m["slot"] for m in menus]
-        assert slots == ["Сніданок", "Обід", "Вечеря"]
-        breakfast = [m for m in menus if m["slot"] == "Сніданок"][0]
-        lunch = [m for m in menus if m["slot"] == "Обід"][0]
-        dinner = [m for m in menus if m["slot"] == "Вечеря"][0]
+        types = [m["meal_type"] for m in menus]
+        assert types == ["breakfast", "lunch", "dinner"]
+        breakfast = [m for m in menus if m["meal_type"] == "breakfast"][0]
+        lunch = [m for m in menus if m["meal_type"] == "lunch"][0]
+        dinner = [m for m in menus if m["meal_type"] == "dinner"][0]
         assert breakfast["status"] == "planned"
         assert breakfast["regenerations"] == 1
         assert breakfast["id"] is not None
@@ -145,7 +145,7 @@ async def test_generate_keeps_eaten_and_skipped_meals(client: AsyncClient):
 
     # Add Breakfast manual item and mark eaten
     item1_resp = await client.post(
-        "/nutrition/menus/2026-10-23/items?slot=Сніданок",
+        "/nutrition/menus/2026-10-23/items?meal_type=breakfast",
         json={
             "product_id": prod_id,
             "portion_g": 100,
@@ -160,7 +160,7 @@ async def test_generate_keeps_eaten_and_skipped_meals(client: AsyncClient):
 
     # Add Lunch manual item (planned)
     item2_resp = await client.post(
-        "/nutrition/menus/2026-10-23/items?slot=Обід",
+        "/nutrition/menus/2026-10-23/items?meal_type=lunch",
         json={
             "dish_id": dish_id,
             "portion_g": 200,
@@ -176,7 +176,7 @@ async def test_generate_keeps_eaten_and_skipped_meals(client: AsyncClient):
             "shopping_list": [],
             "items": [
                 {
-                    "slot": "Обід",
+                    "meal_type": "lunch",
                     "dish_id": dish_id,
                     "product_id": None,
                     "title": "Індичка запечена",
@@ -186,7 +186,7 @@ async def test_generate_keeps_eaten_and_skipped_meals(client: AsyncClient):
                     "position": 1,
                 },
                 {
-                    "slot": "Вечеря",
+                    "meal_type": "dinner",
                     "dish_id": dish_id,
                     "product_id": None,
                     "title": "Індичка запечена",
@@ -212,18 +212,18 @@ async def test_generate_keeps_eaten_and_skipped_meals(client: AsyncClient):
         )
         assert resp.status_code == 200
         menus = resp.json()["menus"]
-        menu_by_slot = {m["slot"]: m for m in menus}
+        menu_by_type = {m["meal_type"]: m for m in menus}
 
         # Breakfast (eaten) must still be eaten and intact!
-        assert menu_by_slot["Сніданок"]["status"] == "eaten"
-        assert menu_by_slot["Сніданок"]["items"][0]["portion_g"] == 100
+        assert menu_by_type["breakfast"]["status"] == "eaten"
+        assert menu_by_type["breakfast"]["items"][0]["portion_g"] == 100
 
         # Lunch (planned) has been replaced by generated item
-        assert menu_by_slot["Обід"]["items"][0]["id"] != item2_id
-        assert menu_by_slot["Обід"]["items"][0]["portion_g"] == 220
+        assert menu_by_type["lunch"]["items"][0]["id"] != item2_id
+        assert menu_by_type["lunch"]["items"][0]["portion_g"] == 220
 
         # Dinner is present
-        assert "Вечеря" in menu_by_slot
+        assert "dinner" in menu_by_type
 
 
 @pytest.mark.asyncio
@@ -237,7 +237,7 @@ async def test_generate_slot_scope(client: AsyncClient):
             "shopping_list": [],
             "items": [
                 {
-                    "slot": "Обід",
+                    "meal_type": "lunch",
                     "dish_id": dish_id,
                     "product_id": None,
                     "title": "Індичка запечена",
@@ -247,7 +247,7 @@ async def test_generate_slot_scope(client: AsyncClient):
                     "position": 1,
                 },
                 {
-                    "slot": "Вечеря",
+                    "meal_type": "dinner",
                     "dish_id": dish_id,
                     "product_id": None,
                     "title": "Ігнорована вечеря",
@@ -269,13 +269,13 @@ async def test_generate_slot_scope(client: AsyncClient):
 
         resp = await client.post(
             "/nutrition/menus/2026-10-23/generate",
-            json={"scope": "slot", "slot": "Обід"},
+            json={"scope": "slot", "meal_type": "lunch"},
         )
         assert resp.status_code == 200
         menus = resp.json()["menus"]
-        lunch = [m for m in menus if m["slot"] == "Обід"][0]
+        lunch = [m for m in menus if m["meal_type"] == "lunch"][0]
         assert lunch["items"] != []
-        dinner = [m for m in menus if m["slot"] == "Вечеря"][0]
+        dinner = [m for m in menus if m["meal_type"] == "dinner"][0]
         assert dinner["items"] == []
         assert dinner["id"] is None
 
@@ -334,14 +334,14 @@ async def test_slot_generation_keeps_other_meals_untouched_and_passes_context(cl
 
     # Breakfast: manual item with 150 kcal
     b_resp = await client.post(
-        "/nutrition/menus/2026-10-23/items?slot=Сніданок",
+        "/nutrition/menus/2026-10-23/items?meal_type=breakfast",
         json={"product_id": prod_id, "portion_g": 100, "kcal_est": 150},
     )
     b_id = b_resp.json()["id"]
 
     # Dinner: manual item with 200 kcal
     d_resp = await client.post(
-        "/nutrition/menus/2026-10-23/items?slot=Вечеря",
+        "/nutrition/menus/2026-10-23/items?meal_type=dinner",
         json={"title": "Салат", "portion_g": 150, "kcal_est": 200},
     )
     d_id = d_resp.json()["id"]
@@ -357,7 +357,7 @@ async def test_slot_generation_keeps_other_meals_untouched_and_passes_context(cl
                 "shopping_list": [],
                 "items": [
                     {
-                        "slot": "Обід",
+                        "meal_type": "lunch",
                         "dish_id": dish_id,
                         "product_id": None,
                         "title": "Індичка запечена",
@@ -377,7 +377,7 @@ async def test_slot_generation_keeps_other_meals_untouched_and_passes_context(cl
     with patch("gemini_infra.generate_json", side_effect=mock_gen):
         resp = await client.post(
             "/nutrition/menus/2026-10-23/generate",
-            json={"scope": "slot", "slot": "Обід"},
+            json={"scope": "slot", "meal_type": "lunch"},
         )
         assert resp.status_code == 200
 
@@ -390,13 +390,13 @@ async def test_slot_generation_keeps_other_meals_untouched_and_passes_context(cl
 
     # Verify other meals in DB are completely untouched
     day_resp = await client.get("/nutrition/menus/2026-10-23")
-    menus = {m["slot"]: m for m in day_resp.json()["menus"]}
-    assert len(menus["Сніданок"]["items"]) == 1
-    assert menus["Сніданок"]["items"][0]["id"] == b_id
-    assert len(menus["Вечеря"]["items"]) == 1
-    assert menus["Вечеря"]["items"][0]["id"] == d_id
-    assert len(menus["Обід"]["items"]) == 1
-    assert menus["Обід"]["items"][0]["title"] == "Індичка запечена"
+    menus = {m["meal_type"]: m for m in day_resp.json()["menus"]}
+    assert len(menus["breakfast"]["items"]) == 1
+    assert menus["breakfast"]["items"][0]["id"] == b_id
+    assert len(menus["dinner"]["items"]) == 1
+    assert menus["dinner"]["items"][0]["id"] == d_id
+    assert len(menus["lunch"]["items"]) == 1
+    assert menus["lunch"]["items"][0]["title"] == "Індичка запечена"
 
 
 @pytest.mark.asyncio
@@ -409,7 +409,7 @@ async def test_day_generation_replaces_unmarked_manual_items_not_eaten_or_skippe
 
     # Breakfast: manual item, mark meal eaten
     b1_resp = await client.post(
-        "/nutrition/menus/2026-10-23/items?slot=Сніданок",
+        "/nutrition/menus/2026-10-23/items?meal_type=breakfast",
         json={"product_id": prod_id, "portion_g": 100, "kcal_est": 50},
     )
     b1_id = b1_resp.json()["id"]
@@ -421,7 +421,7 @@ async def test_day_generation_replaces_unmarked_manual_items_not_eaten_or_skippe
 
     # Lunch: manual item (non-eaten meal)
     l1_resp = await client.post(
-        "/nutrition/menus/2026-10-23/items?slot=Обід",
+        "/nutrition/menus/2026-10-23/items?meal_type=lunch",
         json={"dish_id": dish_id, "portion_g": 150, "kcal_est": 200},
     )
     l1_id = l1_resp.json()["id"]
@@ -432,7 +432,7 @@ async def test_day_generation_replaces_unmarked_manual_items_not_eaten_or_skippe
             "shopping_list": [],
             "items": [
                 {
-                    "slot": "Обід",
+                    "meal_type": "lunch",
                     "dish_id": dish_id,
                     "product_id": None,
                     "title": "Індичка запечена",
@@ -458,16 +458,16 @@ async def test_day_generation_replaces_unmarked_manual_items_not_eaten_or_skippe
         assert resp.status_code == 200
 
     day_resp = await client.get("/nutrition/menus/2026-10-23")
-    menus = {m["slot"]: m for m in day_resp.json()["menus"]}
+    menus = {m["meal_type"]: m for m in day_resp.json()["menus"]}
 
     # Breakfast: eaten meal kept completely intact
-    b_items = menus["Сніданок"]["items"]
+    b_items = menus["breakfast"]["items"]
     assert len(b_items) == 1
     assert b_items[0]["id"] == b1_id
-    assert menus["Сніданок"]["status"] == "eaten"
+    assert menus["breakfast"]["status"] == "eaten"
 
     # Lunch: non-eaten meal items replaced
-    l_items = menus["Обід"]["items"]
+    l_items = menus["lunch"]["items"]
     assert len(l_items) == 1
     assert l_items[0]["id"] != l1_id
     assert l_items[0]["origin"] == "generated"
@@ -481,8 +481,8 @@ async def test_removed_meals_never_recreated_by_generation(
     data = await setup_nutrition_data(client)
     dish_id = data["dish_id"]
 
-    # Delete Lunch meal slot
-    del_resp = await client.delete("/nutrition/menus/2026-10-23/meals/Обід")
+    # Delete Lunch meal
+    del_resp = await client.delete("/nutrition/menus/2026-10-23/meals/lunch")
     assert del_resp.status_code == 204
 
     mock_result = GeminiResult(
@@ -491,7 +491,7 @@ async def test_removed_meals_never_recreated_by_generation(
             "shopping_list": [],
             "items": [
                 {
-                    "slot": "Сніданок",
+                    "meal_type": "breakfast",
                     "dish_id": dish_id,
                     "product_id": None,
                     "title": "Індичка запечена",
@@ -501,7 +501,7 @@ async def test_removed_meals_never_recreated_by_generation(
                     "position": 1,
                 },
                 {
-                    "slot": "Вечеря",
+                    "meal_type": "dinner",
                     "dish_id": dish_id,
                     "product_id": None,
                     "title": "Індичка запечена",
@@ -526,10 +526,10 @@ async def test_removed_meals_never_recreated_by_generation(
         )
         assert resp.status_code == 200
         menus = resp.json()["menus"]
-        assert [m["slot"] for m in menus] == ["Сніданок", "Вечеря"]
+        assert [m["meal_type"] for m in menus] == ["breakfast", "dinner"]
 
     day_resp = await client.get("/nutrition/menus/2026-10-23")
-    assert [m["slot"] for m in day_resp.json()["menus"]] == ["Сніданок", "Вечеря"]
+    assert [m["meal_type"] for m in day_resp.json()["menus"]] == ["breakfast", "dinner"]
 
 
 @pytest.mark.asyncio
@@ -538,9 +538,9 @@ async def test_409_when_nothing_to_generate_no_gemini_call(client: AsyncClient):
     prod_id = data["prod_id"]
 
     # Mark Breakfast, Lunch, Dinner as eaten
-    for slot in ["Сніданок", "Обід", "Вечеря"]:
+    for meal_type in ["breakfast", "lunch", "dinner"]:
         resp = await client.post(
-            f"/nutrition/menus/2026-10-23/items?slot={slot}",
+            f"/nutrition/menus/2026-10-23/items?meal_type={meal_type}",
             json={"product_id": prod_id, "portion_g": 100, "kcal_est": 50},
         )
         menu_id = resp.json()["menu_id"]
@@ -562,10 +562,10 @@ async def test_409_when_nothing_to_generate_no_gemini_call(client: AsyncClient):
         # Slot scope: 409
         resp_slot = await client.post(
             "/nutrition/menus/2026-10-23/generate",
-            json={"scope": "slot", "slot": "Сніданок"},
+            json={"scope": "slot", "meal_type": "breakfast"},
         )
         assert resp_slot.status_code == 409
-        assert "Сніданок" in resp_slot.json()["detail"]
+        assert "breakfast" in resp_slot.json()["detail"]
         mock_gen.assert_not_called()
 
 
@@ -577,7 +577,7 @@ async def test_estimate_stage_runs_before_generation(client: AsyncClient):
 
     # Add item to Breakfast without kcal_est
     b_resp = await client.post(
-        "/nutrition/menus/2026-10-23/items?slot=Сніданок",
+        "/nutrition/menus/2026-10-23/items?meal_type=breakfast",
         json={"product_id": prod_id, "portion_g": 120},
     )
     b_id = b_resp.json()["id"]
@@ -603,7 +603,7 @@ async def test_estimate_stage_runs_before_generation(client: AsyncClient):
                     "shopping_list": [],
                     "items": [
                         {
-                            "slot": "Обід",
+                            "meal_type": "lunch",
                             "dish_id": dish_id,
                             "product_id": None,
                             "title": "Індичка запечена",
@@ -623,15 +623,15 @@ async def test_estimate_stage_runs_before_generation(client: AsyncClient):
     with patch("gemini_infra.generate_json", side_effect=mock_gemini):
         resp = await client.post(
             "/nutrition/menus/2026-10-23/generate",
-            json={"scope": "slot", "slot": "Обід"},
+            json={"scope": "slot", "meal_type": "lunch"},
         )
         assert resp.status_code == 200
         assert calls == ["estimate", "generate"]
 
     # Verify Breakfast item kcal was updated with model source
     day_resp = await client.get("/nutrition/menus/2026-10-23")
-    menus = {m["slot"]: m for m in day_resp.json()["menus"]}
-    b_item = menus["Сніданок"]["items"][0]
+    menus = {m["meal_type"]: m for m in day_resp.json()["menus"]}
+    b_item = menus["breakfast"]["items"][0]
     assert b_item["kcal_est"] == 60
     assert b_item["kcal_source"] == "model"
 
@@ -650,7 +650,7 @@ async def test_day_menu_read_flags(client: AsyncClient):
     # 2. Add an unmarked manual item
     i1 = (
         await client.post(
-            "/nutrition/menus/2026-10-23/items?slot=Сніданок",
+            "/nutrition/menus/2026-10-23/items?meal_type=breakfast",
             json={"product_id": prod_id, "portion_g": 100, "kcal_est": 50},
         )
     ).json()
@@ -666,7 +666,7 @@ async def test_day_menu_read_flags(client: AsyncClient):
     )
     i2 = (
         await client.post(
-            "/nutrition/menus/2026-10-23/items?slot=Обід",
+            "/nutrition/menus/2026-10-23/items?meal_type=lunch",
             json={"dish_id": dish_id, "portion_g": 200, "kcal_est": 250},
         )
     ).json()
@@ -676,7 +676,7 @@ async def test_day_menu_read_flags(client: AsyncClient):
     )
     i3 = (
         await client.post(
-            "/nutrition/menus/2026-10-23/items?slot=Вечеря",
+            "/nutrition/menus/2026-10-23/items?meal_type=dinner",
             json={"product_id": prod_id, "portion_g": 150, "kcal_est": 75},
         )
     ).json()
@@ -695,10 +695,10 @@ async def test_notes_flow_with_nothing_to_generate_does_not_fail(client: AsyncCl
     data = await setup_nutrition_data(client)
     prod_id = data["prod_id"]
 
-    # Mark all slots eaten
-    for slot in ["Сніданок", "Обід", "Вечеря"]:
+    # Mark all meals eaten
+    for meal_type in ["breakfast", "lunch", "dinner"]:
         resp = await client.post(
-            f"/nutrition/menus/2026-10-23/items?slot={slot}",
+            f"/nutrition/menus/2026-10-23/items?meal_type={meal_type}",
             json={"product_id": prod_id, "portion_g": 100, "kcal_est": 50},
         )
         menu_id = resp.json()["menu_id"]

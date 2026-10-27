@@ -25,6 +25,7 @@ from sqlmodel import Field, SQLModel
 from nutrition.models.enums import (
     GenerationScope,
     KcalSource,
+    MealType,
     MenuItemOrigin,
     MenuStatus,
 )
@@ -33,7 +34,16 @@ from nutrition.models.notes_and_offplan import MenuNoteRead, OffPlanEntryRead
 
 class MenuBase(SQLModel):
     date: dt_date = Field(sa_column=Column(Date, nullable=False, index=True))
-    slot: str = Field(sa_column=Column(String, nullable=False))
+    meal_type: MealType = Field(
+        sa_column=Column(
+            sa.Enum(
+                MealType,
+                name="mealtype",
+                values_callable=lambda x: [e.value for e in x],
+            ),
+            nullable=False,
+        )
+    )
     time: str | None = Field(default=None, sa_column=Column(String, nullable=True))
     regenerations: int = Field(
         default=0,
@@ -86,7 +96,9 @@ class Menu(MenuBase, table=True):
     )
 
     __table_args__ = (
-        UniqueConstraint("user_id", "date", "slot", name="uq_menus_user_id_date_slot"),
+        UniqueConstraint(
+            "user_id", "date", "meal_type", name="uq_menus_user_id_date_meal_type"
+        ),
     )
 
 
@@ -200,7 +212,7 @@ class MenuRead(SQLModel):
     id: UUID | None = None
     user_id: UUID
     date: dt_date
-    slot: str
+    meal_type: MealType
     time: str | None = None
     status: MenuStatus
     pinned: bool = False
@@ -247,14 +259,11 @@ class MenuUpdate(SQLModel):
 
 
 class MealCreate(SQLModel):
-    slot: str
+    meal_type: MealType
     time: str
 
     @model_validator(mode="after")
-    def validate_slot_and_time(self) -> "MealCreate":
-        self.slot = self.slot.strip()
-        if not self.slot:
-            raise ValueError("Slot name must not be empty")
+    def validate_time(self) -> "MealCreate":
         self.time = self.time.strip()
         if not re.match(r"^(?:[01]\d|2[0-3]):[0-5]\d$", self.time):
             raise ValueError("Time must be in HH:MM format (00:00 to 23:59)")
@@ -263,7 +272,7 @@ class MealCreate(SQLModel):
 
 class GenerationRequest(SQLModel):
     scope: GenerationScope = GenerationScope.DAY
-    slot: str | None = None
+    meal_type: MealType | None = None
 
 
 class GenerationResultRead(SQLModel):
@@ -273,7 +282,7 @@ class GenerationResultRead(SQLModel):
 
 
 class AvailablePinRead(SQLModel):
-    slot: str
+    meal_type: MealType
     pinned_meal_id: UUID
 
 

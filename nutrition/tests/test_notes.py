@@ -27,9 +27,9 @@ async def setup_test_environment(client: AsyncClient):
             "restrictions": "Без жовчного міхура",
             "dislikes": "Печінка",
             "meals": [
-                {"name": "Сніданок", "time": "08:00"},
-                {"name": "Обід", "time": "13:00"},
-                {"name": "Вечеря", "time": "19:00"},
+                {"type": "breakfast", "time": "08:00"},
+                {"type": "lunch", "time": "13:00"},
+                {"type": "dinner", "time": "19:00"},
             ],
         },
     )
@@ -120,7 +120,7 @@ async def test_menu_note_correction_regenerates_unmarked_items(
 
     # 1. Setup Breakfast as eaten
     breakfast_resp = await client.post(
-        "/nutrition/menus/2026-10-24/items?slot=Сніданок",
+        "/nutrition/menus/2026-10-24/items?meal_type=breakfast",
         json={"product_id": prod_id, "portion_g": 100, "kcal_est": 50},
     )
     breakfast_menu_id = breakfast_resp.json()["menu_id"]
@@ -131,7 +131,7 @@ async def test_menu_note_correction_regenerates_unmarked_items(
 
     # 2. Setup Lunch as planned (with apple)
     lunch_resp = await client.post(
-        "/nutrition/menus/2026-10-24/items?slot=Обід",
+        "/nutrition/menus/2026-10-24/items?meal_type=lunch",
         json={"product_id": prod_id, "portion_g": 150, "kcal_est": 75},
     )
     lunch_item_id = lunch_resp.json()["id"]
@@ -143,7 +143,7 @@ async def test_menu_note_correction_regenerates_unmarked_items(
             "shopping_list": [],
             "items": [
                 {
-                    "slot": "Обід",
+                    "meal_type": "lunch",
                     "dish_id": dish_id,
                     "product_id": None,
                     "title": "Індичка запечена",
@@ -153,7 +153,7 @@ async def test_menu_note_correction_regenerates_unmarked_items(
                     "position": 1,
                 },
                 {
-                    "slot": "Вечеря",
+                    "meal_type": "dinner",
                     "dish_id": dish_id,
                     "product_id": None,
                     "title": "Індичка запечена",
@@ -198,19 +198,19 @@ async def test_menu_note_correction_regenerates_unmarked_items(
         menu_resp = await client.get("/nutrition/menus/2026-10-24")
         assert menu_resp.status_code == 200
         menus = menu_resp.json()["menus"]
-        menu_by_slot = {m["slot"]: m for m in menus}
+        menu_by_type = {m["meal_type"]: m for m in menus}
 
         # Breakfast (eaten) must still be eaten and intact!
-        assert menu_by_slot["Сніданок"]["status"] == "eaten"
-        assert menu_by_slot["Сніданок"]["items"][0]["portion_g"] == 100
+        assert menu_by_type["breakfast"]["status"] == "eaten"
+        assert menu_by_type["breakfast"]["items"][0]["portion_g"] == 100
 
         # Lunch (planned) items have been replaced
-        assert menu_by_slot["Обід"]["items"][0]["id"] != lunch_item_id
-        assert menu_by_slot["Обід"]["items"][0]["dish_id"] == dish_id
-        assert menu_by_slot["Обід"]["items"][0]["portion_g"] == 200
+        assert menu_by_type["lunch"]["items"][0]["id"] != lunch_item_id
+        assert menu_by_type["lunch"]["items"][0]["dish_id"] == dish_id
+        assert menu_by_type["lunch"]["items"][0]["portion_g"] == 200
 
         # Dinner is present
-        assert "Вечеря" in menu_by_slot
+        assert "dinner" in menu_by_type
 
         # Verify generation log has scope unmarked
         log_stmt = select(GenerationLog).where(
@@ -404,7 +404,7 @@ async def test_menu_generation_with_off_plan_entry_succeeds(
             "shopping_list": [],
             "items": [
                 {
-                    "slot": "Сніданок",
+                    "meal_type": "breakfast",
                     "dish_id": dish_id,
                     "product_id": None,
                     "title": "Індичка запечена",
@@ -497,7 +497,7 @@ async def test_gemini_called_outside_transaction(
             "shopping_list": [],
             "items": [
                 {
-                    "slot": "Сніданок",
+                    "meal_type": "breakfast",
                     "dish_id": dish_id,
                     "product_id": None,
                     "title": "Індичка запечена",

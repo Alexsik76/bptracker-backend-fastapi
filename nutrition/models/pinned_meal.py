@@ -2,6 +2,7 @@ from datetime import datetime
 from typing import ClassVar
 from uuid import UUID
 
+import sqlalchemy as sa
 from pydantic import model_validator
 from sqlalchemy import (
     Boolean,
@@ -17,6 +18,8 @@ from sqlalchemy import (
     text,
 )
 from sqlmodel import Field, SQLModel
+
+from nutrition.models.enums import MealType
 
 
 class PinnedMealItemBase(SQLModel):
@@ -98,7 +101,16 @@ class PinnedMealItemRead(PinnedMealItemBase):
 
 
 class PinnedMealBase(SQLModel):
-    slot: str = Field(sa_column=Column(String, nullable=False))
+    meal_type: MealType = Field(
+        sa_column=Column(
+            sa.Enum(
+                MealType,
+                name="mealtype",
+                values_callable=lambda x: [e.value for e in x],
+            ),
+            nullable=False,
+        )
+    )
     active: bool = Field(
         default=True,
         sa_column=Column(Boolean, nullable=False, server_default=text("true")),
@@ -132,7 +144,9 @@ class PinnedMeal(PinnedMealBase, table=True):
     )
 
     __table_args__ = (
-        UniqueConstraint("user_id", "slot", name="uq_pinned_meals_user_id_slot"),
+        UniqueConstraint(
+            "user_id", "meal_type", name="uq_pinned_meals_user_id_meal_type"
+        ),
     )
 
 

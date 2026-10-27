@@ -1,6 +1,7 @@
 from datetime import UTC, date, datetime
 from uuid import UUID
 
+from sqlalchemy.exc import IntegrityError
 from sqlmodel import col, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
@@ -10,6 +11,7 @@ from nutrition.models import (
     DishKind,
     GenerationLog,
     KcalSource,
+    MealType,
     Menu,
     MenuItem,
     MenuItemCreate,
@@ -47,7 +49,7 @@ def sort_menu_reads(menus: list[MenuRead]) -> list[MenuRead]:
         key=lambda m: (
             1 if m.time is None else 0,
             m.time or "",
-            m.slot,
+            m.meal_type.value if hasattr(m.meal_type, "value") else str(m.meal_type),
         ),
     )
 
@@ -123,7 +125,7 @@ async def evaluate_day_menu_reads(
         menus,
         key=lambda m: (
             m.created_at if m.created_at is not None else datetime.min.replace(tzinfo=UTC),
-            m.slot or "",
+            m.meal_type.value if hasattr(m.meal_type, "value") else str(m.meal_type),
         ),
     )
 
@@ -203,7 +205,7 @@ async def evaluate_day_menu_reads(
                 id=menu.id,
                 user_id=menu.user_id,
                 date=menu.date,
-                slot=menu.slot,
+                meal_type=menu.meal_type,
                 time=menu.time,
                 status=status,
                 eaten_at=menu.eaten_at,
@@ -223,12 +225,12 @@ async def get_day_menus(
     user_id: UUID,
     menu_date: date,
 ) -> list[MenuRead]:
-    """Fetch day canvas for a user on a given date, ordered by time then slot."""
+    """Fetch day canvas for a user on a given date, ordered by time then meal_type."""
     stmt = select(Menu).where(Menu.user_id == user_id, Menu.date == menu_date)
     all_rows = list((await session.exec(stmt)).all())
 
     active_rows = [m for m in all_rows if not m.removed]
-    persisted_slots = {m.slot for m in all_rows}
+    persisted_types = {m.meal_type for m in all_rows}
 
     active_reads = await evaluate_day_menu_reads(session, user_id, active_rows)
 
@@ -236,13 +238,13 @@ async def get_day_menus(
     projected_reads: list[MenuRead] = []
     if profile and profile.meals:
         for p_meal in profile.meals:
-            if p_meal.name not in persisted_slots:
+            if p_meal.type not in persisted_types:
                 projected_reads.append(
                     MenuRead(
                         id=None,
                         user_id=user_id,
                         date=menu_date,
-                        slot=p_meal.name,
+                        meal_type=p_meal.type,
                         time=p_meal.time,
                         status=MenuStatus.PLANNED,
                         eaten_at=None,
@@ -271,12 +273,12 @@ async def get_menu(
     session: AsyncSession,
     user_id: UUID,
     menu_date: date,
-    slot: str,
+    meal_type: MealType,
 ) -> MenuRead | None:
-    """Fetch a specific meal slot menu by date and slot name."""
+    """Fetch a specific meal slot menu by date and meal type."""
     day_reads = await get_day_menus(session, user_id, menu_date)
     for m in day_reads:
-        if m.slot == slot:
+        if m.meal_type == meal_type:
             return m
     return None
 
@@ -311,25 +313,25 @@ async def get_or_create_menu(
     session: AsyncSession,
     user_id: UUID,
     menu_date: date,
-    slot: str,
+    meal_type: MealType,
 ) -> Menu:
-    """Get existing meal slot menu for user, date and slot, or create a new one."""
+    """Get existing meal slot menu for user, date and meal_type, or create a new one."""
     stmt = select(Menu).where(
         Menu.user_id == user_id,
         Menu.date == menu_date,
-        Menu.slot == slot,
+        Menu.meal_type == meal_type,
     )
     menu = (await session.exec(stmt)).first()
     if menu is not None:
         if menu.removed:
             raise MealSlotRemovedError(
-                f"Meal slot '{slot}' is removed for date {menu_date}"
+                f"Meal '{meal_type.value}' is removed for date {menu_date}"
             )
         if menu.time is None:
             profile = await get_nutrition_profile(session, user_id)
             if profile and profile.meals:
                 for m in profile.meals:
-                    if m.name == slot and m.time:
+                    if m.type == meal_type and m.time:
                         menu.time = m.time
                         session.add(menu)
                         break
@@ -339,14 +341,14 @@ async def get_or_create_menu(
     meal_time: str | None = None
     if profile and profile.meals:
         for m in profile.meals:
-            if m.name == slot:
+            if m.type == meal_type:
                 meal_time = m.time
                 break
 
     menu = Menu(
         user_id=user_id,
         date=menu_date,
-        slot=slot,
+        meal_type=meal_type,
         time=meal_time,
         removed=False,
     )
@@ -388,13 +390,13 @@ async def delete_meal_slot(
     session: AsyncSession,
     user_id: UUID,
     menu_date: date,
-    slot: str,
+    meal_type: MealType,
 ) -> bool:
     """Delete a meal slot: remove all items and tombstone the menu row."""
     stmt = select(Menu).where(
         Menu.user_id == user_id,
         Menu.date == menu_date,
-        Menu.slot == slot,
+        Menu.meal_type == meal_type,
     )
     menu = (await session.exec(stmt)).first()
 
@@ -404,7 +406,7 @@ async def delete_meal_slot(
 
         if menu.eaten_at is not None:
             raise EatenMealImmutableError(
-                f"Cannot delete meal slot '{slot}' because it is marked as eaten"
+                f"Cannot delete meal '{meal_type.value}' because it is marked as eaten"
             )
 
         items_stmt = select(MenuItem).where(MenuItem.menu_id == menu.id)
@@ -431,7 +433,7 @@ async def delete_meal_slot(
     profile_meal = None
     if profile and profile.meals:
         for m in profile.meals:
-            if m.name == slot:
+            if m.type == meal_type:
                 profile_meal = m
                 break
 
@@ -441,7 +443,7 @@ async def delete_meal_slot(
     tombstone = Menu(
         user_id=user_id,
         date=menu_date,
-        slot=slot,
+        meal_type=meal_type,
         time=profile_meal.time,
         removed=True,
     )
@@ -454,28 +456,29 @@ async def create_or_revive_meal_slot(
     session: AsyncSession,
     user_id: UUID,
     menu_date: date,
-    slot: str,
+    meal_type: MealType,
     time: str,
 ) -> MenuRead:
     """Create a new meal slot or revive a removed tombstone row."""
     stmt = select(Menu).where(
         Menu.user_id == user_id,
         Menu.date == menu_date,
-        Menu.slot == slot,
+        Menu.meal_type == meal_type,
     )
     existing = (await session.exec(stmt)).first()
 
     if existing is not None and not existing.removed:
         raise MealSlotConflictError(
-            f"Active meal slot '{slot}' already exists for date {menu_date}"
+            f"Active meal '{meal_type.value}' already exists for date {menu_date}"
         )
 
     if existing is None:
         profile = await get_nutrition_profile(session, user_id)
         if profile and profile.meals:
-            if any(m.name == slot for m in profile.meals):
+            if any(m.type == meal_type for m in profile.meals):
                 raise MealSlotConflictError(
-                    f"Active meal slot '{slot}' already exists on canvas from profile schedule"
+                    f"Active meal '{meal_type.value}' "
+                    "already exists on canvas from profile schedule"
                 )
 
     if existing is not None and existing.removed:
@@ -483,19 +486,31 @@ async def create_or_revive_meal_slot(
         existing.time = time
         existing.updated_at = datetime.now(UTC)
         session.add(existing)
-        await session.commit()
+        try:
+            await session.commit()
+        except IntegrityError as exc:
+            await session.rollback()
+            raise MealSlotConflictError(
+                f"Active meal '{meal_type.value}' already exists for date {menu_date}"
+            ) from exc
         await session.refresh(existing)
         menu = existing
     else:
         menu = Menu(
             user_id=user_id,
             date=menu_date,
-            slot=slot,
+            meal_type=meal_type,
             time=time,
             removed=False,
         )
         session.add(menu)
-        await session.commit()
+        try:
+            await session.commit()
+        except IntegrityError as exc:
+            await session.rollback()
+            raise MealSlotConflictError(
+                f"Active meal '{meal_type.value}' already exists for date {menu_date}"
+            ) from exc
         await session.refresh(menu)
 
     menu_read = await get_menu_read(session, menu.id, user_id)
@@ -504,7 +519,7 @@ async def create_or_revive_meal_slot(
             id=menu.id,
             user_id=user_id,
             date=menu_date,
-            slot=menu.slot,
+            meal_type=menu.meal_type,
             time=menu.time,
             status=MenuStatus.PLANNED,
             pinned=menu.pinned_meal_id is not None,
@@ -519,7 +534,7 @@ async def add_menu_item(
     session: AsyncSession,
     user_id: UUID,
     menu_date: date,
-    slot: str,
+    meal_type: MealType,
     data: MenuItemCreate,
 ) -> MenuItemRead:
     """Add a manual item to the meal slot menu."""
@@ -545,9 +560,9 @@ async def add_menu_item(
         if not title:
             title = product.name
 
-    menu = await get_or_create_menu(session, user_id, menu_date, slot)
+    menu = await get_or_create_menu(session, user_id, menu_date, meal_type)
     if menu.eaten_at is not None:
-        raise EatenMealImmutableError(f"Cannot add items to eaten meal '{slot}'")
+        raise EatenMealImmutableError(f"Cannot add items to eaten meal '{meal_type.value}'")
 
     item = MenuItem(
         menu_id=menu.id,
@@ -699,7 +714,9 @@ async def replace_unmarked_slot_items(
 ) -> None:
     """Replace all items in a non-eaten meal slot."""
     if menu.eaten_at is not None:
-        raise EatenMealImmutableError(f"Cannot replace items of eaten meal '{menu.slot}'")
+        raise EatenMealImmutableError(
+            f"Cannot replace items of eaten meal '{menu.meal_type.value}'"
+        )
 
     stmt = (
         select(MenuItem)

@@ -8,6 +8,7 @@ from nutrition import crud
 from nutrition.models import (
     DishKind,
     DishRead,
+    MealType,
     MenuNoteKind,
     MenuRead,
     NutritionProfileRead,
@@ -21,7 +22,7 @@ class GenerationContext:
     user_id: UUID
     date: date
     scope: str
-    target_slot: str | None
+    target_meal_type: MealType | None
     profile: NutritionProfileRead | None
     ready_dishes: list[DishRead]
     constant_dishes: list[DishRead]
@@ -50,7 +51,7 @@ async def build_generation_context(
     user_id: UUID,
     menu_date: date,
     scope: str,
-    target_slot: str | None = None,
+    target_meal_type: MealType | None = None,
     history_days: int = 3,
 ) -> GenerationContext:
     """Collect all relevant context required for menu generation using CRUD layer."""
@@ -87,7 +88,7 @@ async def build_generation_context(
         user_id=user_id,
         date=menu_date,
         scope=scope,
-        target_slot=target_slot,
+        target_meal_type=target_meal_type,
         profile=profile_read,
         ready_dishes=ready_dishes,
         constant_dishes=constant_dishes,

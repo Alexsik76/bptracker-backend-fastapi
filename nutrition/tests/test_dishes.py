@@ -9,7 +9,7 @@ async def test_create_constant_dish_with_components(client: AsyncClient):
     payload = {
         "name": "Ранкова вівсянка",
         "kind": "constant",
-        "fixed_slot": "Сніданок",
+        "fixed_meal_type": "breakfast",
         "notes": "Базова страва",
         "components": [
             {"name": "Вівсяні пластівці", "raw_weight_g": 45},
@@ -23,7 +23,7 @@ async def test_create_constant_dish_with_components(client: AsyncClient):
     dish_id = data["id"]
     assert data["name"] == "Ранкова вівсянка"
     assert data["kind"] == "constant"
-    assert data["fixed_slot"] == "Сніданок"
+    assert data["fixed_meal_type"] == "breakfast"
     assert len(data["components"]) == 3
     comp_names = {c["name"] for c in data["components"]}
     assert comp_names == {"Вівсяні пластівці", "Яблуко", "Сир кисломолочний 5%"}

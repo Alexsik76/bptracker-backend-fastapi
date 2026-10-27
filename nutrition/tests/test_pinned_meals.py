@@ -9,6 +9,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 
 from gemini_infra.types import GeminiResult
 from nutrition.models import (
+    MealType,
     Menu,
     MenuRead,
     MenuStatus,
@@ -28,9 +29,9 @@ async def init_profile(client: AsyncClient):
             "target_weight_kg": 75.0,
             "pace_kg_per_week": 0.5,
             "meals": [
-                {"name": "Сніданок", "time": "08:00"},
-                {"name": "Обід", "time": "13:00"},
-                {"name": "Вечеря", "time": "19:00"},
+                {"type": "breakfast", "time": "08:00"},
+                {"type": "lunch", "time": "13:00"},
+                {"type": "dinner", "time": "19:00"},
             ],
         },
     )
@@ -40,9 +41,9 @@ async def init_profile(client: AsyncClient):
 @pytest.mark.asyncio
 async def test_pin_crud_and_slot_validation(client: AsyncClient):
     await init_profile(client)
-    # 1. 400 when slot is not in profile schedule
+    # 1. 400 when meal type is not in profile schedule
     resp = await client.put(
-        "/nutrition/pinned-meals/Полуденок",
+        "/nutrition/pinned-meals/afternoon_snack",
         json={
             "active": True,
             "items": [{"title": "Яблуко", "portion_g": 150, "kcal_est": 80}],
@@ -55,7 +56,7 @@ async def test_pin_crud_and_slot_validation(client: AsyncClient):
     # A) Both dish_id and product_id -> 422
     dummy_uuid = "01940000-0000-7000-8000-000000000001"
     resp = await client.put(
-        "/nutrition/pinned-meals/Сніданок",
+        "/nutrition/pinned-meals/breakfast",
         json={
             "active": True,
             "items": [
@@ -71,7 +72,7 @@ async def test_pin_crud_and_slot_validation(client: AsyncClient):
 
     # B) Neither dish_id nor product_id and empty title -> 422
     resp = await client.put(
-        "/nutrition/pinned-meals/Сніданок",
+        "/nutrition/pinned-meals/breakfast",
         json={
             "active": True,
             "items": [{"portion_g": 100}],
@@ -106,7 +107,7 @@ async def test_pin_crud_and_slot_validation(client: AsyncClient):
 
     # 4. Successfully PUT pinned meal with dish, product, and free text
     put_resp = await client.put(
-        "/nutrition/pinned-meals/Сніданок",
+        "/nutrition/pinned-meals/breakfast",
         json={
             "active": True,
             "items": [
@@ -135,7 +136,7 @@ async def test_pin_crud_and_slot_validation(client: AsyncClient):
     )
     assert put_resp.status_code == 200
     pin_data = put_resp.json()
-    assert pin_data["slot"] == "Сніданок"
+    assert pin_data["meal_type"] == "breakfast"
     assert pin_data["active"] is True
     assert len(pin_data["items"]) == 3
     assert pin_data["items"][0]["title"] == "Вівсянка з медом"
@@ -149,10 +150,10 @@ async def test_pin_crud_and_slot_validation(client: AsyncClient):
     assert list_resp.status_code == 200
     pins_list = list_resp.json()
     assert len(pins_list) == 1
-    assert pins_list[0]["slot"] == "Сніданок"
+    assert pins_list[0]["meal_type"] == "breakfast"
 
-    # 6. DELETE /pinned-meals/{slot}
-    del_resp = await client.delete("/nutrition/pinned-meals/Сніданок")
+    # 6. DELETE /pinned-meals/{meal_type}
+    del_resp = await client.delete("/nutrition/pinned-meals/breakfast")
     assert del_resp.status_code == 204
 
     # Now GET /pinned-meals is empty
@@ -161,7 +162,7 @@ async def test_pin_crud_and_slot_validation(client: AsyncClient):
     assert len(list_resp2.json()) == 0
 
     # DELETE non-existent returns 404
-    del_404 = await client.delete("/nutrition/pinned-meals/Сніданок")
+    del_404 = await client.delete("/nutrition/pinned-meals/breakfast")
     assert del_404.status_code == 404
 
 
@@ -172,9 +173,9 @@ async def test_materialization_on_read(client: AsyncClient, session: AsyncSessio
     future = today + timedelta(days=2)
     past = today - timedelta(days=1)
 
-    # Create active pin for Сніданок
+    # Create active pin for breakfast
     await client.put(
-        "/nutrition/pinned-meals/Сніданок",
+        "/nutrition/pinned-meals/breakfast",
         json={
             "active": True,
             "items": [
@@ -188,22 +189,22 @@ async def test_materialization_on_read(client: AsyncClient, session: AsyncSessio
     past_resp = await client.get(f"/nutrition/menus/{past}")
     assert past_resp.status_code == 200
     past_day = past_resp.json()
-    past_breakfast = next(m for m in past_day["menus"] if m["slot"] == "Сніданок")
+    past_breakfast = next(m for m in past_day["menus"] if m["meal_type"] == "breakfast")
     assert past_breakfast["id"] is None
     assert past_breakfast["pinned"] is False
     assert past_breakfast["items"] == []
     # Pin is available to be restored on past date if desired
-    assert any(p["slot"] == "Сніданок" for p in past_day["available_pins"])
+    assert any(p["meal_type"] == "breakfast" for p in past_day["available_pins"])
 
     # Verify no Menu row exists in DB for past date
-    stmt_past = select(Menu).where(Menu.date == past, Menu.slot == "Сніданок")
+    stmt_past = select(Menu).where(Menu.date == past, Menu.meal_type == MealType.BREAKFAST)
     assert (await session.exec(stmt_past)).first() is None
 
     # 2. Today: materialization runs
     today_resp = await client.get(f"/nutrition/menus/{today}")
     assert today_resp.status_code == 200
     today_day = today_resp.json()
-    today_breakfast = next(m for m in today_day["menus"] if m["slot"] == "Сніданок")
+    today_breakfast = next(m for m in today_day["menus"] if m["meal_type"] == "breakfast")
     assert today_breakfast["id"] is not None
     assert today_breakfast["pinned"] is True
     assert today_breakfast["time"] == "08:00"
@@ -216,19 +217,19 @@ async def test_materialization_on_read(client: AsyncClient, session: AsyncSessio
     assert today_breakfast["items"][1]["kcal_source"] is None
     assert today_breakfast["items"][1]["kcal_est"] is None
     # Because it is currently pinned, it is NOT in available_pins
-    assert not any(p["slot"] == "Сніданок" for p in today_day["available_pins"])
+    assert not any(p["meal_type"] == "breakfast" for p in today_day["available_pins"])
 
     # 3. Read today again: materialization does NOT duplicate rows or items
     today_resp2 = await client.get(f"/nutrition/menus/{today}")
     today_day2 = today_resp2.json()
-    today_breakfast2 = next(m for m in today_day2["menus"] if m["slot"] == "Сніданок")
+    today_breakfast2 = next(m for m in today_day2["menus"] if m["meal_type"] == "breakfast")
     assert len(today_breakfast2["items"]) == 2
 
     # 4. Future date: materializes as well
     fut_resp = await client.get(f"/nutrition/menus/{future}")
     assert fut_resp.status_code == 200
     fut_day = fut_resp.json()
-    fut_breakfast = next(m for m in fut_day["menus"] if m["slot"] == "Сніданок")
+    fut_breakfast = next(m for m in fut_day["menus"] if m["meal_type"] == "breakfast")
     assert fut_breakfast["id"] is not None
     assert fut_breakfast["pinned"] is True
     assert len(fut_breakfast["items"]) == 2
@@ -240,9 +241,9 @@ async def test_pin_update_resyncs_untouched_future_rows(client: AsyncClient):
     today = dt_date.today()
     future = today + timedelta(days=2)
 
-    # Create active pin for Сніданок
+    # Create active pin for breakfast
     await client.put(
-        "/nutrition/pinned-meals/Сніданок",
+        "/nutrition/pinned-meals/breakfast",
         json={
             "active": True,
             "items": [{"title": "Сирники", "portion_g": 150, "kcal_est": 320}],
@@ -266,9 +267,9 @@ async def test_pin_update_resyncs_untouched_future_rows(client: AsyncClient):
     assert mark_res.json()["status"] == "eaten"
 
     # Future date has untouched items (not eaten)
-    # Now update pin for Сніданок
+    # Now update pin for breakfast
     await client.put(
-        "/nutrition/pinned-meals/Сніданок",
+        "/nutrition/pinned-meals/breakfast",
         json={
             "active": True,
             "items": [{"title": "Млинці з сиром", "portion_g": 200, "kcal_est": 410}],
@@ -277,14 +278,14 @@ async def test_pin_update_resyncs_untouched_future_rows(client: AsyncClient):
 
     # Today had an eaten meal -> it remains untouched!
     today_res2 = await client.get(f"/nutrition/menus/{today}")
-    today_b = next(m for m in today_res2.json()["menus"] if m["slot"] == "Сніданок")
+    today_b = next(m for m in today_res2.json()["menus"] if m["meal_type"] == "breakfast")
     assert len(today_b["items"]) == 1
     assert today_b["items"][0]["title"] == "Сирники"
     assert today_b["status"] == "eaten"
 
     # Future was not eaten -> resynced to new pin!
     fut_res2 = await client.get(f"/nutrition/menus/{future}")
-    fut_b = next(m for m in fut_res2.json()["menus"] if m["slot"] == "Сніданок")
+    fut_b = next(m for m in fut_res2.json()["menus"] if m["meal_type"] == "breakfast")
     assert len(fut_b["items"]) == 1
     assert fut_b["items"][0]["title"] == "Млинці з сиром"
     assert fut_b["items"][0]["kcal_est"] == 410
@@ -295,9 +296,9 @@ async def test_cross_pinned_meal_and_available_pins_and_restore(client: AsyncCli
     await init_profile(client)
     today = dt_date.today()
 
-    # Create active pin for Сніданок
+    # Create active pin for breakfast
     await client.put(
-        "/nutrition/pinned-meals/Сніданок",
+        "/nutrition/pinned-meals/breakfast",
         json={
             "active": True,
             "items": [{"title": "Гречка", "portion_g": 200, "kcal_est": 220}],
@@ -307,31 +308,31 @@ async def test_cross_pinned_meal_and_available_pins_and_restore(client: AsyncCli
     # Materialize on today
     read1 = await client.get(f"/nutrition/menus/{today}")
     assert read1.status_code == 200
-    b1 = next(m for m in read1.json()["menus"] if m["slot"] == "Сніданок")
+    b1 = next(m for m in read1.json()["menus"] if m["meal_type"] == "breakfast")
     assert b1["pinned"] is True
     assert len(b1["items"]) == 1
-    assert not any(p["slot"] == "Сніданок" for p in read1.json()["available_pins"])
+    assert not any(p["meal_type"] == "breakfast" for p in read1.json()["available_pins"])
 
-    # 1. First cross: DELETE /menus/{date}/meals/{slot}
-    del_meal = await client.delete(f"/nutrition/menus/{today}/meals/Сніданок")
+    # 1. First cross: DELETE /menus/{date}/meals/{meal_type}
+    del_meal = await client.delete(f"/nutrition/menus/{today}/meals/breakfast")
     assert del_meal.status_code == 204
 
-    # GET: slot remains active, items deleted, pinned is false, appears in available_pins
+    # GET: meal remains active, items deleted, pinned is false, appears in available_pins
     read2 = await client.get(f"/nutrition/menus/{today}")
     assert read2.status_code == 200
-    b2 = next(m for m in read2.json()["menus"] if m["slot"] == "Сніданок")
+    b2 = next(m for m in read2.json()["menus"] if m["meal_type"] == "breakfast")
     assert b2["pinned"] is False
     assert b2["items"] == []
-    assert any(p["slot"] == "Сніданок" for p in read2.json()["available_pins"])
+    assert any(p["meal_type"] == "breakfast" for p in read2.json()["available_pins"])
 
     # 2. It does NOT re-materialize on subsequent read
     read3 = await client.get(f"/nutrition/menus/{today}")
-    b3 = next(m for m in read3.json()["menus"] if m["slot"] == "Сніданок")
+    b3 = next(m for m in read3.json()["menus"] if m["meal_type"] == "breakfast")
     assert b3["pinned"] is False
     assert b3["items"] == []
 
-    # 3. Restore endpoint: POST /menus/{date}/meals/{slot}/pin
-    restore_resp = await client.post(f"/nutrition/menus/{today}/meals/Сніданок/pin")
+    # 3. Restore endpoint: POST /menus/{date}/meals/{meal_type}/pin
+    restore_resp = await client.post(f"/nutrition/menus/{today}/meals/breakfast/pin")
     assert restore_resp.status_code == 200
     restored = restore_resp.json()
     assert restored["pinned"] is True
@@ -340,26 +341,26 @@ async def test_cross_pinned_meal_and_available_pins_and_restore(client: AsyncCli
 
     # Now verify GET shows it pinned and not in available_pins
     read4 = await client.get(f"/nutrition/menus/{today}")
-    assert not any(p["slot"] == "Сніданок" for p in read4.json()["available_pins"])
+    assert not any(p["meal_type"] == "breakfast" for p in read4.json()["available_pins"])
 
-    # 4. Cross again, then second cross removes slot completely
-    await client.delete(f"/nutrition/menus/{today}/meals/Сніданок")
-    del2 = await client.delete(f"/nutrition/menus/{today}/meals/Сніданок")
+    # 4. Cross again, then second cross removes meal completely
+    await client.delete(f"/nutrition/menus/{today}/meals/breakfast")
+    del2 = await client.delete(f"/nutrition/menus/{today}/meals/breakfast")
     assert del2.status_code == 204
 
     read5 = await client.get(f"/nutrition/menus/{today}")
-    # Slot is removed from canvas
-    assert not any(m["slot"] == "Сніданок" for m in read5.json()["menus"])
+    # Meal is removed from canvas
+    assert not any(m["meal_type"] == "breakfast" for m in read5.json()["menus"])
     # But because active pin exists, it still appears in available_pins
-    assert any(p["slot"] == "Сніданок" for p in read5.json()["available_pins"])
+    assert any(p["meal_type"] == "breakfast" for p in read5.json()["available_pins"])
 
     # Restore from removed tombstone state
-    restore_resp2 = await client.post(f"/nutrition/menus/{today}/meals/Сніданок/pin")
+    restore_resp2 = await client.post(f"/nutrition/menus/{today}/meals/breakfast/pin")
     assert restore_resp2.status_code == 200
     assert restore_resp2.json()["pinned"] is True
 
     read6 = await client.get(f"/nutrition/menus/{today}")
-    assert any(m["slot"] == "Сніданок" for m in read6.json()["menus"])
+    assert any(m["meal_type"] == "breakfast" for m in read6.json()["menus"])
 
 
 @pytest.mark.asyncio
@@ -368,7 +369,7 @@ async def test_restore_preserves_marked_items(client: AsyncClient):
     today = dt_date.today()
 
     await client.put(
-        "/nutrition/pinned-meals/Сніданок",
+        "/nutrition/pinned-meals/breakfast",
         json={
             "active": True,
             "items": [
@@ -379,7 +380,7 @@ async def test_restore_preserves_marked_items(client: AsyncClient):
     )
 
     read1 = await client.get(f"/nutrition/menus/{today}")
-    b1 = next(m for m in read1.json()["menus"] if m["slot"] == "Сніданок")
+    b1 = next(m for m in read1.json()["menus"] if m["meal_type"] == "breakfast")
     b1_id = b1["id"]
 
     # Mark Breakfast as eaten
@@ -389,7 +390,7 @@ async def test_restore_preserves_marked_items(client: AsyncClient):
     )
 
     # Calling restore on an eaten meal is refused with 409
-    refused_resp = await client.post(f"/nutrition/menus/{today}/meals/Сніданок/pin")
+    refused_resp = await client.post(f"/nutrition/menus/{today}/meals/breakfast/pin")
     assert refused_resp.status_code == 409
 
     # Unmark meal
@@ -400,12 +401,12 @@ async def test_restore_preserves_marked_items(client: AsyncClient):
 
     # Add a manual item
     await client.post(
-        f"/nutrition/menus/{today}/items?slot=Сніданок",
+        f"/nutrition/menus/{today}/items?meal_type=breakfast",
         json={"title": "Апельсин", "portion_g": 100, "kcal_est": 45},
     )
 
     # Call restore now succeeds
-    restore_resp = await client.post(f"/nutrition/menus/{today}/meals/Сніданок/pin")
+    restore_resp = await client.post(f"/nutrition/menus/{today}/meals/breakfast/pin")
     assert restore_resp.status_code == 200
     items = restore_resp.json()["items"]
     assert len(items) == 2
@@ -419,7 +420,7 @@ def test_generation_flags_and_generatability_with_pinned_meal():
     pinned_meal = MenuRead(
         user_id="01940000-0000-7000-8000-000000000001",
         date=dt_date(2026, 10, 27),
-        slot="Сніданок",
+        meal_type=MealType.BREAKFAST,
         time="08:00",
         status=MenuStatus.PLANNED,
         pinned=True,
@@ -431,7 +432,7 @@ def test_generation_flags_and_generatability_with_pinned_meal():
     empty_meal = MenuRead(
         user_id="01940000-0000-7000-8000-000000000001",
         date=dt_date(2026, 10, 27),
-        slot="Обід",
+        meal_type=MealType.LUNCH,
         time="13:00",
         status=MenuStatus.PLANNED,
         pinned=False,
@@ -470,9 +471,9 @@ async def test_generation_leaves_pinned_meal_untouched_and_counts_it_as_context(
     assert dish_resp.status_code == 201
     dish_id = dish_resp.json()["id"]
 
-    # Create pin for Сніданок (without kcal initially to test estimator during generation)
+    # Create pin for breakfast (without kcal initially to test estimator during generation)
     await client.put(
-        "/nutrition/pinned-meals/Сніданок",
+        "/nutrition/pinned-meals/breakfast",
         json={
             "active": True,
             "items": [{"title": "Вівсянка з ягодами", "portion_g": 250}],
@@ -503,9 +504,9 @@ async def test_generation_leaves_pinned_meal_untouched_and_counts_it_as_context(
                 "rationale": "Збалансоване меню з урахуванням закріпленого сніданку",
                 "shopping_list": [],
                 "items": [
-                    # Model tries to propose items for Obid and even Sneadnok
+                    # Model tries to propose items for Obid and even Breakfast
                     {
-                        "slot": "Сніданок",
+                        "meal_type": "breakfast",
                         "dish_id": dish_id,
                         "title": "Борщ український",
                         "portion_g": 300,
@@ -514,7 +515,7 @@ async def test_generation_leaves_pinned_meal_untouched_and_counts_it_as_context(
                         "position": 1,
                     },
                     {
-                        "slot": "Обід",
+                        "meal_type": "lunch",
                         "dish_id": dish_id,
                         "title": "Борщ український",
                         "portion_g": 350,
@@ -546,8 +547,8 @@ async def test_generation_leaves_pinned_meal_untouched_and_counts_it_as_context(
         assert gen_resp.status_code == 200
 
     day_menus = gen_resp.json()["menus"]
-    breakfast = next(m for m in day_menus if m["slot"] == "Сніданок")
-    obid = next(m for m in day_menus if m["slot"] == "Обід")
+    breakfast = next(m for m in day_menus if m["meal_type"] == "breakfast")
+    obid = next(m for m in day_menus if m["meal_type"] == "lunch")
 
     # Breakfast remained pinned and untouched!
     assert breakfast["pinned"] is True

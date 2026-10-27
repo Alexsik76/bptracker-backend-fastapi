@@ -17,6 +17,7 @@ from nutrition import crud
 from nutrition.models import (
     DayMenuRead,
     KcalSource,
+    MealType,
     Menu,
     MenuItem,
     MenuNoteRead,
@@ -141,7 +142,7 @@ async def estimate_day_kcal(
     user_id: UUID,
     menu_date: date,
     settings: Settings,
-    slot: str | None = None,
+    meal_type: MealType | None = None,
 ) -> DayMenuRead:
     """Estimate calories for menu items missing kcal_est using Gemini."""
     stmt = (
@@ -153,10 +154,10 @@ async def estimate_day_kcal(
             Menu.eaten_at.is_(None),
             MenuItem.kcal_est.is_(None),
         )
-        .order_by(col(Menu.slot).asc(), col(MenuItem.position).asc())
+        .order_by(col(Menu.meal_type).asc(), col(MenuItem.position).asc())
     )
-    if slot is not None:
-        stmt = stmt.where(Menu.slot == slot)
+    if meal_type is not None:
+        stmt = stmt.where(Menu.meal_type == meal_type)
 
     items_to_estimate = list((await session.exec(stmt)).all())
 

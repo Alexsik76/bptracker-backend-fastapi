@@ -3,7 +3,7 @@ from fastapi import APIRouter, HTTPException, status
 from auth.deps import CurrentUserId
 from db import SessionDep
 from nutrition import crud
-from nutrition.models import PinnedMealRead, PinnedMealUpsert
+from nutrition.models import MealType, PinnedMealRead, PinnedMealUpsert
 
 router = APIRouter(prefix="/pinned-meals")
 
@@ -16,9 +16,9 @@ async def list_pinned_meals(
     return await crud.get_pinned_meals(session, user_id)
 
 
-@router.put("/{slot}", response_model=PinnedMealRead)
+@router.put("/{meal_type}", response_model=PinnedMealRead)
 async def upsert_pinned_meal(
-    slot: str,
+    meal_type: MealType,
     data: PinnedMealUpsert,
     session: SessionDep,
     user_id: CurrentUserId,
@@ -27,14 +27,14 @@ async def upsert_pinned_meal(
     if (
         not profile
         or not profile.meals
-        or not any(m.name == slot for m in profile.meals)
+        or not any(m.type == meal_type for m in profile.meals)
     ):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Slot '{slot}' is not in the profile schedule",
+            detail=f"Meal type '{meal_type.value}' is not in the profile schedule",
         )
     try:
-        return await crud.upsert_pinned_meal(session, user_id, slot, data)
+        return await crud.upsert_pinned_meal(session, user_id, meal_type, data)
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -42,15 +42,15 @@ async def upsert_pinned_meal(
         ) from exc
 
 
-@router.delete("/{slot}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/{meal_type}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_pinned_meal(
-    slot: str,
+    meal_type: MealType,
     session: SessionDep,
     user_id: CurrentUserId,
 ) -> None:
-    deleted = await crud.delete_pinned_meal(session, user_id, slot)
+    deleted = await crud.delete_pinned_meal(session, user_id, meal_type)
     if not deleted:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Pinned meal for slot '{slot}' not found",
+            detail=f"Pinned meal for meal type '{meal_type.value}' not found",
         )
