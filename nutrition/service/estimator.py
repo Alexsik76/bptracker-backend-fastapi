@@ -6,7 +6,7 @@ from datetime import date
 from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, field_validator, model_validator
 from sqlmodel import col, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
@@ -16,11 +16,12 @@ from gemini_infra.types import GeminiInvalidResponse, GeminiUnavailable
 from nutrition import crud
 from nutrition.models import (
     DayMenuRead,
-    KcalSource,
     MealType,
     Menu,
     MenuItem,
     MenuNoteRead,
+    NutritionEstimate,
+    NutritionSource,
     OffPlanEntryRead,
 )
 from nutrition.service.generator import (
@@ -31,25 +32,177 @@ from nutrition.service.generator import (
 
 logger = logging.getLogger(__name__)
 
-ESTIMATE_PROMPT_VERSION = "2026-10-27.2"
+ESTIMATE_PROMPT_VERSION = "2026-10-27.4"
+PRODUCT_ESTIMATE_PROMPT_VERSION = "2026-10-27.1"
 
 
-class ItemEstimate(BaseModel):
+class ItemNutritionEstimate(BaseModel):
     id: UUID
-    kcal_est: int
+    kcal: float
+    protein_g: float
+    fat_g: float
+    carbs_g: float
+    fiber_g: float | None = None
+    sugar_g: float | None = None
+    sodium_mg: float | None = None
 
-    @field_validator("kcal_est")
+    @model_validator(mode="before")
     @classmethod
-    def validate_kcal(cls, v: Any) -> int:
-        if isinstance(v, bool) or not isinstance(v, int):
-            raise ValueError("kcal_est must be an integer")
-        if v < 0:
-            raise ValueError("kcal_est must be non-negative")
-        return v
+    def handle_legacy_keys(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            if "kcal" not in data and "kcal_est" in data:
+                data["kcal"] = data["kcal_est"]
+            if "protein_g" not in data:
+                data["protein_g"] = 0.0
+            if "fat_g" not in data:
+                data["fat_g"] = 0.0
+            if "carbs_g" not in data:
+                data["carbs_g"] = 0.0
+        return data
+
+    @field_validator("kcal", "protein_g", "fat_g", "carbs_g", mode="before")
+    @classmethod
+    def validate_required(cls, v: Any) -> float:
+        if v is None:
+            raise ValueError("Required nutrition field cannot be null")
+        val = float(v)
+        if val < 0:
+            raise ValueError("Nutrition values must be non-negative")
+        return val
+
+    @field_validator("fiber_g", "sugar_g", "sodium_mg", mode="before")
+    @classmethod
+    def validate_optional(cls, v: Any) -> float | None:
+        if v is None:
+            return None
+        val = float(v)
+        if val < 0:
+            raise ValueError("Nutrition values must be non-negative")
+        return val
 
 
 class EstimateResponse(BaseModel):
-    items: list[ItemEstimate]
+    items: list[ItemNutritionEstimate]
+
+
+PRODUCT_ESTIMATE_RESPONSE_SCHEMA = {
+    "type": "OBJECT",
+    "properties": {
+        "kcal": {"type": "NUMBER", "description": "Калорійність на 100 г (ккал, число >= 0)"},
+        "protein_g": {"type": "NUMBER", "description": "Білки на 100 г (г, число >= 0)"},
+        "fat_g": {"type": "NUMBER", "description": "Жири на 100 г (г, число >= 0)"},
+        "carbs_g": {"type": "NUMBER", "description": "Вуглеводи на 100 г (г, число >= 0)"},
+        "fiber_g": {
+            "type": "NUMBER",
+            "nullable": True,
+            "description": "Клітковина на 100 г (г, або null)",
+        },
+        "sugar_g": {
+            "type": "NUMBER",
+            "nullable": True,
+            "description": "Цукор на 100 г (г, або null)",
+        },
+        "sodium_mg": {
+            "type": "NUMBER",
+            "nullable": True,
+            "description": "Натрій на 100 г (мг, або null)",
+        },
+    },
+    "required": ["kcal", "protein_g", "fat_g", "carbs_g"],
+}
+
+
+def build_product_estimate_prompt(product_name: str) -> str:
+    return (
+        "Ти — експертний нутриціолог. Твоє завдання — оцінити харчову цінність на 100 г "
+        f"для продукту: '{product_name}'.\n"
+        "Визнач реалістичні значення для:\n"
+        "- kcal: калорійність на 100 г (ккал, число >= 0);\n"
+        "- protein_g: білки на 100 г (г, число >= 0);\n"
+        "- fat_g: жири на 100 г (г, число >= 0);\n"
+        "- carbs_g: вуглеводи на 100 г (г, число >= 0);\n"
+        "- fiber_g: клітковина на 100 г (г, або null якщо невідомо);\n"
+        "- sugar_g: цукор на 100 г (г, або null якщо невідомо);\n"
+        "- sodium_mg: натрій на 100 г (мг, або null якщо невідомо).\n"
+        "Обов'язково вкажи kcal, protein_g, fat_g, carbs_g. "
+        "Пропущені значення мають бути null, не 0."
+    )
+
+
+async def estimate_product_nutrition(
+    session: AsyncSession,
+    user_id: UUID,
+    product_name: str,
+    settings: Settings,
+    *,
+    raise_on_error: bool = False,
+) -> NutritionEstimate | None:
+    """Estimate product nutrition per 100g with Gemini."""
+    prompt = build_product_estimate_prompt(product_name)
+    start_time = time.perf_counter()
+    raw_response_text: str | None = None
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+
+    try:
+        gemini_result = await gemini_infra.generate_json(
+            prompt=prompt,
+            model=settings.gemini_menu_model,
+            settings=settings,
+            response_schema=PRODUCT_ESTIMATE_RESPONSE_SCHEMA,
+        )
+        duration_ms = int(round((time.perf_counter() - start_time) * 1000))
+        raw_response_text = gemini_result.raw_text
+        input_tokens = gemini_result.input_tokens
+        output_tokens = gemini_result.output_tokens
+        log_llm_exchange(
+            settings=settings,
+            user_id=user_id,
+            menu_date=date.today(),
+            scope="product_estimate",
+            model=settings.gemini_menu_model,
+            prompt_version=PRODUCT_ESTIMATE_PROMPT_VERSION,
+            duration_ms=duration_ms,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            prompt=prompt,
+            raw_response=raw_response_text,
+        )
+        await crud.add_generation_log(
+            session=session,
+            user_id=user_id,
+            menu_date=date.today(),
+            scope="product_estimate",
+            model=settings.gemini_menu_model,
+            prompt_version=PRODUCT_ESTIMATE_PROMPT_VERSION,
+            prompt=prompt,
+            duration_ms=duration_ms,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            raw_response=raw_response_text,
+        )
+        return NutritionEstimate.model_validate(gemini_result.data)
+    except Exception as exc:
+        duration_ms = int(round((time.perf_counter() - start_time) * 1000))
+        logger.warning("Product estimation failed for '%s': %s", product_name, exc)
+        log_llm_exchange(
+            settings=settings,
+            user_id=user_id,
+            menu_date=date.today(),
+            scope="product_estimate",
+            model=settings.gemini_menu_model,
+            prompt_version=PRODUCT_ESTIMATE_PROMPT_VERSION,
+            duration_ms=duration_ms,
+            input_tokens=None,
+            output_tokens=None,
+            prompt=prompt,
+            raw_response=raw_response_text,
+        )
+        if raise_on_error:
+            if isinstance(exc, GeminiUnavailable):
+                raise ServiceGeminiUnavailable("Gemini service is unavailable") from exc
+            raise ServiceGenerationInvalidResponse(f"Product estimation failed: {exc}") from exc
+        return None
 
 
 def build_estimate_response_schema(item_ids: Iterable[UUID]) -> dict[str, Any]:
@@ -68,25 +221,48 @@ def build_estimate_response_schema(item_ids: Iterable[UUID]) -> dict[str, Any]:
                             "enum": id_list,
                             "description": "ID пункту меню",
                         },
-                        "kcal_est": {
-                            "type": "INTEGER",
-                            "description": "Оцінка калорійності у ккал (ціле число >= 0)",
+                        "kcal": {
+                            "type": "NUMBER",
+                            "description": "Оцінка калорійності у ккал (число >= 0)",
+                        },
+                        "protein_g": {
+                            "type": "NUMBER",
+                            "description": "Білки у грамах (число >= 0)",
+                        },
+                        "fat_g": {
+                            "type": "NUMBER",
+                            "description": "Жири у грамах (число >= 0)",
+                        },
+                        "carbs_g": {
+                            "type": "NUMBER",
+                            "description": "Вуглеводи у грамах (число >= 0)",
+                        },
+                        "fiber_g": {
+                            "type": "NUMBER",
+                            "nullable": True,
+                            "description": "Клітковина у грамах (або null)",
+                        },
+                        "sugar_g": {
+                            "type": "NUMBER",
+                            "nullable": True,
+                            "description": "Цукор у грамах (або null)",
+                        },
+                        "sodium_mg": {
+                            "type": "NUMBER",
+                            "nullable": True,
+                            "description": "Натрій у мг (або null)",
                         },
                     },
-                    "required": ["id", "kcal_est"],
+                    "required": ["id", "kcal", "protein_g", "fat_g", "carbs_g"],
                 },
-                "description": "Оцінки калорійності для пунктів меню",
+                "description": "Оцінки харчової цінності для вільних пунктів меню",
             },
         },
         "required": ["items"],
     }
 
 
-def build_estimate_prompt(
-    items: list[MenuItem],
-    dishes_map: dict[UUID, Any],
-    products_map: dict[UUID, Any],
-) -> str:
+def build_estimate_prompt(items: list[MenuItem]) -> str:
     items_data = []
     for item in items:
         entry: dict[str, Any] = {
@@ -95,44 +271,23 @@ def build_estimate_prompt(
             "portion_g": item.portion_g,
             "portion_text": item.portion_text,
         }
-        if item.dish_id and item.dish_id in dishes_map:
-            dish = dishes_map[item.dish_id]
-            dish_info: dict[str, Any] = {
-                "name": dish.name,
-                "kind": dish.kind.value if hasattr(dish.kind, "value") else str(dish.kind),
-            }
-            if dish.cooked_weight_g is not None:
-                dish_info["cooked_weight_g"] = dish.cooked_weight_g
-            if hasattr(dish, "components") and dish.components:
-                dish_info["components"] = [
-                    {
-                        "name": c.name,
-                        "raw_weight_g": c.raw_weight_g,
-                        "cooked_weight_g": c.cooked_weight_g,
-                    }
-                    for c in dish.components
-                ]
-            if dish.notes:
-                dish_info["notes"] = dish.notes
-            entry["dish"] = dish_info
-        elif item.product_id and item.product_id in products_map:
-            product = products_map[item.product_id]
-            entry["product"] = {
-                "name": product.name,
-            }
         items_data.append(entry)
 
     items_json = json.dumps(items_data, ensure_ascii=False, indent=2)
     return (
-        "Ти — експертний нутриціолог. Твоє завдання — оцінити калорійність (ккал) "
-        "для наданих пунктів меню.\n"
-        "Для кожного пункту визнач реалістичну кількість кілокалорій (ціле невід'ємне число >= 0) "
-        "з урахуванням розміру порції (portion_g / portion_text), назви та даних страви "
-        "або продукту (якщо вони надані).\n\n"
+        "Ти — експертний нутриціолог. Твоє завдання — оцінити харчову цінність "
+        "(калорійність та макронутрієнти) для наданих пунктів меню.\n"
+        "Для кожного пункту визнач реалістичні значення:\n"
+        "- 'kcal': калорійність (ккал, число >= 0);\n"
+        "- 'protein_g': білки (г, число >= 0);\n"
+        "- 'fat_g': жири (г, число >= 0);\n"
+        "- 'carbs_g': вуглеводи (г, число >= 0);\n"
+        "- 'fiber_g': клітковина (г, або null якщо невідомо);\n"
+        "- 'sugar_g': цукор (г, або null якщо невідомо);\n"
+        "- 'sodium_mg': натрій (мг, або null якщо невідомо).\n"
+        "Враховуй назву та розмір порції (portion_g / portion_text).\n\n"
         f"Пункти меню для оцінки:\n{items_json}\n\n"
-        "Поверни JSON за схемою з полем 'items', що містить список об'єктів з полями:\n"
-        "- 'id': ідентифікатор пункту меню (рядок UUID зі списку вище);\n"
-        "- 'kcal_est': оцінка калорійності в ккал (ціле невід'ємне число >= 0).\n"
+        "Поверни JSON за схемою з полем 'items'. "
         "Обов'язково поверни оцінку для кожного вказаного пункту меню."
     )
 
@@ -144,7 +299,7 @@ async def estimate_day_kcal(
     settings: Settings,
     meal_type: MealType | None = None,
 ) -> DayMenuRead:
-    """Estimate calories for menu items missing kcal_est using Gemini."""
+    """Estimate full nutrition set for free-text menu items missing kcal using Gemini."""
     stmt = (
         select(MenuItem)
         .join(Menu, col(MenuItem.menu_id) == col(Menu.id))
@@ -152,7 +307,8 @@ async def estimate_day_kcal(
             Menu.user_id == user_id,
             Menu.date == menu_date,
             Menu.eaten_at.is_(None),
-            MenuItem.kcal_est.is_(None),
+            MenuItem.dish_id.is_(None),
+            MenuItem.kcal.is_(None),
         )
         .order_by(col(Menu.meal_type).asc(), col(MenuItem.position).asc())
     )
@@ -174,22 +330,7 @@ async def estimate_day_kcal(
             available_pins=available_pins,
         )
 
-    dish_ids = {item.dish_id for item in items_to_estimate if item.dish_id is not None}
-    product_ids = {item.product_id for item in items_to_estimate if item.product_id is not None}
-
-    dishes_map: dict[UUID, Any] = {}
-    for d_id in dish_ids:
-        d = await crud.get_dish(session, d_id, user_id)
-        if d is not None:
-            dishes_map[d_id] = d
-
-    products_map: dict[UUID, Any] = {}
-    for p_id in product_ids:
-        p = await crud.get_product(session, p_id, user_id)
-        if p is not None:
-            products_map[p_id] = p
-
-    prompt = build_estimate_prompt(items_to_estimate, dishes_map, products_map)
+    prompt = build_estimate_prompt(items_to_estimate)
 
     # End read transaction before calling Gemini so the connection is not idle in transaction
     await session.commit()
@@ -323,10 +464,17 @@ async def estimate_day_kcal(
             raw_response=raw_response_text,
         ) from exc
 
-    estimates_by_id = {it.id: it.kcal_est for it in parsed_response.items}
+    estimates_by_id = {it.id: it for it in parsed_response.items}
     for item in items_to_estimate:
-        item.kcal_est = estimates_by_id[item.id]
-        item.kcal_source = KcalSource.MODEL
+        est = estimates_by_id[item.id]
+        item.kcal = est.kcal
+        item.protein_g = est.protein_g
+        item.fat_g = est.fat_g
+        item.carbs_g = est.carbs_g
+        item.fiber_g = est.fiber_g
+        item.sugar_g = est.sugar_g
+        item.sodium_mg = est.sodium_mg
+        item.nutrition_source = NutritionSource.MODEL
         session.add(item)
 
     await crud.add_generation_log(

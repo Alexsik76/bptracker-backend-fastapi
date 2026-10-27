@@ -47,9 +47,14 @@ class MenuItemOrigin(StrEnum):
     MANUAL = "manual"
 
 
-class KcalSource(StrEnum):
+class NutritionSource(StrEnum):
     USER = "user"
     MODEL = "model"
+    COMPUTED = "computed"
+
+
+# Backwards compatibility alias
+KcalSource = NutritionSource
 
 
 class MenuStatus(StrEnum):

@@ -8,7 +8,6 @@ import sqlalchemy as sa
 from pydantic import model_validator
 from sqlalchemy import (
     Boolean,
-    CheckConstraint,
     Column,
     Date,
     DateTime,
@@ -24,12 +23,13 @@ from sqlmodel import Field, SQLModel
 
 from nutrition.models.enums import (
     GenerationScope,
-    KcalSource,
     MealType,
     MenuItemOrigin,
     MenuStatus,
+    NutritionSource,
 )
 from nutrition.models.notes_and_offplan import MenuNoteRead, OffPlanEntryRead
+from nutrition.models.nutrition import NutritionSet
 
 
 class MenuBase(SQLModel):
@@ -102,29 +102,22 @@ class Menu(MenuBase, table=True):
     )
 
 
-class MenuItemBase(SQLModel):
+class MenuItemBase(NutritionSet):
     dish_id: UUID | None = Field(
         default=None,
         sa_column=Column(
             Uuid, ForeignKey("dishes.id", ondelete="SET NULL"), nullable=True
         ),
     )
-    product_id: UUID | None = Field(
-        default=None,
-        sa_column=Column(
-            Uuid, ForeignKey("products.id", ondelete="SET NULL"), nullable=True
-        ),
-    )
     title: str = Field(sa_column=Column(String, nullable=False))
     portion_g: int | None = Field(default=None, sa_column=Column(Integer, nullable=True))
     portion_text: str | None = Field(default=None, sa_column=Column(String, nullable=True))
-    kcal_est: int | None = Field(default=None, sa_column=Column(Integer, nullable=True))
-    kcal_source: KcalSource | None = Field(
+    nutrition_source: NutritionSource | None = Field(
         default=None,
         sa_column=Column(
             sa.Enum(
-                KcalSource,
-                name="kcalsource",
+                NutritionSource,
+                name="nutritionsource",
                 values_callable=lambda x: [e.value for e in x],
             ),
             nullable=True,
@@ -159,35 +152,35 @@ class MenuItem(MenuItemBase, table=True):
             Uuid, ForeignKey("menus.id", ondelete="CASCADE"), index=True, nullable=False
         )
     )
-
-    __table_args__ = (
-        CheckConstraint(
-            "NOT (dish_id IS NOT NULL AND product_id IS NOT NULL)",
-            name="chk_menu_items_single_reference",
+    created_at: datetime | None = Field(
+        default=None,
+        sa_column=Column(DateTime(timezone=True), server_default=func.now(), nullable=False),
+    )
+    updated_at: datetime | None = Field(
+        default=None,
+        sa_column=Column(
+            DateTime(timezone=True),
+            server_default=func.now(),
+            onupdate=func.now(),
+            nullable=False,
         ),
     )
 
 
-class MenuItemCreate(SQLModel):
+class MenuItemCreate(NutritionSet):
     dish_id: UUID | None = None
-    product_id: UUID | None = None
     title: str | None = None
     portion_g: int | None = None
     portion_text: str | None = None
-    kcal_est: int | None = None
     position: int = 0
 
     @model_validator(mode="after")
     def validate_reference(self) -> "MenuItemCreate":
-        has_dish = self.dish_id is not None
-        has_product = self.product_id is not None
-        if has_dish and has_product:
-            raise ValueError("Both dish_id and product_id cannot be provided at once")
-        if not has_dish and not has_product:
+        if self.dish_id is None:
             if not self.title or not self.title.strip():
-                raise ValueError(
-                    "Title is required when neither dish_id nor product_id is provided"
-                )
+                raise ValueError("Title is required when dish_id is not provided")
+            self.title = self.title.strip()
+        elif self.title:
             self.title = self.title.strip()
         return self
 
@@ -195,16 +188,15 @@ class MenuItemCreate(SQLModel):
 class MenuItemRead(MenuItemBase):
     id: UUID
     menu_id: UUID
+    updated_at: datetime
     incomplete: bool = False
 
 
-class MenuItemUpdate(SQLModel):
+class MenuItemUpdate(NutritionSet):
     dish_id: UUID | None = None
-    product_id: UUID | None = None
     title: str | None = None
     portion_g: int | None = None
     portion_text: str | None = None
-    kcal_est: int | None = None
     position: int | None = None
 
 
@@ -226,7 +218,7 @@ class MenuRead(SQLModel):
     @model_validator(mode="after")
     def compute_kcal_incomplete(self) -> "MenuRead":
         self.kcal_incomplete = any(
-            it.kcal_est is None
+            it.kcal is None
             for it in self.items
         )
         return self

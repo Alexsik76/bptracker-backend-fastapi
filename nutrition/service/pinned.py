@@ -5,7 +5,7 @@ from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from nutrition import crud
-from nutrition.models import KcalSource, Menu, MenuItem, MenuItemOrigin
+from nutrition.models import Menu, MenuItem, MenuItemOrigin, NutritionSource
 
 
 async def materialize_pinned_meals(
@@ -56,15 +56,21 @@ async def materialize_pinned_meals(
 
             pin_items = await crud.get_pinned_meal_items(session, pin.id)
             for it in pin_items:
+                has_user_nutr = it.kcal is not None
                 menu_item = MenuItem(
                     menu_id=menu.id,
                     dish_id=it.dish_id,
-                    product_id=it.product_id,
                     title=it.title,
                     portion_g=it.portion_g,
                     portion_text=it.portion_text,
-                    kcal_est=it.kcal_est,
-                    kcal_source=KcalSource.USER if it.kcal_est is not None else None,
+                    kcal=it.kcal,
+                    protein_g=it.protein_g,
+                    fat_g=it.fat_g,
+                    carbs_g=it.carbs_g,
+                    fiber_g=it.fiber_g,
+                    sugar_g=it.sugar_g,
+                    sodium_mg=it.sodium_mg,
+                    nutrition_source=NutritionSource.USER if has_user_nutr else None,
                     origin=MenuItemOrigin.MANUAL,
                     position=it.position,
                 )

@@ -4,9 +4,9 @@ from uuid import uuid4
 import pytest
 
 from nutrition.models import (
+    DishComponentRead,
     DishKind,
     DishRead,
-    KcalSource,
     MealSchedule,
     MealType,
     MenuItemOrigin,
@@ -14,6 +14,7 @@ from nutrition.models import (
     MenuRead,
     MenuStatus,
     NutritionProfileRead,
+    NutritionSource,
     ProductAvailability,
     ProductPreference,
     ProductRead,
@@ -30,34 +31,19 @@ from nutrition.service.schema import (
 )
 
 
-def test_schema_item_validation_dish_or_product():
+def test_schema_item_validation_dish():
     dish_id = uuid4()
-    prod_id = uuid4()
 
-    # Valid: only dish_id (portion_text auto-filled from portion_g)
+    # Valid: dish_id and portion_g (portion_text auto-filled from portion_g)
     item1 = GeneratedMenuItem(
         meal_type=MealType.BREAKFAST,
         dish_id=dish_id,
         title="Вівсянка",
         portion_g=200,
-        kcal_est=300,
     )
     assert item1.dish_id == dish_id
-    assert item1.product_id is None
     assert item1.portion_g == 200
     assert item1.portion_text == "200 г"
-
-    # Valid: only product_id
-    item2 = GeneratedMenuItem(
-        meal_type=MealType.AFTERNOON_SNACK,
-        product_id=prod_id,
-        title="Яблуко",
-        portion_g=150,
-        portion_text="1 шт",
-        kcal_est=60,
-    )
-    assert item2.product_id == prod_id
-    assert item2.portion_text == "1 шт"
 
     # Invalid: missing portion_g
     with pytest.raises(ValueError):
@@ -65,33 +51,21 @@ def test_schema_item_validation_dish_or_product():
             meal_type=MealType.BREAKFAST,
             dish_id=dish_id,
             title="Вівсянка",
-            kcal_est=300,
         )
 
-    # Invalid: neither
-    with pytest.raises(ValueError, match="Exactly one of dish_id or product_id"):
+    # Invalid: missing dish_id
+    with pytest.raises(ValueError):
         GeneratedMenuItem(
             meal_type=MealType.BREAKFAST,
             title="Ніщо",
             portion_g=100,
-            kcal_est=100,
-        )
-
-    # Invalid: both
-    with pytest.raises(ValueError, match="Exactly one of dish_id or product_id"):
-        GeneratedMenuItem(
-            meal_type=MealType.BREAKFAST,
-            dish_id=dish_id,
-            product_id=prod_id,
-            title="Обидва",
-            portion_g=100,
-            kcal_est=100,
         )
 
 
 def test_validate_generation_response_limits():
     user_id = uuid4()
     dish_id = uuid4()
+    const_dish_id = uuid4()
     prod_id = uuid4()
     now = datetime.now(UTC)
 
@@ -108,15 +82,33 @@ def test_validate_generation_response_limits():
     product = ProductRead(
         id=prod_id,
         user_id=user_id,
-        name="Горіхи",
+        name="Вівсяні пластівці",
         availability=ProductAvailability.IN_STOCK,
         preference=ProductPreference.PREFERRED,
-        daily_limit_g=30,
+        stock_g=100,
+        reserved_g=20,
+        available_g=80,
+        created_at=now,
+        updated_at=now,
+    )
+    const_dish = DishRead(
+        id=const_dish_id,
+        user_id=user_id,
+        name="Вівсянка",
+        kind=DishKind.CONSTANT,
+        components=[
+            DishComponentRead(
+                id=uuid4(),
+                dish_id=const_dish_id,
+                product_id=prod_id,
+                weight_g=50,
+            )
+        ],
         created_at=now,
         updated_at=now,
     )
 
-    dishes_map = {dish_id: ready_dish}
+    dishes_map = {dish_id: ready_dish, const_dish_id: const_dish}
     products_map = {prod_id: product}
 
     # 1. Successful validation
@@ -129,14 +121,12 @@ def test_validate_generation_response_limits():
                 dish_id=dish_id,
                 title="Тушковане м'ясо",
                 portion_g=150,
-                kcal_est=250,
             ),
             GeneratedMenuItem(
-                meal_type=MealType.AFTERNOON_SNACK,
-                product_id=prod_id,
-                title="Горіхи",
-                portion_g=25,
-                kcal_est=150,
+                meal_type=MealType.BREAKFAST,
+                dish_id=const_dish_id,
+                title="Вівсянка",
+                portion_g=50,
             ),
         ],
     )
@@ -156,14 +146,12 @@ def test_validate_generation_response_limits():
                 dish_id=dish_id,
                 title="Тушковане м'ясо",
                 portion_g=120,
-                kcal_est=200,
             ),
             GeneratedMenuItem(
                 meal_type=MealType.DINNER,
                 dish_id=dish_id,
                 title="Тушковане м'ясо",
                 portion_g=120,
-                kcal_est=200,
             ),
         ],
     )
@@ -179,20 +167,20 @@ def test_validate_generation_response_limits():
             existing_menus=[],
         )
 
-    # 3. Exceeds product limit
+    # 3. Exceeds product available stock for constant dish
+    # Constant dish has 50g oats. portion_g=100g -> ratio 2.0 -> needs 100g oats > available 80g
     prod_exceed_resp = GenerationResponse(
-        rationale="Забагато горіхів",
+        rationale="Забагато вівсянки",
         items=[
             GeneratedMenuItem(
-                meal_type=MealType.AFTERNOON_SNACK,
-                product_id=prod_id,
-                title="Горіхи",
-                portion_g=40,
-                kcal_est=250,
+                meal_type=MealType.BREAKFAST,
+                dish_id=const_dish_id,
+                title="Вівсянка",
+                portion_g=100,
             )
         ],
     )
-    with pytest.raises(ValueError, match="exceeds daily limit 30g"):
+    with pytest.raises(ValueError, match="exceeds available stock for product 'Вівсяні пластівці'"):
         validate_generation_response(
             response=prod_exceed_resp,
             dishes_map=dishes_map,
@@ -237,7 +225,7 @@ def test_build_generation_prompt():
         history_menus=[],
     )
 
-    assert PROMPT_VERSION == "2026-10-27.3"
+    assert PROMPT_VERSION == "2026-10-27.4"
     prompt = build_generation_prompt(context)
     assert "2026-10-23" in prompt
     assert "Видалений жовчний міхур" in prompt
@@ -268,17 +256,15 @@ def test_build_generation_prompt_with_free_text_item():
         id=uuid4(),
         menu_id=menu_id,
         dish_id=None,
-        product_id=None,
         title="Кава американо",
         portion_g=200,
         portion_text="200 мл",
-        kcal_est=5,
-        kcal_source=KcalSource.USER,
+        kcal=5.0,
+        nutrition_source=NutritionSource.USER,
         origin=MenuItemOrigin.MANUAL,
         position=1,
-        status=None,
-        eaten_at=None,
         incomplete=False,
+        updated_at=now,
     )
 
     day_menu = MenuRead(
@@ -314,45 +300,29 @@ def test_build_generation_prompt_with_free_text_item():
 
 def test_build_gemini_response_schema_enums_and_immutability():
     dish_id_1, dish_id_2 = uuid4(), uuid4()
-    product_id_1 = uuid4()
 
-    schema = build_gemini_response_schema([dish_id_1, dish_id_2], [product_id_1])
+    schema = build_gemini_response_schema([dish_id_1, dish_id_2])
     item_props = schema["properties"]["items"]["items"]["properties"]
 
     assert item_props["dish_id"]["format"] == "enum"
     assert item_props["dish_id"]["enum"] == [str(dish_id_1), str(dish_id_2)]
-    assert item_props["dish_id"]["nullable"] is True
 
-    assert item_props["product_id"]["format"] == "enum"
-    assert item_props["product_id"]["enum"] == [str(product_id_1)]
-    assert item_props["product_id"]["nullable"] is True
+    # Product id must NOT be in schema
+    assert "product_id" not in item_props
 
     # GEMINI_RESPONSE_SCHEMA must not be mutated
     base_props = GEMINI_RESPONSE_SCHEMA["properties"]["items"]["items"]["properties"]
     assert "enum" not in base_props["dish_id"]
     assert "format" not in base_props["dish_id"]
-    assert "enum" not in base_props["product_id"]
-    assert "format" not in base_props["product_id"]
+    assert "product_id" not in base_props
 
 
 def test_build_gemini_response_schema_empty_lists():
-    dish_id = uuid4()
-
-    # Both empty
-    schema_empty = build_gemini_response_schema([], [])
+    schema_empty = build_gemini_response_schema([])
     empty_props = schema_empty["properties"]["items"]["items"]["properties"]
     assert "enum" not in empty_props["dish_id"]
     assert "format" not in empty_props["dish_id"]
-    assert "enum" not in empty_props["product_id"]
-    assert "format" not in empty_props["product_id"]
-
-    # Only product_ids empty
-    schema_dishes_only = build_gemini_response_schema([dish_id], [])
-    dishes_only_props = schema_dishes_only["properties"]["items"]["items"]["properties"]
-    assert dishes_only_props["dish_id"]["enum"] == [str(dish_id)]
-    assert dishes_only_props["dish_id"]["format"] == "enum"
-    assert "enum" not in dishes_only_props["product_id"]
-    assert "format" not in dishes_only_props["product_id"]
+    assert "product_id" not in empty_props
 
 
 def test_validate_generation_response_eaten_dish_not_double_counted():
@@ -390,9 +360,11 @@ def test_validate_generation_response_eaten_dish_not_double_counted():
                 title="каша кускус",
                 portion_g=250,
                 portion_text="250 г",
-                kcal_est=280,
+                kcal=280.0,
+                nutrition_source=NutritionSource.COMPUTED,
                 origin=MenuItemOrigin.GENERATED,
                 position=1,
+                updated_at=now,
             )
         ],
     )
@@ -407,14 +379,12 @@ def test_validate_generation_response_eaten_dish_not_double_counted():
                 dish_id=dish_id,
                 title="каша кускус",
                 portion_g=250,
-                kcal_est=280,
             ),
             GeneratedMenuItem(
                 meal_type=MealType.DINNER,
                 dish_id=dish_id,
                 title="каша кускус",
                 portion_g=200,
-                kcal_est=225,
             ),
         ],
     )
@@ -427,5 +397,3 @@ def test_validate_generation_response_eaten_dish_not_double_counted():
         products_map={},
         existing_menus=[eaten_lunch],
     )
-
-

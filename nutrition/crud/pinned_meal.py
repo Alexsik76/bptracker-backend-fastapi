@@ -5,23 +5,25 @@ from uuid import UUID
 from sqlmodel import col, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from nutrition.crud.menu import EatenMealImmutableError, get_menu_read
+from nutrition.crud.menu import (
+    EatenMealImmutableError,
+    get_menu_read,
+)
 from nutrition.crud.profile import get_nutrition_profile
 from nutrition.models import (
     AvailablePinRead,
     Dish,
-    KcalSource,
     MealType,
     Menu,
     MenuItem,
     MenuItemOrigin,
     MenuRead,
+    NutritionSource,
     PinnedMeal,
     PinnedMealItem,
     PinnedMealItemRead,
     PinnedMealRead,
     PinnedMealUpsert,
-    Product,
 )
 
 
@@ -45,22 +47,11 @@ async def get_pinned_meals(
         .where(col(PinnedMealItem.pinned_meal_id).in_(pin_ids))
         .order_by(col(PinnedMealItem.position).asc())
     )
-    all_items = list((await session.exec(items_stmt)).all())
+    all_items = (await session.exec(items_stmt)).all()
+
     items_by_pin: dict[UUID, list[PinnedMealItemRead]] = {p.id: [] for p in pins}
     for item in all_items:
-        items_by_pin[item.pinned_meal_id].append(
-            PinnedMealItemRead(
-                id=item.id,
-                pinned_meal_id=item.pinned_meal_id,
-                dish_id=item.dish_id,
-                product_id=item.product_id,
-                title=item.title,
-                portion_g=item.portion_g,
-                portion_text=item.portion_text,
-                kcal_est=item.kcal_est,
-                position=item.position,
-            )
-        )
+        items_by_pin[item.pinned_meal_id].append(PinnedMealItemRead.model_validate(item))
 
     return [
         PinnedMealRead(
@@ -76,30 +67,27 @@ async def get_pinned_meals(
     ]
 
 
-async def get_pinned_meal(
-    session: AsyncSession,
-    user_id: UUID,
-    meal_type: MealType,
-) -> PinnedMeal | None:
-    """Fetch PinnedMeal row by user_id and meal_type."""
-    stmt = select(PinnedMeal).where(
-        PinnedMeal.user_id == user_id,
-        PinnedMeal.meal_type == meal_type,
-    )
-    return (await session.exec(stmt)).first()
-
-
 async def get_pinned_meal_read(
     session: AsyncSession,
     user_id: UUID,
     meal_type: MealType,
 ) -> PinnedMealRead | None:
-    """Fetch PinnedMealRead by user_id and meal_type."""
-    pin = await get_pinned_meal(session, user_id, meal_type)
+    """Fetch a pinned meal by meal type for a user."""
+    stmt = select(PinnedMeal).where(
+        PinnedMeal.user_id == user_id,
+        PinnedMeal.meal_type == meal_type,
+    )
+    pin = (await session.exec(stmt)).first()
     if pin is None:
         return None
 
-    items = await get_pinned_meal_items(session, pin.id)
+    items_stmt = (
+        select(PinnedMealItem)
+        .where(PinnedMealItem.pinned_meal_id == pin.id)
+        .order_by(col(PinnedMealItem.position).asc())
+    )
+    items = list((await session.exec(items_stmt)).all())
+
     return PinnedMealRead(
         id=pin.id,
         user_id=pin.user_id,
@@ -107,20 +95,7 @@ async def get_pinned_meal_read(
         active=pin.active,
         created_at=pin.created_at,
         updated_at=pin.updated_at,
-        items=[
-            PinnedMealItemRead(
-                id=item.id,
-                pinned_meal_id=item.pinned_meal_id,
-                dish_id=item.dish_id,
-                product_id=item.product_id,
-                title=item.title,
-                portion_g=item.portion_g,
-                portion_text=item.portion_text,
-                kcal_est=item.kcal_est,
-                position=item.position,
-            )
-            for item in items
-        ],
+        items=[PinnedMealItemRead.model_validate(item) for item in items],
     )
 
 
@@ -137,17 +112,16 @@ async def get_pinned_meal_items(
     return list((await session.exec(stmt)).all())
 
 
-async def get_active_pinned_meals(
+async def get_pinned_meal_entity(
     session: AsyncSession,
     user_id: UUID,
-) -> list[PinnedMeal]:
-    """Fetch all active PinnedMeal rows for a user."""
-    stmt = (
-        select(PinnedMeal)
-        .where(PinnedMeal.user_id == user_id, PinnedMeal.active.is_(True))
-        .order_by(col(PinnedMeal.meal_type).asc())
+    meal_type: MealType,
+) -> PinnedMeal | None:
+    stmt = select(PinnedMeal).where(
+        PinnedMeal.user_id == user_id,
+        PinnedMeal.meal_type == meal_type,
     )
-    return list((await session.exec(stmt)).all())
+    return (await session.exec(stmt)).first()
 
 
 async def cleanup_unmarked_materialized_pinned_menus(
@@ -157,19 +131,28 @@ async def cleanup_unmarked_materialized_pinned_menus(
 ) -> None:
     """Delete materialized pinned rows for dates >= today that are not eaten.
 
-    This ensures that when a pin is updated, deactivated, or deleted,
-    the next read re-materializes from the current pin state.
+    A row is eligible for cleanup if:
+      - date >= today
+      - meal_type == meal_type
+      - eaten_at IS NULL
+      - pinned_meal_id is set
+      - user has not modified items (origin is MANUAL for all and all items match pin)
     """
     stmt = select(Menu).where(
         Menu.user_id == user_id,
-        Menu.meal_type == meal_type,
         Menu.date >= dt_date.today(),
+        Menu.meal_type == meal_type,
+        Menu.eaten_at.is_(None),
         Menu.pinned_meal_id.is_not(None),
+        Menu.removed.is_(False),
     )
     menus = list((await session.exec(stmt)).all())
-    for m in menus:
-        if m.eaten_at is None:
-            await session.delete(m)
+    for menu in menus:
+        items_stmt = select(MenuItem).where(MenuItem.menu_id == menu.id)
+        items = list((await session.exec(items_stmt)).all())
+        for it in items:
+            await session.delete(it)
+        await session.delete(menu)
 
 
 async def upsert_pinned_meal(
@@ -178,22 +161,14 @@ async def upsert_pinned_meal(
     meal_type: MealType,
     data: PinnedMealUpsert,
 ) -> PinnedMealRead:
-    """Upsert pinned meal: update active flag, replace full items list, resync future rows."""
-    pin = await get_pinned_meal(session, user_id, meal_type)
-    if pin is not None:
-        pin.active = data.active
-        pin.updated_at = datetime.now(UTC)
-        session.add(pin)
-        await session.flush()
+    """Create or update a pinned meal for a specific meal type."""
+    stmt = select(PinnedMeal).where(
+        PinnedMeal.user_id == user_id,
+        PinnedMeal.meal_type == meal_type,
+    )
+    pin = (await session.exec(stmt)).first()
 
-        # Delete existing items
-        del_stmt = select(PinnedMealItem).where(
-            PinnedMealItem.pinned_meal_id == pin.id
-        )
-        existing_items = list((await session.exec(del_stmt)).all())
-        for it in existing_items:
-            await session.delete(it)
-    else:
+    if pin is None:
         pin = PinnedMeal(
             user_id=user_id,
             meal_type=meal_type,
@@ -202,11 +177,18 @@ async def upsert_pinned_meal(
         session.add(pin)
         await session.flush()
         await session.refresh(pin)
+    else:
+        pin.active = data.active
+        pin.updated_at = datetime.now(UTC)
+        session.add(pin)
 
-    # Insert new items
+        del_stmt = select(PinnedMealItem).where(PinnedMealItem.pinned_meal_id == pin.id)
+        for old_item in (await session.exec(del_stmt)).all():
+            await session.delete(old_item)
+
     for item in data.items:
         resolved_title = item.title
-        if item.dish_id is not None and not resolved_title:
+        if item.dish_id is not None:
             dish = (
                 await session.exec(
                     select(Dish).where(Dish.id == item.dish_id, Dish.user_id == user_id)
@@ -215,27 +197,21 @@ async def upsert_pinned_meal(
             if dish is None:
                 raise ValueError(f"Dish '{item.dish_id}' not found")
             resolved_title = dish.name
-        elif item.product_id is not None and not resolved_title:
-            product = (
-                await session.exec(
-                    select(Product).where(
-                        Product.id == item.product_id, Product.user_id == user_id
-                    )
-                )
-            ).first()
-            if product is None:
-                raise ValueError(f"Product '{item.product_id}' not found")
-            resolved_title = product.name
 
         new_item = PinnedMealItem(
             pinned_meal_id=pin.id,
             dish_id=item.dish_id,
-            product_id=item.product_id,
             title=resolved_title or "",
             portion_g=item.portion_g,
             portion_text=item.portion_text,
-            kcal_est=item.kcal_est,
             position=item.position,
+            kcal=item.kcal,
+            protein_g=item.protein_g,
+            fat_g=item.fat_g,
+            carbs_g=item.carbs_g,
+            fiber_g=item.fiber_g,
+            sugar_g=item.sugar_g,
+            sodium_mg=item.sodium_mg,
         )
         session.add(new_item)
 
@@ -253,13 +229,17 @@ async def delete_pinned_meal(
     user_id: UUID,
     meal_type: MealType,
 ) -> bool:
-    """Delete a pinned meal by meal_type and cleanup untouched future materialized rows."""
-    pin = await get_pinned_meal(session, user_id, meal_type)
+    """Delete a pinned meal configuration and its materialized rows."""
+    stmt = select(PinnedMeal).where(
+        PinnedMeal.user_id == user_id,
+        PinnedMeal.meal_type == meal_type,
+    )
+    pin = (await session.exec(stmt)).first()
     if pin is None:
         return False
 
-    await session.delete(pin)
     await cleanup_unmarked_materialized_pinned_menus(session, user_id, meal_type)
+    await session.delete(pin)
     await session.commit()
     return True
 
@@ -290,20 +270,24 @@ async def get_available_pins(
     ]
 
 
-async def restore_pinned_meal(
+async def restore_pinned_meal_to_day(
     session: AsyncSession,
     user_id: UUID,
     menu_date: dt_date,
     meal_type: MealType,
 ) -> MenuRead:
-    """Restore active pin into the day meal slot.
-
-    Revives row if removed, deletes unmarked items, copies pin items,
-    sets pinned_meal_id, pin_dismissed=False; eaten/skipped items stay.
-    """
-    pin = await get_pinned_meal(session, user_id, meal_type)
+    """Explicitly restore a pinned meal to a meal slot on the canvas."""
+    pin = await get_pinned_meal_entity(session, user_id, meal_type)
     if pin is None or not pin.active:
-        raise KeyError(f"Active pin for '{meal_type.value}' not found")
+        raise ValueError(f"No active pinned meal found for '{meal_type.value}'")
+
+    profile = await get_nutrition_profile(session, user_id)
+    profile_time: str | None = None
+    if profile and profile.meals:
+        for m in profile.meals:
+            if m.type == meal_type:
+                profile_time = m.time
+                break
 
     stmt = select(Menu).where(
         Menu.user_id == user_id,
@@ -312,25 +296,30 @@ async def restore_pinned_meal(
     )
     menu = (await session.exec(stmt)).first()
 
-    if menu is not None and menu.eaten_at is not None:
-        raise EatenMealImmutableError(
-            f"Cannot restore pinned meal into eaten meal '{meal_type.value}'"
-        )
+    if menu is not None:
+        if menu.eaten_at is not None:
+            raise EatenMealImmutableError(
+                f"Cannot restore pin to meal '{meal_type.value}' because it is marked as eaten"
+            )
+        if menu.removed:
+            menu.removed = False
+        menu.pinned_meal_id = pin.id
+        menu.pin_dismissed = False
+        if menu.time is None and profile_time:
+            menu.time = profile_time
+        menu.updated_at = datetime.now(UTC)
+        session.add(menu)
 
-    if menu is None:
-        profile = await get_nutrition_profile(session, user_id)
-        meal_time: str | None = None
-        if profile and profile.meals:
-            for m in profile.meals:
-                if m.type == meal_type:
-                    meal_time = m.time
-                    break
-
+        items_stmt = select(MenuItem).where(MenuItem.menu_id == menu.id)
+        existing_items = list((await session.exec(items_stmt)).all())
+        for it in existing_items:
+            await session.delete(it)
+    else:
         menu = Menu(
             user_id=user_id,
             date=menu_date,
             meal_type=meal_type,
-            time=meal_time,
+            time=profile_time,
             pinned_meal_id=pin.id,
             pin_dismissed=False,
             removed=False,
@@ -338,40 +327,24 @@ async def restore_pinned_meal(
         session.add(menu)
         await session.flush()
         await session.refresh(menu)
-    else:
-        menu.removed = False
-        menu.pinned_meal_id = pin.id
-        menu.pin_dismissed = False
-        if menu.time is None:
-            profile = await get_nutrition_profile(session, user_id)
-            if profile and profile.meals:
-                for m in profile.meals:
-                    if m.type == meal_type and m.time:
-                        menu.time = m.time
-                        break
-        menu.updated_at = datetime.now(UTC)
-        session.add(menu)
-
-        items_stmt = (
-            select(MenuItem)
-            .where(MenuItem.menu_id == menu.id)
-            .order_by(col(MenuItem.position).asc())
-        )
-        existing_items = list((await session.exec(items_stmt)).all())
-        for it in existing_items:
-            await session.delete(it)
 
     pin_items = await get_pinned_meal_items(session, pin.id)
     for it in pin_items:
+        has_nutr = it.kcal is not None
         menu_item = MenuItem(
             menu_id=menu.id,
             dish_id=it.dish_id,
-            product_id=it.product_id,
             title=it.title,
             portion_g=it.portion_g,
             portion_text=it.portion_text,
-            kcal_est=it.kcal_est,
-            kcal_source=KcalSource.USER if it.kcal_est is not None else None,
+            kcal=it.kcal,
+            protein_g=it.protein_g,
+            fat_g=it.fat_g,
+            carbs_g=it.carbs_g,
+            fiber_g=it.fiber_g,
+            sugar_g=it.sugar_g,
+            sodium_mg=it.sodium_mg,
+            nutrition_source=NutritionSource.USER if has_nutr else None,
             origin=MenuItemOrigin.MANUAL,
             position=it.position,
         )
@@ -379,3 +352,17 @@ async def restore_pinned_meal(
 
     await session.commit()
     return await get_menu_read(session, menu.id, user_id)  # type: ignore[return-value]
+
+
+# Backward compatibility aliases
+get_pinned_meal = get_pinned_meal_read
+restore_pinned_meal = restore_pinned_meal_to_day
+
+
+async def get_active_pinned_meals(
+    session: AsyncSession,
+    user_id: UUID,
+) -> list[PinnedMealRead]:
+    pins = await get_pinned_meals(session, user_id)
+    return [p for p in pins if p.active]
+

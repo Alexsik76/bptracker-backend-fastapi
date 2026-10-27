@@ -8,6 +8,7 @@ from nutrition.models.dish import (
     DishCreate,
     DishRead,
     DishUpdate,
+    NewProductInput,
 )
 from nutrition.models.enums import (
     MEAL_TYPE_LABELS,
@@ -18,6 +19,7 @@ from nutrition.models.enums import (
     MenuItemOrigin,
     MenuNoteKind,
     MenuStatus,
+    NutritionSource,
     ProductAvailability,
     ProductPreference,
     Sex,
@@ -51,6 +53,7 @@ from nutrition.models.notes_and_offplan import (
     OffPlanEntryCreate,
     OffPlanEntryRead,
 )
+from nutrition.models.nutrition import NutritionEstimate, NutritionSet
 from nutrition.models.pinned_meal import (
     PinnedMeal,
     PinnedMealBase,
@@ -85,6 +88,9 @@ __all__ = [
     "ProductPreference",
     "DishKind",
     "KcalSource",
+    "NutritionSource",
+    "NutritionSet",
+    "NutritionEstimate",
     "MenuItemOrigin",
     "MenuStatus",
     "GenerationScope",
@@ -104,6 +110,7 @@ __all__ = [
     "DishComponent",
     "DishComponentCreate",
     "DishComponentRead",
+    "NewProductInput",
     "DishBase",
     "Dish",
     "DishCreate",

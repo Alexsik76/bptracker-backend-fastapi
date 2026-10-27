@@ -303,11 +303,9 @@ async def generate_menu(
         items_by_meal_type[item_data.meal_type].append(
             MenuItemCreate(
                 dish_id=item_data.dish_id,
-                product_id=item_data.product_id,
                 title=item_data.title,
                 portion_g=item_data.portion_g,
                 portion_text=item_data.portion_text,
-                kcal_est=item_data.kcal_est,
                 position=item_data.position,
             )
         )

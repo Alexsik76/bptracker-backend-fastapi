@@ -7,9 +7,10 @@ from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String, U
 from sqlmodel import Field, SQLModel
 
 from nutrition.models.enums import ProductAvailability, ProductPreference
+from nutrition.models.nutrition import NutritionSet
 
 
-class ProductBase(SQLModel):
+class ProductBase(NutritionSet):
     name: str = Field(sa_column=Column(String, nullable=False))
     availability: ProductAvailability = Field(
         default=ProductAvailability.IN_STOCK,
@@ -35,7 +36,7 @@ class ProductBase(SQLModel):
     )
     eat_raw: bool = Field(default=False, sa_column=Column(Boolean, nullable=False))
     count: int | None = Field(default=None, sa_column=Column(Integer, nullable=True))
-    daily_limit_g: int | None = Field(default=None, sa_column=Column(Integer, nullable=True))
+    stock_g: int | None = Field(default=None, sa_column=Column(Integer, nullable=True))
 
 
 class Product(ProductBase, table=True):
@@ -74,6 +75,8 @@ class ProductRead(ProductBase):
     user_id: UUID
     created_at: datetime
     updated_at: datetime
+    reserved_g: int | None = None
+    available_g: int | None = None
 
 
 class ProductUpdate(SQLModel):
@@ -82,4 +85,11 @@ class ProductUpdate(SQLModel):
     preference: ProductPreference | None = None
     eat_raw: bool | None = None
     count: int | None = None
-    daily_limit_g: int | None = None
+    stock_g: int | None = None
+    kcal: float | None = None
+    protein_g: float | None = None
+    fat_g: float | None = None
+    carbs_g: float | None = None
+    fiber_g: float | None = None
+    sugar_g: float | None = None
+    sodium_mg: float | None = None
