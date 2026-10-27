@@ -3,10 +3,15 @@ from datetime import datetime
 from uuid import UUID
 
 from sqlalchemy import func
+from sqlalchemy.exc import IntegrityError
 from sqlmodel import col, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from measurements.models import Measurement, MeasurementCreate, MeasurementUpdate
+
+
+class MeasurementConflictError(Exception):
+    """Raised when a measurement with the given ID already exists and belongs to another user."""
 
 
 async def create_measurement(
@@ -14,11 +19,31 @@ async def create_measurement(
     data: MeasurementCreate,
     user_id: UUID,
 ) -> Measurement:
-    """Persist a new measurement for the given user."""
+    """Persist a new measurement for the given user, or return existing if idempotent by id."""
+    if data.id is not None:
+        statement = select(Measurement).where(Measurement.id == data.id)
+        existing = (await session.exec(statement)).first()
+        if existing is not None:
+            if existing.user_id == user_id:
+                return existing
+            raise MeasurementConflictError("Measurement with this ID belongs to another user")
+
     measurement = Measurement.model_validate(data, update={"user_id": user_id})
     session.add(measurement)
-    await session.commit()
-    # Refresh to load DB-generated values (id, recorded_at) into the object.
+    try:
+        await session.commit()
+    except IntegrityError as exc:
+        if data.id is not None:
+            await session.rollback()
+            statement = select(Measurement).where(Measurement.id == data.id)
+            existing = (await session.exec(statement)).first()
+            if existing is not None:
+                if existing.user_id == user_id:
+                    return existing
+                raise MeasurementConflictError(
+                    "Measurement with this ID belongs to another user"
+                ) from exc
+        raise
     await session.refresh(measurement)
     return measurement
 

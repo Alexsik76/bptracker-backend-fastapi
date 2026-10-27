@@ -1,11 +1,16 @@
 from datetime import UTC, datetime, timedelta
+from uuid import UUID, uuid4
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy.exc import IntegrityError
+from sqlmodel import func, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from db import get_session
 from main import app
+from measurements import crud
+from measurements.models import Measurement, MeasurementCreate
 
 
 @pytest.mark.asyncio
@@ -289,3 +294,150 @@ async def test_measurements_requires_auth(session: AsyncSession):
         resp = await c.get("/measurements")
     app.dependency_overrides.clear()
     assert resp.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_create_measurement_with_id_returns_that_id(client):
+    client_id = str(uuid4())
+    response = await client.post(
+        "/measurements",
+        json={"id": client_id, "sys": 120, "dia": 80, "pulse": 60},
+    )
+    assert response.status_code == 201
+    body = response.json()
+    assert body["id"] == client_id
+
+
+@pytest.mark.asyncio
+async def test_create_measurement_idempotent_repeating_same_request(client, session: AsyncSession):
+    client_id = str(uuid4())
+    payload = {"id": client_id, "sys": 120, "dia": 80, "pulse": 60}
+
+    response1 = await client.post("/measurements", json=payload)
+    assert response1.status_code == 201
+    body1 = response1.json()
+
+    response2 = await client.post("/measurements", json=payload)
+    assert response2.status_code == 201
+    body2 = response2.json()
+
+    assert body1 == body2
+
+    # Exactly one row exists in the database
+    count_statement = (
+        select(func.count())
+        .select_from(Measurement)
+        .where(Measurement.id == UUID(client_id))
+    )
+    total = (await session.exec(count_statement)).one()
+    assert total == 1
+
+
+@pytest.mark.asyncio
+async def test_create_measurement_with_another_users_id_returns_409(client_factory, make_user):
+    user_a = await make_user("user_a@example.com")
+    user_b = await make_user("user_b@example.com")
+
+    client_id = str(uuid4())
+    client_a = client_factory(user_a)
+    create_a = await client_a.post(
+        "/measurements",
+        json={"id": client_id, "sys": 120, "dia": 80, "pulse": 60},
+    )
+    assert create_a.status_code == 201
+
+    # User B attempts to create with the same id
+    client_b = client_factory(user_b)
+    create_b = await client_b.post(
+        "/measurements",
+        json={"id": client_id, "sys": 130, "dia": 85, "pulse": 70},
+    )
+    assert create_b.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_create_measurement_without_id_still_works(client):
+    response = await client.post(
+        "/measurements",
+        json={"sys": 125, "dia": 82, "pulse": 65},
+    )
+    assert response.status_code == 201
+    body = response.json()
+    assert "id" in body
+    assert body["id"] is not None
+
+
+@pytest.mark.asyncio
+async def test_create_measurement_concurrent_race_same_user(session: AsyncSession, test_user_id):
+    client_id = uuid4()
+    # Pre-populate measurement in DB as if a concurrent request already committed it
+    row = Measurement(id=client_id, sys=120, dia=80, pulse=60, user_id=test_user_id)
+    session.add(row)
+    await session.commit()
+
+    data = MeasurementCreate(id=client_id, sys=120, dia=80, pulse=60)
+
+    # Simulate the pre-check missing the row (concurrency) and commit hitting IntegrityError
+    real_exec = session.exec
+    first_call = True
+
+    async def mock_exec(*args, **kwargs):
+        nonlocal first_call
+        if first_call:
+            first_call = False
+
+            class EmptyResult:
+                def first(self):
+                    return None
+
+            return EmptyResult()
+        return await real_exec(*args, **kwargs)
+
+    async def fail_commit():
+        raise IntegrityError("INSERT ...", {}, Exception("duplicate key"))
+
+    session.exec = mock_exec
+    session.commit = fail_commit
+
+    result = await crud.create_measurement(session, data, test_user_id)
+    assert result.id == client_id
+    assert result.user_id == test_user_id
+
+
+@pytest.mark.asyncio
+async def test_create_measurement_concurrent_race_other_user_conflict(
+    session: AsyncSession, make_user
+):
+    user_a = await make_user("user_a@example.com")
+    user_b = await make_user("user_b@example.com")
+    client_id = uuid4()
+
+    row = Measurement(id=client_id, sys=120, dia=80, pulse=60, user_id=user_a)
+    session.add(row)
+    await session.commit()
+
+    data = MeasurementCreate(id=client_id, sys=120, dia=80, pulse=60)
+
+    real_exec = session.exec
+    first_call = True
+
+    async def mock_exec(*args, **kwargs):
+        nonlocal first_call
+        if first_call:
+            first_call = False
+
+            class EmptyResult:
+                def first(self):
+                    return None
+
+            return EmptyResult()
+        return await real_exec(*args, **kwargs)
+
+    async def fail_commit():
+        raise IntegrityError("INSERT ...", {}, Exception("duplicate key"))
+
+    session.exec = mock_exec
+    session.commit = fail_commit
+
+    with pytest.raises(crud.MeasurementConflictError):
+        await crud.create_measurement(session, data, user_b)
