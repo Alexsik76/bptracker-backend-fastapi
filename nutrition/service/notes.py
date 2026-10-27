@@ -75,7 +75,7 @@ def build_info_note_prompt(
     for m in existing_day_menus:
         meals_summary.append(
             {
-                "slot": m.slot,
+                "meal_type": m.meal_type.value,
                 "status": m.status.value,
                 "items": [
                     {
@@ -316,7 +316,7 @@ async def handle_correction_note(
             user_id=user_id,
             menu_date=menu_date,
             scope=GenerationScope.UNMARKED,
-            slot=None,
+            meal_type=None,
             settings=settings,
         )
     except NothingToGenerateError:

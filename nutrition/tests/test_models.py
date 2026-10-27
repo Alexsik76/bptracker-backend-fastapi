@@ -11,6 +11,7 @@ from nutrition.models import (
     DishComponent,
     DishKind,
     MealSchedule,
+    MealType,
     MenuNote,
     MenuNoteKind,
     NutritionProfile,
@@ -36,9 +37,9 @@ async def test_nutrition_profile_persistence(session: AsyncSession, test_user_id
         restrictions="Low salt",
         dislikes="Liver",
         meals=[
-            MealSchedule(name="Сніданок", time="08:00"),
-            MealSchedule(name="Обід", time="13:00"),
-            MealSchedule(name="Вечеря", time="19:00"),
+            MealSchedule(type=MealType.BREAKFAST, time="08:00"),
+            MealSchedule(type=MealType.LUNCH, time="13:00"),
+            MealSchedule(type=MealType.DINNER, time="19:00"),
         ],
     )
     session.add(profile)
@@ -52,7 +53,7 @@ async def test_nutrition_profile_persistence(session: AsyncSession, test_user_id
     assert saved.birth_year == 1976
     assert saved.weight_kg == 118.0
     assert len(saved.meals) == 3
-    assert saved.meals[0].name == "Сніданок"
+    assert saved.meals[0].type == MealType.BREAKFAST
     assert saved.updated_at is not None
 
 
@@ -91,7 +92,7 @@ async def test_dish_and_components_persistence(session: AsyncSession, test_user_
         name="Вівсянка з яблуком",
         kind=DishKind.CONSTANT,
         cooked_on=date.today(),
-        fixed_slot="Сніданок",
+        fixed_meal_type=MealType.BREAKFAST,
         notes="Постійна ранкова страва",
     )
     session.add(dish)

@@ -13,6 +13,7 @@ from nutrition.models import (
     GenerationRequest,
     GenerationResultRead,
     MealCreate,
+    MealType,
     MenuItemCreate,
     MenuItemRead,
     MenuItemUpdate,
@@ -82,7 +83,7 @@ async def create_meal_slot(
             session=session,
             user_id=user_id,
             menu_date=menu_date,
-            slot=data.slot,
+            meal_type=data.meal_type,
             time=data.time,
         )
     except crud.MealSlotConflictError as exc:
@@ -93,17 +94,17 @@ async def create_meal_slot(
 
 
 @menus_router.delete(
-    "/{menu_date}/meals/{slot}",
+    "/{menu_date}/meals/{meal_type}",
     status_code=status.HTTP_204_NO_CONTENT,
 )
 async def delete_meal_slot(
     menu_date: date,
-    slot: str,
+    meal_type: MealType,
     session: SessionDep,
     user_id: CurrentUserId,
 ) -> None:
     try:
-        deleted = await crud.delete_meal_slot(session, user_id, menu_date, slot)
+        deleted = await crud.delete_meal_slot(session, user_id, menu_date, meal_type)
     except crud.EatenMealImmutableError as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -112,22 +113,22 @@ async def delete_meal_slot(
     if not deleted:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Meal slot '{slot}' not found",
+            detail=f"Meal slot '{meal_type.value}' not found",
         )
 
 
 @menus_router.post(
-    "/{menu_date}/meals/{slot}/pin",
+    "/{menu_date}/meals/{meal_type}/pin",
     response_model=MenuRead,
 )
 async def restore_pinned_meal(
     menu_date: date,
-    slot: str,
+    meal_type: MealType,
     session: SessionDep,
     user_id: CurrentUserId,
 ) -> MenuRead:
     try:
-        return await crud.restore_pinned_meal(session, user_id, menu_date, slot)
+        return await crud.restore_pinned_meal(session, user_id, menu_date, meal_type)
     except crud.EatenMealImmutableError as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -170,7 +171,7 @@ async def generate_menu_items(
             user_id=user_id,
             menu_date=menu_date,
             scope=data.scope,
-            slot=data.slot,
+            meal_type=data.meal_type,
             settings=settings,
         )
     except (ProfileNotFoundError, NothingToGenerateError) as exc:
@@ -201,7 +202,7 @@ async def estimate_menu_items(
     session: SessionDep,
     user_id: CurrentUserId,
     settings: Annotated[Settings, Depends(get_settings)],
-    slot: str | None = None,
+    meal_type: MealType | None = None,
 ) -> DayMenuRead:
     try:
         return await estimate_day_kcal(
@@ -209,7 +210,7 @@ async def estimate_menu_items(
             user_id=user_id,
             menu_date=menu_date,
             settings=settings,
-            slot=slot,
+            meal_type=meal_type,
         )
     except (ProfileNotFoundError, NothingToGenerateError) as exc:
         raise HTTPException(
@@ -282,13 +283,13 @@ async def create_menu_note(
 )
 async def add_menu_item(
     menu_date: date,
-    slot: str,
+    meal_type: MealType,
     data: MenuItemCreate,
     session: SessionDep,
     user_id: CurrentUserId,
 ) -> MenuItemRead:
     try:
-        return await crud.add_menu_item(session, user_id, menu_date, slot, data)
+        return await crud.add_menu_item(session, user_id, menu_date, meal_type, data)
     except (crud.MealSlotRemovedError, crud.EatenMealImmutableError) as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,

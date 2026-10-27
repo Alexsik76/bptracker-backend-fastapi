@@ -26,7 +26,7 @@ def _to_dish_read(dish: Dish, components: Sequence[DishComponent]) -> DishRead:
         cooked_weight_g=dish.cooked_weight_g,
         remaining_g=dish.remaining_g,
         cooked_on=dish.cooked_on,
-        fixed_slot=dish.fixed_slot,
+        fixed_meal_type=dish.fixed_meal_type,
         notes=dish.notes,
         created_at=dish.created_at,
         updated_at=dish.updated_at,

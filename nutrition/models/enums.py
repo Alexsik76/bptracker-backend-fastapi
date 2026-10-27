@@ -1,6 +1,25 @@
 from enum import StrEnum
 
 
+class MealType(StrEnum):
+    BREAKFAST = "breakfast"
+    LUNCH = "lunch"
+    DINNER = "dinner"
+    MORNING_SNACK = "morning_snack"
+    AFTERNOON_SNACK = "afternoon_snack"
+    EVENING_SNACK = "evening_snack"
+
+
+MEAL_TYPE_LABELS: dict[MealType, str] = {
+    MealType.BREAKFAST: "Сніданок",
+    MealType.LUNCH: "Обід",
+    MealType.DINNER: "Вечеря",
+    MealType.MORNING_SNACK: "Ранковий перекус",
+    MealType.AFTERNOON_SNACK: "Полуденок",
+    MealType.EVENING_SNACK: "Вечірній перекус",
+}
+
+
 class Sex(StrEnum):
     MALE = "male"
     FEMALE = "female"

@@ -148,8 +148,8 @@ async def test_day_menu_contains_notes_and_off_plan(client: AsyncClient):
             "restrictions": "Без жовчного",
             "dislikes": "Печінка",
             "meals": [
-                {"name": "Сніданок", "time": "08:00"},
-                {"name": "Обід", "time": "13:00"},
+                {"type": "breakfast", "time": "08:00"},
+                {"type": "lunch", "time": "13:00"},
             ],
         },
     )
@@ -162,7 +162,7 @@ async def test_day_menu_contains_notes_and_off_plan(client: AsyncClient):
     prod_id = prod_resp.json()["id"]
 
     await client.post(
-        "/nutrition/menus/2026-10-24/items?slot=Сніданок",
+        "/nutrition/menus/2026-10-24/items?meal_type=breakfast",
         json={"product_id": prod_id, "portion_g": 150},
     )
 
@@ -202,9 +202,9 @@ async def test_day_menu_contains_notes_and_off_plan(client: AsyncClient):
     assert day_data["date"] == "2026-10-24"
 
     assert len(day_data["menus"]) == 2
-    assert [m["slot"] for m in day_data["menus"]] == ["Сніданок", "Обід"]
-    assert day_data["menus"][0]["slot"] == "Сніданок"
-    assert day_data["menus"][1]["slot"] == "Обід"
+    assert [m["meal_type"] for m in day_data["menus"]] == ["breakfast", "lunch"]
+    assert day_data["menus"][0]["meal_type"] == "breakfast"
+    assert day_data["menus"][1]["meal_type"] == "lunch"
     assert day_data["menus"][1]["id"] is None
 
     assert len(day_data["notes"]) == 1
@@ -266,7 +266,7 @@ async def test_day_menu_404_rule(client: AsyncClient):
             "weight_kg": 118,
             "target_weight_kg": 110,
             "pace_kg_per_week": 0.5,
-            "meals": [{"name": "Сніданок", "time": "08:00"}],
+            "meals": [{"type": "breakfast", "time": "08:00"}],
         },
     )
     mock_result = GeminiResult(
@@ -288,7 +288,7 @@ async def test_day_menu_404_rule(client: AsyncClient):
     assert resp4.status_code == 200
     data4 = resp4.json()
     assert len(data4["menus"]) == 1
-    assert data4["menus"][0]["slot"] == "Сніданок"
+    assert data4["menus"][0]["meal_type"] == "breakfast"
     assert data4["menus"][0]["id"] is None
     assert data4["off_plan"] == []
     assert len(data4["notes"]) == 1

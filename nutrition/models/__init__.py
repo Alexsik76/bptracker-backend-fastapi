@@ -10,9 +10,11 @@ from nutrition.models.dish import (
     DishUpdate,
 )
 from nutrition.models.enums import (
+    MEAL_TYPE_LABELS,
     DishKind,
     GenerationScope,
     KcalSource,
+    MealType,
     MenuItemOrigin,
     MenuNoteKind,
     MenuStatus,
@@ -77,6 +79,8 @@ from nutrition.models.profile import (
 
 __all__ = [
     "Sex",
+    "MealType",
+    "MEAL_TYPE_LABELS",
     "ProductAvailability",
     "ProductPreference",
     "DishKind",

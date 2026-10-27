@@ -21,9 +21,9 @@ async def test_upsert_and_get_profile(client: AsyncClient):
         "restrictions": "Обмеження солі",
         "dislikes": "Печінка",
         "meals": [
-            {"name": "Сніданок", "time": "08:00"},
-            {"name": "Обід", "time": "13:00"},
-            {"name": "Вечеря", "time": "19:00"},
+            {"type": "breakfast", "time": "08:00"},
+            {"type": "lunch", "time": "13:00"},
+            {"type": "dinner", "time": "19:00"},
         ],
     }
 
@@ -36,7 +36,7 @@ async def test_upsert_and_get_profile(client: AsyncClient):
     assert data["weight_kg"] == 118.0
     assert data["target_weight_kg"] == 110.0
     assert len(data["meals"]) == 3
-    assert data["meals"][0]["name"] == "Сніданок"
+    assert data["meals"][0]["type"] == "breakfast"
     assert "updated_at" in data
     assert "user_id" in data
 
@@ -56,8 +56,8 @@ async def test_upsert_and_get_profile(client: AsyncClient):
         "restrictions": None,
         "dislikes": None,
         "meals": [
-            {"name": "Сніданок", "time": "09:00"},
-            {"name": "Вечеря", "time": "18:00"},
+            {"type": "breakfast", "time": "09:00"},
+            {"type": "dinner", "time": "18:00"},
         ],
     }
     put_resp2 = await client.put("/nutrition/profile", json=updated_payload)
@@ -67,6 +67,47 @@ async def test_upsert_and_get_profile(client: AsyncClient):
     assert data2["restrictions"] is None
     assert len(data2["meals"]) == 2
     assert data2["meals"][0]["time"] == "09:00"
+
+
+@pytest.mark.asyncio
+async def test_profile_rejects_duplicate_meal_types(client: AsyncClient):
+    payload = {
+        "sex": "male",
+        "birth_year": 1980,
+        "height_cm": 180,
+        "weight_kg": 80.0,
+        "target_weight_kg": 75.0,
+        "pace_kg_per_week": 0.5,
+        "meals": [
+            {"type": "breakfast", "time": "08:00"},
+            {"type": "breakfast", "time": "09:00"},
+        ],
+    }
+    resp = await client.put("/nutrition/profile", json=payload)
+    assert resp.status_code == 422
+    assert "Duplicate meal types are not allowed" in resp.text
+
+
+@pytest.mark.asyncio
+async def test_profile_meals_sorted_by_time(client: AsyncClient):
+    payload = {
+        "sex": "male",
+        "birth_year": 1980,
+        "height_cm": 180,
+        "weight_kg": 80.0,
+        "target_weight_kg": 75.0,
+        "pace_kg_per_week": 0.5,
+        "meals": [
+            {"type": "dinner", "time": "19:00"},
+            {"type": "breakfast", "time": "08:00"},
+            {"type": "lunch", "time": "13:00"},
+        ],
+    }
+    resp = await client.put("/nutrition/profile", json=payload)
+    assert resp.status_code == 200
+    meals = resp.json()["meals"]
+    assert [m["type"] for m in meals] == ["breakfast", "lunch", "dinner"]
+    assert [m["time"] for m in meals] == ["08:00", "13:00", "19:00"]
 
 
 @pytest.mark.asyncio

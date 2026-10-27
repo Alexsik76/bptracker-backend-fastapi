@@ -1,9 +1,9 @@
 import json
 
-from nutrition.models import KcalSource, MenuStatus
+from nutrition.models import MEAL_TYPE_LABELS, KcalSource, MealType, MenuStatus
 from nutrition.service.context import GenerationContext
 
-PROMPT_VERSION = "2026-10-27.2"
+PROMPT_VERSION = "2026-10-27.3"
 
 
 def build_generation_prompt(context: GenerationContext) -> str:
@@ -30,12 +30,17 @@ def build_generation_prompt(context: GenerationContext) -> str:
         }
         if context.existing_day_menus:
             meals_info = [
-                f"{m.slot} ({m.time})" if m.time else m.slot
+                f"{MEAL_TYPE_LABELS.get(m.meal_type, m.meal_type.value)} ({m.time})"
+                if m.time
+                else MEAL_TYPE_LABELS.get(m.meal_type, m.meal_type.value)
                 for m in context.existing_day_menus
             ]
         else:
             meals_info = [
-                f"{m.name} ({m.time})" if m.time else m.name for m in profile.meals
+                f"{MEAL_TYPE_LABELS.get(m.type, m.type.value)} ({m.time})"
+                if m.time
+                else MEAL_TYPE_LABELS.get(m.type, m.type.value)
+                for m in profile.meals
             ] or [
                 "Сніданок",
                 "Обід",
@@ -63,7 +68,7 @@ def build_generation_prompt(context: GenerationContext) -> str:
         {
             "id": str(d.id),
             "name": d.name,
-            "fixed_slot": d.fixed_slot,
+            "fixed_meal_type": d.fixed_meal_type.value if d.fixed_meal_type else None,
             "notes": d.notes,
             "components": [c.name for c in d.components],
         }
@@ -86,7 +91,7 @@ def build_generation_prompt(context: GenerationContext) -> str:
     for menu in context.existing_day_menus:
         existing_meals_data.append(
             {
-                "slot": menu.slot,
+                "meal_type": menu.meal_type.value,
                 "status": menu.status.value,
                 "pinned": menu.pinned,
                 "items": [
@@ -123,7 +128,7 @@ def build_generation_prompt(context: GenerationContext) -> str:
             history_summary.append(
                 {
                     "date": str(h.date),
-                    "slot": h.slot,
+                    "meal_type": h.meal_type.value,
                     "items": [
                         f"{i.title} ({i.portion_g}g)" if i.portion_g else i.title
                         for i in h.items
@@ -132,9 +137,11 @@ def build_generation_prompt(context: GenerationContext) -> str:
             )
 
     scope_instructions = f"Обсяг генерації: {context.scope}."
-    if context.scope == "slot" and context.target_slot:
+    if context.scope == "slot" and context.target_meal_type:
+        label = MEAL_TYPE_LABELS.get(context.target_meal_type, context.target_meal_type.value)
         scope_instructions += (
-            f" Згенерувати або оновити пропозиції лише для прийому: '{context.target_slot}'. "
+            f" Згенерувати або оновити пропозиції лише для прийому: "
+            f"'{context.target_meal_type.value}' ({label}). "
             "Замінити всі позиції цього прийому (якщо він незакріплений і не з'їдений). "
             "Усі інші прийоми їжі цього дня є вже сформованими — "
             "врахуй їх як фіксований контекст і не генеруй для них нових позицій. "
@@ -151,7 +158,7 @@ def build_generation_prompt(context: GenerationContext) -> str:
         )
 
     has_evening_snack = any(
-        "перекус" in m.name.lower()
+        m.type == MealType.EVENING_SNACK
         for m in (profile.meals if profile else [])
     )
     if has_evening_snack:
@@ -166,7 +173,7 @@ def build_generation_prompt(context: GenerationContext) -> str:
         )
 
     rules = (
-        "1. Постійні страви із закріпленим прийомом (fixed_slot) не змінюються:\n"
+        "1. Постійні страви із закріпленим прийомом (fixed_meal_type) не змінюються:\n"
         "   вони обов'язково включаються у свій прийом, калорійність враховується.\n"
         "2. Готові страви використовуються ПЕРШИМИ, у порядку свіжості (cooked_on),\n"
         "   з розподілом на кілька днів з урахуванням строку зберігання "
@@ -240,8 +247,9 @@ def build_generation_prompt(context: GenerationContext) -> str:
 Сформуй збалансоване меню та поверни JSON, що містить:
 - rationale: коротке зрозуміле пояснення вибору та калорійності;
 - shopping_list: список продуктів, які варто докупити (якщо все є, пустий список);
-- items: масив позицій меню (slot — назва прийому їжі без часу, dish_id, product_id,
-  title, portion_g, portion_text, kcal_est, position). Generating items for meals already
-  marked 'eaten' or pinned is not required.
+- items: масив позицій меню (meal_type — тип прийому їжі:
+  breakfast, lunch, dinner, morning_snack, afternoon_snack, evening_snack;
+  dish_id, product_id, title, portion_g, portion_text, kcal_est, position).
+  Generating items for meals already marked 'eaten' or pinned is not required.
 """
     return prompt

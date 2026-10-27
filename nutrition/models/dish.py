@@ -18,7 +18,7 @@ from sqlalchemy import (
 )
 from sqlmodel import Field, SQLModel
 
-from nutrition.models.enums import DishKind
+from nutrition.models.enums import DishKind, MealType
 
 
 class DishComponentBase(SQLModel):
@@ -65,7 +65,17 @@ class DishBase(SQLModel):
     cooked_weight_g: int | None = Field(default=None, sa_column=Column(Integer, nullable=True))
     remaining_g: int | None = Field(default=None, sa_column=Column(Integer, nullable=True))
     cooked_on: date | None = Field(default=None, sa_column=Column(Date, nullable=True))
-    fixed_slot: str | None = Field(default=None, sa_column=Column(String, nullable=True))
+    fixed_meal_type: MealType | None = Field(
+        default=None,
+        sa_column=Column(
+            sa.Enum(
+                MealType,
+                name="mealtype",
+                values_callable=lambda x: [e.value for e in x],
+            ),
+            nullable=True,
+        ),
+    )
     notes: str | None = Field(default=None, sa_column=Column(String, nullable=True))
 
 
@@ -134,7 +144,7 @@ class DishUpdate(SQLModel):
     cooked_weight_g: int | None = None
     remaining_g: int | None = None
     cooked_on: date | None = None
-    fixed_slot: str | None = None
+    fixed_meal_type: MealType | None = None
     notes: str | None = None
     components: list[DishComponentCreate] | None = None
 

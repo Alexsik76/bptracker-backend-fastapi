@@ -14,6 +14,7 @@ from nutrition import crud
 from nutrition.models import (
     GenerationResultRead,
     GenerationScope,
+    MealType,
     MenuItemCreate,
     is_meal_generatable,
 )
@@ -94,12 +95,12 @@ async def generate_menu(
     user_id: UUID,
     menu_date: date,
     scope: GenerationScope,
-    slot: str | None,
+    meal_type: MealType | None,
     settings: Settings,
 ) -> GenerationResultRead:
     """Generate or update nutrition menu propositions for the specified scope."""
-    if scope == GenerationScope.SLOT and not slot:
-        raise InvalidGenerationRequest("Slot name is required when scope is 'slot'")
+    if scope == GenerationScope.SLOT and not meal_type:
+        raise InvalidGenerationRequest("Meal type is required when scope is 'slot'")
 
     # 1. Pre-check profile
     profile = await crud.get_nutrition_profile(session, user_id)
@@ -114,17 +115,19 @@ async def generate_menu(
     await materialize_pinned_meals(session, user_id, menu_date)
 
     canvas_menus = await crud.get_day_menus(session, user_id, menu_date)
-    allowed_slots = [m.slot for m in canvas_menus]
+    allowed_meal_types = [m.meal_type for m in canvas_menus]
 
     if scope == GenerationScope.SLOT:
-        if slot not in allowed_slots:
+        if meal_type not in allowed_meal_types:
             raise InvalidGenerationRequest(
-                f"Slot '{slot}' is not on the canvas or has been removed"
+                f"Meal type '{meal_type.value if meal_type else None}' "
+                "is not on the canvas or has been removed"
             )
-        target_meal = next(m for m in canvas_menus if m.slot == slot)
+        target_meal = next(m for m in canvas_menus if m.meal_type == meal_type)
         if not is_meal_generatable(target_meal):
             raise NothingToGenerateError(
-                f"Meal '{slot}' is not generatable (locked or already eaten)"
+                f"Meal '{meal_type.value if meal_type else None}' "
+                "is not generatable (locked or already eaten)"
             )
     elif scope in (GenerationScope.DAY, GenerationScope.UNMARKED):
         generatable_meals = [m for m in canvas_menus if is_meal_generatable(m)]
@@ -141,7 +144,7 @@ async def generate_menu(
         user_id=user_id,
         menu_date=menu_date,
         settings=settings,
-        slot=None,
+        meal_type=None,
     )
 
     # Stage 2: Build context using CRUD with updated kcal
@@ -150,7 +153,7 @@ async def generate_menu(
         user_id=user_id,
         menu_date=menu_date,
         scope=scope.value,
-        target_slot=slot,
+        target_meal_type=meal_type,
         history_days=settings.menu_history_days,
     )
 
@@ -176,7 +179,7 @@ async def generate_menu(
             response_schema=build_gemini_response_schema(
                 context.dishes_map.keys(),
                 context.products_map.keys(),
-                allowed_slots=allowed_slots,
+                allowed_meal_types=allowed_meal_types,
             ),
         )
         duration_ms = int(round((time.perf_counter() - start_time) * 1000))
@@ -269,8 +272,8 @@ async def generate_menu(
             dishes_map=context.dishes_map,
             products_map=context.products_map,
             existing_menus=context.existing_day_menus,
-            target_slot=slot if scope == GenerationScope.SLOT else None,
-            allowed_slots=allowed_slots,
+            target_meal_type=meal_type if scope == GenerationScope.SLOT else None,
+            allowed_meal_types=allowed_meal_types,
         )
     except (ValidationError, ValueError) as exc:
         logger.warning("Generation response schema validation failed for user %s: %s", user_id, exc)
@@ -292,12 +295,12 @@ async def generate_menu(
             f"Generation response validation failed: {exc}", raw_response=raw_response_text
         ) from exc
 
-    # 5. Group generated items by meal slot and apply in a single transaction via CRUD
-    items_by_slot: dict[str, list[MenuItemCreate]] = defaultdict(list)
+    # 5. Group generated items by meal type and apply in a single transaction via CRUD
+    items_by_meal_type: dict[MealType, list[MenuItemCreate]] = defaultdict(list)
     for item_data in parsed_response.items:
-        if scope == GenerationScope.SLOT and slot and item_data.slot != slot:
+        if scope == GenerationScope.SLOT and meal_type and item_data.meal_type != meal_type:
             continue
-        items_by_slot[item_data.slot].append(
+        items_by_meal_type[item_data.meal_type].append(
             MenuItemCreate(
                 dish_id=item_data.dish_id,
                 product_id=item_data.product_id,
@@ -310,12 +313,12 @@ async def generate_menu(
         )
 
     # Existing meals for today
-    existing_menus_by_slot = {m.slot: m for m in context.existing_day_menus}
+    existing_menus_by_type = {m.meal_type: m for m in context.existing_day_menus}
 
-    for target_meal_slot, new_items in items_by_slot.items():
-        if target_meal_slot not in allowed_slots:
+    for target_meal_type, new_items in items_by_meal_type.items():
+        if target_meal_type not in allowed_meal_types:
             continue
-        existing_menu_read = existing_menus_by_slot.get(target_meal_slot)
+        existing_menu_read = existing_menus_by_type.get(target_meal_type)
         # If meal is not generatable (e.g. all items eaten/skipped), skip it entirely
         if existing_menu_read and not is_meal_generatable(existing_menu_read):
             continue
@@ -324,7 +327,7 @@ async def generate_menu(
             session=session,
             user_id=user_id,
             menu_date=menu_date,
-            slot=target_meal_slot,
+            meal_type=target_meal_type,
         )
         await crud.replace_unmarked_slot_items(
             session=session,

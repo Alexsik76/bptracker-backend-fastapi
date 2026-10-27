@@ -1,4 +1,3 @@
-import re
 from collections.abc import Iterable
 from copy import deepcopy
 from typing import Any
@@ -9,6 +8,7 @@ from pydantic import BaseModel, Field, model_validator
 from nutrition.models import (
     DishKind,
     DishRead,
+    MealType,
     MenuRead,
     MenuStatus,
     ProductRead,
@@ -17,7 +17,7 @@ from nutrition.models import (
 
 
 class GeneratedMenuItem(BaseModel):
-    slot: str
+    meal_type: MealType
     dish_id: UUID | None = None
     product_id: UUID | None = None
     title: str
@@ -28,9 +28,6 @@ class GeneratedMenuItem(BaseModel):
 
     @model_validator(mode="after")
     def validate_reference(self) -> "GeneratedMenuItem":
-        self.slot = re.sub(r"\s*\(\d{1,2}:\d{2}\)\s*$", "", self.slot).strip()
-        if not self.slot:
-            raise ValueError("Slot name must not be empty")
         if (self.dish_id is None and self.product_id is None) or (
             self.dish_id is not None and self.product_id is not None
         ):
@@ -63,11 +60,11 @@ GEMINI_RESPONSE_SCHEMA: dict[str, Any] = {
             "items": {
                 "type": "OBJECT",
                 "properties": {
-                    "slot": {
+                    "meal_type": {
                         "type": "STRING",
                         "description": (
-                            "Точна назва прийому їжі без часу "
-                            "(наприклад 'Сніданок', 'Обід', 'Вечеря', 'Перекус')"
+                            "Тип прийому їжі: breakfast, lunch, dinner, "
+                            "morning_snack, afternoon_snack, evening_snack"
                         ),
                     },
                     "dish_id": {
@@ -104,7 +101,7 @@ GEMINI_RESPONSE_SCHEMA: dict[str, Any] = {
                     },
                 },
                 "required": [
-                    "slot",
+                    "meal_type",
                     "dish_id",
                     "product_id",
                     "title",
@@ -123,14 +120,16 @@ GEMINI_RESPONSE_SCHEMA: dict[str, Any] = {
 def build_gemini_response_schema(
     dish_ids: Iterable[UUID],
     product_ids: Iterable[UUID],
-    allowed_slots: Iterable[str] | None = None,
+    allowed_meal_types: Iterable[MealType] | None = None,
 ) -> dict[str, Any]:
     schema = deepcopy(GEMINI_RESPONSE_SCHEMA)
     item_props = schema["properties"]["items"]["items"]["properties"]
 
-    if allowed_slots:
-        item_props["slot"]["format"] = "enum"
-        item_props["slot"]["enum"] = list(allowed_slots)
+    if allowed_meal_types:
+        item_props["meal_type"]["format"] = "enum"
+        item_props["meal_type"]["enum"] = [
+            m.value if isinstance(m, MealType) else str(m) for m in allowed_meal_types
+        ]
 
     dish_enum = [str(id) for id in dish_ids]
     if dish_enum:
@@ -150,32 +149,35 @@ def validate_generation_response(
     dishes_map: dict[UUID, DishRead],
     products_map: dict[UUID, ProductRead],
     existing_menus: list[MenuRead],
-    target_slot: str | None = None,
-    allowed_slots: Iterable[str] | None = None,
+    target_meal_type: MealType | None = None,
+    allowed_meal_types: Iterable[MealType] | None = None,
 ) -> None:
     """Validate that generated items reference available entities and obey limits.
 
     Raises ValueError on validation failure.
     """
-    if allowed_slots:
-        allowed_slots_set = set(allowed_slots)
+    if allowed_meal_types:
+        allowed_meal_types_set = {
+            m if isinstance(m, MealType) else MealType(m) for m in allowed_meal_types
+        }
         for item in response.items:
-            if item.slot not in allowed_slots_set:
+            if item.meal_type not in allowed_meal_types_set:
+                allowed_vals = [m.value for m in sorted(allowed_meal_types_set)]
                 raise ValueError(
-                    f"Generated slot '{item.slot}' is not allowed in profile schedule. "
-                    f"Allowed slots: {sorted(allowed_slots_set)}"
+                    f"Generated meal type '{item.meal_type.value}' is not allowed in profile "
+                    f"schedule. Allowed meal types: {allowed_vals}"
                 )
 
     # Ready dish remaining_g in DB already has eaten meals deducted.
     # Product daily_limit_g is a daily cap, so eaten meals still count toward product_portions_used.
     dish_portions_used: dict[UUID, int] = {}
     product_portions_used: dict[UUID, int] = {}
-    locked_slots: set[str] = set()
+    locked_meal_types: set[MealType] = set()
 
     for menu in existing_menus:
         # An eaten or pinned meal is locked
         if not is_meal_generatable(menu):
-            locked_slots.add(menu.slot)
+            locked_meal_types.add(menu.meal_type)
 
         if menu.eaten_at is not None or menu.status == MenuStatus.EATEN:
             for item in menu.items:
@@ -184,8 +186,8 @@ def validate_generation_response(
                         product_portions_used.get(item.product_id, 0) + item.portion_g
                     )
 
-        if target_slot and menu.slot != target_slot:
-            # In slot scope, non-eaten meals of other slots keep reserving portions
+        if target_meal_type and menu.meal_type != target_meal_type:
+            # In meal scope, non-eaten meals of other types keep reserving portions
             if menu.eaten_at is None and menu.status != MenuStatus.EATEN:
                 for item in menu.items:
                     if item.dish_id and item.portion_g:
@@ -197,15 +199,21 @@ def validate_generation_response(
                             product_portions_used.get(item.product_id, 0) + item.portion_g
                         )
 
-    # Ignore items for locked slots since generator never overwrites them
-    if target_slot:
+    # Ignore items for locked meal types since generator never overwrites them
+    if target_meal_type:
         relevant_items = [
-            it for it in response.items if it.slot == target_slot and it.slot not in locked_slots
+            it
+            for it in response.items
+            if it.meal_type == target_meal_type and it.meal_type not in locked_meal_types
         ]
-        if target_slot not in locked_slots and not relevant_items:
-            raise ValueError(f"No items generated for target slot '{target_slot}'")
+        if target_meal_type not in locked_meal_types and not relevant_items:
+            raise ValueError(
+                f"No items generated for target meal type '{target_meal_type.value}'"
+            )
     else:
-        relevant_items = [it for it in response.items if it.slot not in locked_slots]
+        relevant_items = [
+            it for it in response.items if it.meal_type not in locked_meal_types
+        ]
 
     for item in relevant_items:
         if item.dish_id is not None:

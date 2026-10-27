@@ -8,6 +8,7 @@ from nutrition.models import (
     DishRead,
     KcalSource,
     MealSchedule,
+    MealType,
     MenuItemOrigin,
     MenuItemRead,
     MenuRead,
@@ -35,7 +36,7 @@ def test_schema_item_validation_dish_or_product():
 
     # Valid: only dish_id (portion_text auto-filled from portion_g)
     item1 = GeneratedMenuItem(
-        slot="Сніданок",
+        meal_type=MealType.BREAKFAST,
         dish_id=dish_id,
         title="Вівсянка",
         portion_g=200,
@@ -48,7 +49,7 @@ def test_schema_item_validation_dish_or_product():
 
     # Valid: only product_id
     item2 = GeneratedMenuItem(
-        slot="Перекус",
+        meal_type=MealType.AFTERNOON_SNACK,
         product_id=prod_id,
         title="Яблуко",
         portion_g=150,
@@ -61,7 +62,7 @@ def test_schema_item_validation_dish_or_product():
     # Invalid: missing portion_g
     with pytest.raises(ValueError):
         GeneratedMenuItem(
-            slot="Сніданок",
+            meal_type=MealType.BREAKFAST,
             dish_id=dish_id,
             title="Вівсянка",
             kcal_est=300,
@@ -70,7 +71,7 @@ def test_schema_item_validation_dish_or_product():
     # Invalid: neither
     with pytest.raises(ValueError, match="Exactly one of dish_id or product_id"):
         GeneratedMenuItem(
-            slot="Сніданок",
+            meal_type=MealType.BREAKFAST,
             title="Ніщо",
             portion_g=100,
             kcal_est=100,
@@ -79,7 +80,7 @@ def test_schema_item_validation_dish_or_product():
     # Invalid: both
     with pytest.raises(ValueError, match="Exactly one of dish_id or product_id"):
         GeneratedMenuItem(
-            slot="Сніданок",
+            meal_type=MealType.BREAKFAST,
             dish_id=dish_id,
             product_id=prod_id,
             title="Обидва",
@@ -124,14 +125,14 @@ def test_validate_generation_response_limits():
         shopping_list=[],
         items=[
             GeneratedMenuItem(
-                slot="Обід",
+                meal_type=MealType.LUNCH,
                 dish_id=dish_id,
                 title="Тушковане м'ясо",
                 portion_g=150,
                 kcal_est=250,
             ),
             GeneratedMenuItem(
-                slot="Перекус",
+                meal_type=MealType.AFTERNOON_SNACK,
                 product_id=prod_id,
                 title="Горіхи",
                 portion_g=25,
@@ -151,14 +152,14 @@ def test_validate_generation_response_limits():
         rationale="Забагато м'яса",
         items=[
             GeneratedMenuItem(
-                slot="Обід",
+                meal_type=MealType.LUNCH,
                 dish_id=dish_id,
                 title="Тушковане м'ясо",
                 portion_g=120,
                 kcal_est=200,
             ),
             GeneratedMenuItem(
-                slot="Вечеря",
+                meal_type=MealType.DINNER,
                 dish_id=dish_id,
                 title="Тушковане м'ясо",
                 portion_g=120,
@@ -183,7 +184,7 @@ def test_validate_generation_response_limits():
         rationale="Забагато горіхів",
         items=[
             GeneratedMenuItem(
-                slot="Перекус",
+                meal_type=MealType.AFTERNOON_SNACK,
                 product_id=prod_id,
                 title="Горіхи",
                 portion_g=40,
@@ -215,9 +216,10 @@ def test_build_generation_prompt():
         restrictions="Видалений жовчний міхур",
         dislikes="Печінка",
         meals=[
-            MealSchedule(name="Сніданок", time="08:00"),
-            MealSchedule(name="Обід", time="13:00"),
-            MealSchedule(name="Вечеря", time="19:00"),
+            MealSchedule(type=MealType.BREAKFAST, time="08:00"),
+            MealSchedule(type=MealType.LUNCH, time="13:00"),
+            MealSchedule(type=MealType.DINNER, time="19:00"),
+            MealSchedule(type=MealType.EVENING_SNACK, time="21:00"),
         ],
         updated_at=now,
     )
@@ -226,7 +228,7 @@ def test_build_generation_prompt():
         user_id=user_id,
         date=date(2026, 10, 23),
         scope="day",
-        target_slot=None,
+        target_meal_type=None,
         profile=profile,
         ready_dishes=[],
         constant_dishes=[],
@@ -235,7 +237,7 @@ def test_build_generation_prompt():
         history_menus=[],
     )
 
-    assert PROMPT_VERSION == "2026-10-27.2"
+    assert PROMPT_VERSION == "2026-10-27.3"
     prompt = build_generation_prompt(context)
     assert "2026-10-23" in prompt
     assert "Видалений жовчний міхур" in prompt
@@ -257,7 +259,7 @@ def test_build_generation_prompt_with_free_text_item():
         target_weight_kg=75.0,
         pace_kg_per_week=0.5,
         meals=[
-            MealSchedule(name="Сніданок", time="08:00"),
+            MealSchedule(type=MealType.BREAKFAST, time="08:00"),
         ],
         updated_at=now,
     )
@@ -283,7 +285,7 @@ def test_build_generation_prompt_with_free_text_item():
         id=menu_id,
         user_id=user_id,
         date=date(2026, 10, 27),
-        slot="Сніданок",
+        meal_type=MealType.BREAKFAST,
         status=MenuStatus.PLANNED,
         regenerations=0,
         created_at=now,
@@ -295,7 +297,7 @@ def test_build_generation_prompt_with_free_text_item():
         user_id=user_id,
         date=date(2026, 10, 27),
         scope="day",
-        target_slot=None,
+        target_meal_type=None,
         profile=profile,
         ready_dishes=[],
         constant_dishes=[],
@@ -374,7 +376,7 @@ def test_validate_generation_response_eaten_dish_not_double_counted():
         id=menu_id,
         user_id=user_id,
         date=date(2026, 10, 24),
-        slot="Обід",
+        meal_type=MealType.LUNCH,
         status=MenuStatus.EATEN,
         eaten_at=now,
         regenerations=1,
@@ -401,14 +403,14 @@ def test_validate_generation_response_eaten_dish_not_double_counted():
         rationale="Залишок кускусу на вечерю",
         items=[
             GeneratedMenuItem(
-                slot="Обід (13:00)",
+                meal_type=MealType.LUNCH,
                 dish_id=dish_id,
                 title="каша кускус",
                 portion_g=250,
                 kcal_est=280,
             ),
             GeneratedMenuItem(
-                slot="Вечеря (19:00)",
+                meal_type=MealType.DINNER,
                 dish_id=dish_id,
                 title="каша кускус",
                 portion_g=200,
@@ -416,8 +418,8 @@ def test_validate_generation_response_eaten_dish_not_double_counted():
             ),
         ],
     )
-    assert resp.items[0].slot == "Обід"
-    assert resp.items[1].slot == "Вечеря"
+    assert resp.items[0].meal_type == MealType.LUNCH
+    assert resp.items[1].meal_type == MealType.DINNER
 
     validate_generation_response(
         response=resp,

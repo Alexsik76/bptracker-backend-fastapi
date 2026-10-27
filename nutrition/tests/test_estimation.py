@@ -15,6 +15,7 @@ from nutrition.models import (
     DayMenuRead,
     GenerationLog,
     KcalSource,
+    MealType,
     MenuItem,
     MenuItemCreate,
     MenuItemUpdate,
@@ -55,7 +56,7 @@ async def test_estimate_stores_model_values(
         session,
         user_id,
         test_date,
-        "Сніданок",
+        MealType.BREAKFAST,
         MenuItemCreate(
             dish_id=UUID(dish["id"]),
             portion_g=200,
@@ -68,7 +69,7 @@ async def test_estimate_stores_model_values(
         session,
         user_id,
         test_date,
-        "Сніданок",
+        MealType.BREAKFAST,
         MenuItemCreate(
             title="Огірок свіжий",
             portion_g=100,
@@ -81,7 +82,7 @@ async def test_estimate_stores_model_values(
         session,
         user_id,
         test_date,
-        "Сніданок",
+        MealType.BREAKFAST,
         MenuItemCreate(
             title="Кава чорна",
             portion_text="1 чашка",
@@ -94,13 +95,13 @@ async def test_estimate_stores_model_values(
         session,
         user_id,
         test_date,
-        "Обід",
+        MealType.LUNCH,
         MenuItemCreate(
             title="Хліб",
             portion_g=50,
         ),
     )
-    lunch_menu = await crud.get_menu(session, user_id, test_date, "Обід")
+    lunch_menu = await crud.get_menu(session, user_id, test_date, MealType.LUNCH)
     assert lunch_menu is not None and lunch_menu.id is not None
     await crud.update_menu(
         session,
@@ -187,7 +188,7 @@ async def test_nothing_to_estimate_makes_no_gemini_call(
         session,
         user_id,
         test_date,
-        "Обід",
+        MealType.LUNCH,
         MenuItemCreate(
             title="Суп",
             portion_g=300,
@@ -199,7 +200,7 @@ async def test_nothing_to_estimate_makes_no_gemini_call(
         session,
         user_id,
         test_date,
-        "Обід",
+        MealType.LUNCH,
         MenuItemCreate(
             title="Десерт",
             portion_g=100,
@@ -238,7 +239,7 @@ async def test_invalid_ids_rejected(session: AsyncSession, test_user_id: UUID):
         session,
         user_id,
         test_date,
-        "Вечеря",
+        MealType.DINNER,
         MenuItemCreate(
             title="Сир кисломолочний",
             portion_g=150,
@@ -334,7 +335,7 @@ async def test_reset_after_manual_edit(session: AsyncSession, test_user_id: UUID
         session,
         user_id,
         test_date,
-        "Обід",
+        MealType.LUNCH,
         MenuItemCreate(
             title="Рагу овочеве",
             portion_g=250,
@@ -438,7 +439,7 @@ async def test_kcal_incomplete_flags(session: AsyncSession, test_user_id: UUID):
         session,
         user_id,
         test_date,
-        "Сніданок",
+        MealType.BREAKFAST,
         MenuItemCreate(
             title="Тост",
             portion_g=60,
@@ -470,13 +471,13 @@ async def test_endpoint_happy_path_and_errors(client: AsyncClient):
 
     # Create 2 items
     resp1 = await client.post(
-        f"/nutrition/menus/{date_str}/items?slot=Сніданок",
+        f"/nutrition/menus/{date_str}/items?meal_type=breakfast",
         json={"title": "Млинці", "portion_g": 200},
     )
     item1_id = resp1.json()["id"]
 
     resp2 = await client.post(
-        f"/nutrition/menus/{date_str}/items?slot=Обід",
+        f"/nutrition/menus/{date_str}/items?meal_type=lunch",
         json={"title": "Борщ", "portion_g": 350},
     )
     item2_id = resp2.json()["id"]
@@ -498,7 +499,7 @@ async def test_endpoint_happy_path_and_errors(client: AsyncClient):
         est_resp = await client.post(f"/nutrition/menus/{date_str}/estimate")
         assert est_resp.status_code == 422
 
-    # 3. Happy path: estimate only one slot
+    # 3. Happy path: estimate only one meal type
     mock_gemini_slot = GeminiResult(
         data={"items": [{"id": item1_id, "kcal_est": 340}]},
         raw_text="{}",
@@ -508,15 +509,15 @@ async def test_endpoint_happy_path_and_errors(client: AsyncClient):
     )
     with patch("gemini_infra.generate_json", new_callable=AsyncMock) as mock_gen:
         mock_gen.return_value = mock_gemini_slot
-        est_resp = await client.post(f"/nutrition/menus/{date_str}/estimate?slot=Сніданок")
+        est_resp = await client.post(f"/nutrition/menus/{date_str}/estimate?meal_type=breakfast")
         assert est_resp.status_code == 200
         data = est_resp.json()
-        breakfast = [m for m in data["menus"] if m["slot"] == "Сніданок"][0]
+        breakfast = [m for m in data["menus"] if m["meal_type"] == "breakfast"][0]
         assert breakfast["items"][0]["kcal_est"] == 340
         assert breakfast["items"][0]["kcal_source"] == "model"
         assert breakfast["kcal_incomplete"] is False
         # Lunch still incomplete, so day is incomplete
-        lunch = [m for m in data["menus"] if m["slot"] == "Обід"][0]
+        lunch = [m for m in data["menus"] if m["meal_type"] == "lunch"][0]
         assert lunch["kcal_incomplete"] is True
         assert data["kcal_incomplete"] is True
 
@@ -534,7 +535,7 @@ async def test_endpoint_happy_path_and_errors(client: AsyncClient):
         assert est_resp.status_code == 200
         data = est_resp.json()
         assert data["kcal_incomplete"] is False
-        lunch = [m for m in data["menus"] if m["slot"] == "Обід"][0]
+        lunch = [m for m in data["menus"] if m["meal_type"] == "lunch"][0]
         assert lunch["items"][0]["kcal_est"] == 250
         assert lunch["items"][0]["kcal_source"] == "model"
         assert lunch["kcal_incomplete"] is False
@@ -546,7 +547,7 @@ async def test_unchanged_patch_keeps_model_estimate(client: AsyncClient):
 
     # 1. Create item
     resp = await client.post(
-        f"/nutrition/menus/{date_str}/items?slot=Сніданок",
+        f"/nutrition/menus/{date_str}/items?meal_type=breakfast",
         json={"title": "Вівсянка", "portion_g": 200, "portion_text": "200 г"},
     )
     item_id = resp.json()["id"]
@@ -563,7 +564,7 @@ async def test_unchanged_patch_keeps_model_estimate(client: AsyncClient):
         mock_gen.return_value = mock_gemini
         est_resp = await client.post(f"/nutrition/menus/{date_str}/estimate")
         assert est_resp.status_code == 200
-        breakfast = [m for m in est_resp.json()["menus"] if m["slot"] == "Сніданок"][0]
+        breakfast = [m for m in est_resp.json()["menus"] if m["meal_type"] == "breakfast"][0]
         assert breakfast["items"][0]["kcal_est"] == 210
         assert breakfast["items"][0]["kcal_source"] == "model"
 
