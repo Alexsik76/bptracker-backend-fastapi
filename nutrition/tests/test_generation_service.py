@@ -6,6 +6,7 @@ import pytest
 from nutrition.models import (
     DishKind,
     DishRead,
+    KcalSource,
     MealSchedule,
     MenuItemOrigin,
     MenuItemRead,
@@ -235,12 +236,79 @@ def test_build_generation_prompt():
         history_menus=[],
     )
 
-    assert PROMPT_VERSION == "2026-10-26.1"
+    assert PROMPT_VERSION == "2026-10-27.1"
     prompt = build_generation_prompt(context)
     assert "2026-10-23" in prompt
     assert "Видалений жовчний міхур" in prompt
     assert "0,5–1 кг на тиждень" in prompt
     assert "вечірній перекус" in prompt
+
+
+def test_build_generation_prompt_with_free_text_item():
+    user_id = uuid4()
+    now = datetime.now(UTC)
+    menu_id = uuid4()
+
+    profile = NutritionProfileRead(
+        user_id=user_id,
+        sex=Sex.MALE,
+        birth_year=1980,
+        height_cm=180,
+        weight_kg=80.0,
+        target_weight_kg=75.0,
+        pace_kg_per_week=0.5,
+        meals=[
+            MealSchedule(name="Сніданок", time="08:00"),
+        ],
+        updated_at=now,
+    )
+
+    free_text_item = MenuItemRead(
+        id=uuid4(),
+        menu_id=menu_id,
+        dish_id=None,
+        product_id=None,
+        title="Кава американо",
+        portion_g=200,
+        portion_text="200 мл",
+        kcal_est=5,
+        kcal_source=KcalSource.USER,
+        origin=MenuItemOrigin.MANUAL,
+        position=1,
+        status=None,
+        eaten_at=None,
+        incomplete=False,
+    )
+
+    day_menu = MenuRead(
+        id=menu_id,
+        user_id=user_id,
+        date=date(2026, 10, 27),
+        slot="Сніданок",
+        status=MenuStatus.PLANNED,
+        regenerations=0,
+        created_at=now,
+        updated_at=now,
+        items=[free_text_item],
+    )
+
+    context = GenerationContext(
+        user_id=user_id,
+        date=date(2026, 10, 27),
+        scope="day",
+        target_slot=None,
+        profile=profile,
+        ready_dishes=[],
+        constant_dishes=[],
+        products=[],
+        existing_day_menus=[day_menu],
+        history_menus=[],
+    )
+
+    prompt = build_generation_prompt(context)
+    assert "Кава американо" in prompt
+    assert "200" in prompt
+    assert "5" in prompt
 
 
 def test_build_gemini_response_schema_enums_and_immutability():

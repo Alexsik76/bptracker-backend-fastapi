@@ -121,7 +121,7 @@ async def test_menu_note_correction_regenerates_unmarked_items(
     # 1. Setup Breakfast as eaten
     breakfast_resp = await client.post(
         "/nutrition/menus/2026-10-24/items?slot=Сніданок",
-        json={"product_id": prod_id, "portion_g": 100},
+        json={"product_id": prod_id, "portion_g": 100, "kcal_est": 50},
     )
     breakfast_menu_id = breakfast_resp.json()["menu_id"]
     await client.patch(f"/nutrition/menus/{breakfast_menu_id}", json={"status": "eaten"})
@@ -129,7 +129,7 @@ async def test_menu_note_correction_regenerates_unmarked_items(
     # 2. Setup Lunch as planned (with apple)
     lunch_resp = await client.post(
         "/nutrition/menus/2026-10-24/items?slot=Обід",
-        json={"product_id": prod_id, "portion_g": 150},
+        json={"product_id": prod_id, "portion_g": 150, "kcal_est": 75},
     )
     lunch_item_id = lunch_resp.json()["id"]
 

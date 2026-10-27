@@ -12,6 +12,7 @@ from nutrition.models.dish import (
 from nutrition.models.enums import (
     DishKind,
     GenerationScope,
+    KcalSource,
     MenuItemOrigin,
     MenuItemStatus,
     MenuNoteKind,
@@ -22,9 +23,11 @@ from nutrition.models.enums import (
 )
 from nutrition.models.generation_log import GenerationLog
 from nutrition.models.menu import (
+    AvailablePinRead,
     DayMenuRead,
     GenerationRequest,
     GenerationResultRead,
+    MealCreate,
     Menu,
     MenuBase,
     MenuItem,
@@ -34,6 +37,8 @@ from nutrition.models.menu import (
     MenuItemUpdate,
     MenuRead,
     MenuUpdate,
+    compute_day_generation_flags,
+    is_meal_generatable,
 )
 from nutrition.models.notes_and_offplan import (
     MenuNote,
@@ -44,6 +49,17 @@ from nutrition.models.notes_and_offplan import (
     OffPlanEntryBase,
     OffPlanEntryCreate,
     OffPlanEntryRead,
+)
+from nutrition.models.pinned_meal import (
+    PinnedMeal,
+    PinnedMealBase,
+    PinnedMealCreate,
+    PinnedMealItem,
+    PinnedMealItemBase,
+    PinnedMealItemCreate,
+    PinnedMealItemRead,
+    PinnedMealRead,
+    PinnedMealUpsert,
 )
 from nutrition.models.product import (
     Product,
@@ -65,6 +81,7 @@ __all__ = [
     "ProductAvailability",
     "ProductPreference",
     "DishKind",
+    "KcalSource",
     "MenuItemOrigin",
     "MenuItemStatus",
     "MenuStatus",
@@ -93,7 +110,10 @@ __all__ = [
     "MenuBase",
     "Menu",
     "MenuRead",
+    "MealCreate",
     "DayMenuRead",
+    "is_meal_generatable",
+    "compute_day_generation_flags",
     "MenuUpdate",
     "MenuItemBase",
     "MenuItem",
@@ -110,4 +130,14 @@ __all__ = [
     "OffPlanEntry",
     "OffPlanEntryCreate",
     "OffPlanEntryRead",
+    "AvailablePinRead",
+    "PinnedMealBase",
+    "PinnedMeal",
+    "PinnedMealItemBase",
+    "PinnedMealItem",
+    "PinnedMealItemCreate",
+    "PinnedMealItemRead",
+    "PinnedMealUpsert",
+    "PinnedMealCreate",
+    "PinnedMealRead",
 ]

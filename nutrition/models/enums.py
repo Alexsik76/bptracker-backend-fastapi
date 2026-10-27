@@ -28,6 +28,11 @@ class MenuItemOrigin(StrEnum):
     MANUAL = "manual"
 
 
+class KcalSource(StrEnum):
+    USER = "user"
+    MODEL = "model"
+
+
 class MenuItemStatus(StrEnum):
     EATEN = "eaten"
     SKIPPED = "skipped"

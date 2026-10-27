@@ -19,6 +19,7 @@ from nutrition.models import (
     NutritionProfileRead,
 )
 from nutrition.service.generator import (
+    NothingToGenerateError,
     ProfileNotFoundError,
     ServiceGeminiUnavailable,
     ServiceGenerationInvalidResponse,
@@ -310,14 +311,21 @@ async def handle_correction_note(
     await session.refresh(note)
 
     # 2. Trigger generation of unmarked positions
-    await generate_menu(
-        session=session,
-        user_id=user_id,
-        menu_date=menu_date,
-        scope=GenerationScope.UNMARKED,
-        slot=None,
-        settings=settings,
-    )
+    try:
+        await generate_menu(
+            session=session,
+            user_id=user_id,
+            menu_date=menu_date,
+            scope=GenerationScope.UNMARKED,
+            slot=None,
+            settings=settings,
+        )
+    except NothingToGenerateError:
+        logger.info(
+            "Nothing to generate after correction note for user %s on %s",
+            user_id,
+            menu_date,
+        )
 
     return MenuNoteRead.model_validate(note)
 

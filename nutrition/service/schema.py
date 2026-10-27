@@ -12,6 +12,7 @@ from nutrition.models import (
     MenuItemStatus,
     MenuRead,
     ProductRead,
+    is_meal_generatable,
 )
 
 
@@ -173,7 +174,7 @@ def validate_generation_response(
 
     for menu in existing_menus:
         # A slot whose items are all marked (eaten/skipped) is locked/skipped
-        if menu.items and all(it.status is not None for it in menu.items):
+        if not is_meal_generatable(menu):
             locked_slots.add(menu.slot)
 
         for item in menu.items:

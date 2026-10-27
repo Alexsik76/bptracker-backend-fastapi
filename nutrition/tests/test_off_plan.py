@@ -201,8 +201,11 @@ async def test_day_menu_contains_notes_and_off_plan(client: AsyncClient):
     day_data = day_resp.json()
     assert day_data["date"] == "2026-10-24"
 
-    assert len(day_data["menus"]) == 1
+    assert len(day_data["menus"]) == 2
+    assert [m["slot"] for m in day_data["menus"]] == ["Сніданок", "Обід"]
     assert day_data["menus"][0]["slot"] == "Сніданок"
+    assert day_data["menus"][1]["slot"] == "Обід"
+    assert day_data["menus"][1]["id"] is None
 
     assert len(day_data["notes"]) == 1
     assert day_data["notes"][0]["text"] == "чи можна сир на сніданок?"
@@ -284,7 +287,9 @@ async def test_day_menu_404_rule(client: AsyncClient):
     resp4 = await client.get(f"/nutrition/menus/{date_str}")
     assert resp4.status_code == 200
     data4 = resp4.json()
-    assert data4["menus"] == []
+    assert len(data4["menus"]) == 1
+    assert data4["menus"][0]["slot"] == "Сніданок"
+    assert data4["menus"][0]["id"] is None
     assert data4["off_plan"] == []
     assert len(data4["notes"]) == 1
     assert data4["notes"][0]["text"] == "питання без меню"

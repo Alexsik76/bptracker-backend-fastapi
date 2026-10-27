@@ -15,6 +15,7 @@ from nutrition.models import (
     GenerationResultRead,
     GenerationScope,
     MenuItemCreate,
+    is_meal_generatable,
 )
 from nutrition.service.context import build_generation_context
 from nutrition.service.prompt import PROMPT_VERSION, build_generation_prompt
@@ -72,6 +73,10 @@ class ProfileNotFoundError(GenerationError):
     """Nutrition profile not found."""
 
 
+class NothingToGenerateError(GenerationError):
+    """No generatable meals found for generation scope."""
+
+
 class ServiceGeminiUnavailable(GenerationError):
     """Gemini API is unavailable or timed out."""
 
@@ -96,7 +101,50 @@ async def generate_menu(
     if scope == GenerationScope.SLOT and not slot:
         raise InvalidGenerationRequest("Slot name is required when scope is 'slot'")
 
-    # 1. Build context using CRUD
+    # 1. Pre-check profile
+    profile = await crud.get_nutrition_profile(session, user_id)
+    if profile is None:
+        raise ProfileNotFoundError(
+            "Nutrition profile not found. Please create a nutrition profile first."
+        )
+
+    # 2. Materialize pinned meals and pre-check canvas meals
+    from nutrition.service.pinned import materialize_pinned_meals
+
+    await materialize_pinned_meals(session, user_id, menu_date)
+
+    canvas_menus = await crud.get_day_menus(session, user_id, menu_date)
+    allowed_slots = [m.slot for m in canvas_menus]
+
+    if scope == GenerationScope.SLOT:
+        if slot not in allowed_slots:
+            raise InvalidGenerationRequest(
+                f"Slot '{slot}' is not on the canvas or has been removed"
+            )
+        target_meal = next(m for m in canvas_menus if m.slot == slot)
+        if not is_meal_generatable(target_meal):
+            raise NothingToGenerateError(
+                f"Meal '{slot}' has no unmarked items to generate"
+            )
+    elif scope in (GenerationScope.DAY, GenerationScope.UNMARKED):
+        generatable_meals = [m for m in canvas_menus if is_meal_generatable(m)]
+        if not generatable_meals:
+            raise NothingToGenerateError(
+                "No generatable meals on the canvas"
+            )
+
+    # Stage 1: Estimate kcal for all items in the day lacking kcal
+    from nutrition.service.estimator import estimate_day_kcal
+
+    await estimate_day_kcal(
+        session=session,
+        user_id=user_id,
+        menu_date=menu_date,
+        settings=settings,
+        slot=None,
+    )
+
+    # Stage 2: Build context using CRUD with updated kcal
     context = await build_generation_context(
         session=session,
         user_id=user_id,
@@ -106,23 +154,13 @@ async def generate_menu(
         history_days=settings.menu_history_days,
     )
 
-    if context.profile is None:
-        raise ProfileNotFoundError(
-            "Nutrition profile not found. Please create a nutrition profile first."
-        )
-
-    # 2. Build prompt
+    # Build prompt
     prompt = build_generation_prompt(context)
 
     # End read transaction before calling Gemini so the connection is not idle in transaction
     await session.commit()
 
-    # 3. Call Gemini (outside open transaction)
-    allowed_slots = (
-        [m.name for m in context.profile.meals]
-        if (context.profile and context.profile.meals)
-        else ["Сніданок", "Обід", "Вечеря"]
-    )
+    # Call Gemini (outside open transaction)
 
     raw_response_text: str | None
     input_tokens: int | None = None
@@ -275,11 +313,11 @@ async def generate_menu(
     existing_menus_by_slot = {m.slot: m for m in context.existing_day_menus}
 
     for target_meal_slot, new_items in items_by_slot.items():
+        if target_meal_slot not in allowed_slots:
+            continue
         existing_menu_read = existing_menus_by_slot.get(target_meal_slot)
-        # If all items in this slot are marked (eaten/skipped), skip it entirely
-        if existing_menu_read and existing_menu_read.items and all(
-            it.status is not None for it in existing_menu_read.items
-        ):
+        # If meal is not generatable (e.g. all items eaten/skipped), skip it entirely
+        if existing_menu_read and not is_meal_generatable(existing_menu_read):
             continue
 
         menu_entity = await crud.get_or_create_menu(
