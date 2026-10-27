@@ -1,5 +1,5 @@
 import json
-from datetime import date
+from datetime import UTC, date, datetime
 from unittest.mock import AsyncMock, patch
 from uuid import UUID, uuid4
 
@@ -17,8 +17,8 @@ from nutrition.models import (
     KcalSource,
     MenuItem,
     MenuItemCreate,
-    MenuItemStatus,
     MenuItemUpdate,
+    MenuUpdate,
 )
 from nutrition.service.estimator import (
     ESTIMATE_PROMPT_VERSION,
@@ -89,17 +89,24 @@ async def test_estimate_stores_model_values(
         ),
     )
 
-    # 5. Add skipped item without kcal_est
+    # 5. Add item to Lunch, mark Lunch eaten without kcal_est
     item4 = await crud.add_menu_item(
         session,
         user_id,
         test_date,
-        "Сніданок",
+        "Обід",
         MenuItemCreate(
             title="Хліб",
             portion_g=50,
-            status=MenuItemStatus.SKIPPED,
         ),
+    )
+    lunch_menu = await crud.get_menu(session, user_id, test_date, "Обід")
+    assert lunch_menu is not None and lunch_menu.id is not None
+    await crud.update_menu(
+        session,
+        lunch_menu.id,
+        user_id,
+        MenuUpdate(eaten_at=datetime.now(UTC)),
     )
 
     mock_gemini = GeminiResult(
@@ -187,7 +194,7 @@ async def test_nothing_to_estimate_makes_no_gemini_call(
             kcal_est=180,
         ),
     )
-    # Item with status == skipped
+    # Item with kcal_est already populated
     await crud.add_menu_item(
         session,
         user_id,
@@ -196,7 +203,7 @@ async def test_nothing_to_estimate_makes_no_gemini_call(
         MenuItemCreate(
             title="Десерт",
             portion_g=100,
-            status=MenuItemStatus.SKIPPED,
+            kcal_est=250,
         ),
     )
 
@@ -400,24 +407,6 @@ async def test_reset_after_manual_edit(session: AsyncSession, test_user_id: UUID
     assert updated.kcal_est == 200
     assert updated.kcal_source == KcalSource.MODEL
 
-    # Edit status -> does NOT reset
-    updated = await crud.update_menu_item(
-        session,
-        item.id,
-        user_id,
-        MenuItemUpdate(status=MenuItemStatus.EATEN),
-    )
-    assert updated.kcal_est == 200
-    assert updated.kcal_source == KcalSource.MODEL
-
-    # Unmark status to allow content edits
-    await crud.update_menu_item(
-        session,
-        item.id,
-        user_id,
-        MenuItemUpdate(status=None),
-    )
-
     # Edit portion_g AND set kcal_est -> sets user kcal
     updated = await crud.update_menu_item(
         session,
@@ -462,31 +451,7 @@ async def test_kcal_incomplete_flags(session: AsyncSession, test_user_id: UUID):
     day_read = DayMenuRead(date=test_date, menus=day_menus)
     assert day_read.kcal_incomplete is True
 
-    # 2. Skipped item without kcal_est -> not kcal_incomplete
-    await crud.update_menu_item(
-        session,
-        item.id,
-        user_id,
-        MenuItemUpdate(status=MenuItemStatus.SKIPPED),
-    )
-    day_menus = await crud.get_day_menus(session, user_id, test_date)
-    assert day_menus[0].kcal_incomplete is False
-    day_read = DayMenuRead(date=test_date, menus=day_menus)
-    assert day_read.kcal_incomplete is False
-
-    # 3. Eaten item without kcal_est -> kcal_incomplete is True
-    await crud.update_menu_item(
-        session,
-        item.id,
-        user_id,
-        MenuItemUpdate(status=MenuItemStatus.EATEN),
-    )
-    day_menus = await crud.get_day_menus(session, user_id, test_date)
-    assert day_menus[0].kcal_incomplete is True
-    day_read = DayMenuRead(date=test_date, menus=day_menus)
-    assert day_read.kcal_incomplete is True
-
-    # 4. Item with kcal_est populated (e.g. by model estimation) -> kcal_incomplete is False
+    # 2. Item with kcal_est populated (e.g. by model estimation) -> kcal_incomplete is False
     item_db = (
         await session.exec(select(MenuItem).where(MenuItem.id == item.id))
     ).first()
@@ -602,23 +567,24 @@ async def test_unchanged_patch_keeps_model_estimate(client: AsyncClient):
         assert breakfast["items"][0]["kcal_est"] == 210
         assert breakfast["items"][0]["kcal_source"] == "model"
 
-    # 3. PATCH simulating web client sending portion_g and portion_text unchanged alongside status
+    # 3. PATCH simulating web client sending portion_g and portion_text unchanged
     patch_resp = await client.patch(
         f"/nutrition/menu-items/{item_id}",
         json={
             "portion_g": 200,
             "portion_text": "200 г",
             "title": "Вівсянка",
-            "status": "eaten",
         },
     )
     assert patch_resp.status_code == 200
     patched_item = patch_resp.json()
     assert patched_item["kcal_est"] == 210
     assert patched_item["kcal_source"] == "model"
-    assert patched_item["status"] == "eaten"
 
-    # 4. Changing portion_g on an eaten item is refused with 409
+    menu_id = resp.json()["menu_id"]
+
+    # 4. Mark meal eaten -> changing portion_g on an eaten meal is refused with 409
+    await client.patch(f"/nutrition/menus/{menu_id}", json={"eaten_at": "2026-11-02T08:30:00Z"})
     refused_resp = await client.patch(
         f"/nutrition/menu-items/{item_id}",
         json={
@@ -628,10 +594,10 @@ async def test_unchanged_patch_keeps_model_estimate(client: AsyncClient):
     )
     assert refused_resp.status_code == 409
 
-    # Unmark eaten status
+    # Unmark eaten meal
     unmark_resp = await client.patch(
-        f"/nutrition/menu-items/{item_id}",
-        json={"status": None},
+        f"/nutrition/menus/{menu_id}",
+        json={"eaten_at": None},
     )
     assert unmark_resp.status_code == 200
 

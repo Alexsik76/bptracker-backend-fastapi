@@ -104,7 +104,7 @@ async def delete_meal_slot(
 ) -> None:
     try:
         deleted = await crud.delete_meal_slot(session, user_id, menu_date, slot)
-    except crud.MealHasEatenItemsError as exc:
+    except crud.EatenMealImmutableError as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=str(exc),
@@ -128,6 +128,11 @@ async def restore_pinned_meal(
 ) -> MenuRead:
     try:
         return await crud.restore_pinned_meal(session, user_id, menu_date, slot)
+    except crud.EatenMealImmutableError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(exc),
+        ) from exc
     except KeyError as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -284,7 +289,7 @@ async def add_menu_item(
 ) -> MenuItemRead:
     try:
         return await crud.add_menu_item(session, user_id, menu_date, slot, data)
-    except crud.MealSlotRemovedError as exc:
+    except (crud.MealSlotRemovedError, crud.EatenMealImmutableError) as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=str(exc),
@@ -305,7 +310,7 @@ async def update_menu_item(
 ) -> MenuItemRead:
     try:
         updated = await crud.update_menu_item(session, item_id, user_id, data)
-    except crud.EatenItemImmutableError as exc:
+    except crud.EatenMealImmutableError as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=str(exc),
@@ -331,7 +336,7 @@ async def delete_menu_item(
 ) -> None:
     try:
         deleted = await crud.delete_menu_item(session, item_id, user_id)
-    except crud.EatenItemImmutableError as exc:
+    except crud.EatenMealImmutableError as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=str(exc),

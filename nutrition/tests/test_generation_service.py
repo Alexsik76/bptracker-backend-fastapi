@@ -10,7 +10,6 @@ from nutrition.models import (
     MealSchedule,
     MenuItemOrigin,
     MenuItemRead,
-    MenuItemStatus,
     MenuRead,
     MenuStatus,
     NutritionProfileRead,
@@ -236,7 +235,7 @@ def test_build_generation_prompt():
         history_menus=[],
     )
 
-    assert PROMPT_VERSION == "2026-10-27.1"
+    assert PROMPT_VERSION == "2026-10-27.2"
     prompt = build_generation_prompt(context)
     assert "2026-10-23" in prompt
     assert "Видалений жовчний міхур" in prompt
@@ -392,8 +391,6 @@ def test_validate_generation_response_eaten_dish_not_double_counted():
                 kcal_est=280,
                 origin=MenuItemOrigin.GENERATED,
                 position=1,
-                status=MenuItemStatus.EATEN,
-                eaten_at=now,
             )
         ],
     )
