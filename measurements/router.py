@@ -29,7 +29,13 @@ async def create_measurement(
     session: SessionDep,
     user_id: CurrentUserId,
 ) -> Measurement:
-    return await crud.create_measurement(session, data, user_id)
+    try:
+        return await crud.create_measurement(session, data, user_id)
+    except crud.MeasurementConflictError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(exc),
+        ) from exc
 
 
 @router.get("", response_model=MeasurementListResponse)

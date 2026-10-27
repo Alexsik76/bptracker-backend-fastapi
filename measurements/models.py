@@ -32,6 +32,7 @@ class Measurement(MeasurementBase, table=True):
 
 
 class MeasurementCreate(MeasurementBase):
+    id: UUID | None = None
     # Client may supply a timestamp; if omitted, the DB default (now) applies.
     recorded_at: datetime | None = None
 
