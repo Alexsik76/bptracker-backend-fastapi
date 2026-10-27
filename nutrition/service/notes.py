@@ -27,7 +27,7 @@ from nutrition.service.generator import (
     log_llm_exchange,
 )
 
-INFO_NOTE_PROMPT_VERSION = "2026-10-26.1"
+INFO_NOTE_PROMPT_VERSION = "2026-10-27.2"
 
 
 class InvalidNoteRequest(Exception):
@@ -80,7 +80,6 @@ def build_info_note_prompt(
                 "items": [
                     {
                         "title": it.title,
-                        "status": it.status.value if it.status else None,
                         "portion_g": it.portion_g,
                         "portion_text": it.portion_text,
                         "kcal_est": it.kcal_est,

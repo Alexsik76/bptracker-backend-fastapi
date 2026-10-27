@@ -9,8 +9,8 @@ from pydantic import BaseModel, Field, model_validator
 from nutrition.models import (
     DishKind,
     DishRead,
-    MenuItemStatus,
     MenuRead,
+    MenuStatus,
     ProductRead,
     is_meal_generatable,
 )
@@ -166,28 +166,28 @@ def validate_generation_response(
                     f"Allowed slots: {sorted(allowed_slots_set)}"
                 )
 
-    # Ready dish remaining_g in DB already has EATEN items deducted.
-    # Product daily_limit_g is a daily cap, so EATEN items still count toward product_portions_used.
+    # Ready dish remaining_g in DB already has eaten meals deducted.
+    # Product daily_limit_g is a daily cap, so eaten meals still count toward product_portions_used.
     dish_portions_used: dict[UUID, int] = {}
     product_portions_used: dict[UUID, int] = {}
     locked_slots: set[str] = set()
 
     for menu in existing_menus:
-        # A slot whose items are all marked (eaten/skipped) is locked/skipped
+        # An eaten or pinned meal is locked
         if not is_meal_generatable(menu):
             locked_slots.add(menu.slot)
 
-        for item in menu.items:
-            if item.status == MenuItemStatus.EATEN:
+        if menu.eaten_at is not None or menu.status == MenuStatus.EATEN:
+            for item in menu.items:
                 if item.product_id and item.portion_g:
                     product_portions_used[item.product_id] = (
                         product_portions_used.get(item.product_id, 0) + item.portion_g
                     )
 
         if target_slot and menu.slot != target_slot:
-            # In slot scope, unmarked items of other slots keep reserving portions
-            for item in menu.items:
-                if item.status is None:
+            # In slot scope, non-eaten meals of other slots keep reserving portions
+            if menu.eaten_at is None and menu.status != MenuStatus.EATEN:
+                for item in menu.items:
                     if item.dish_id and item.portion_g:
                         dish_portions_used[item.dish_id] = (
                             dish_portions_used.get(item.dish_id, 0) + item.portion_g

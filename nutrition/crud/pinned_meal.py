@@ -5,7 +5,7 @@ from uuid import UUID
 from sqlmodel import col, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from nutrition.crud.menu import get_menu_read
+from nutrition.crud.menu import EatenMealImmutableError, get_menu_read
 from nutrition.crud.profile import get_nutrition_profile
 from nutrition.models import (
     AvailablePinRead,
@@ -154,7 +154,7 @@ async def cleanup_unmarked_materialized_pinned_menus(
     user_id: UUID,
     slot: str,
 ) -> None:
-    """Delete materialized pinned rows for dates >= today that have no marked items.
+    """Delete materialized pinned rows for dates >= today that are not eaten.
 
     This ensures that when a pin is updated, deactivated, or deleted,
     the next read re-materializes from the current pin state.
@@ -167,10 +167,7 @@ async def cleanup_unmarked_materialized_pinned_menus(
     )
     menus = list((await session.exec(stmt)).all())
     for m in menus:
-        items_stmt = select(MenuItem).where(MenuItem.menu_id == m.id)
-        items = list((await session.exec(items_stmt)).all())
-        has_marked = any(it.status is not None for it in items)
-        if not has_marked:
+        if m.eaten_at is None:
             await session.delete(m)
 
 
@@ -314,7 +311,11 @@ async def restore_pinned_meal(
     )
     menu = (await session.exec(stmt)).first()
 
-    existing_items: list[MenuItem] = []
+    if menu is not None and menu.eaten_at is not None:
+        raise EatenMealImmutableError(
+            f"Cannot restore pinned meal into eaten meal '{slot}'"
+        )
+
     if menu is None:
         profile = await get_nutrition_profile(session, user_id)
         meal_time: str | None = None
@@ -357,14 +358,10 @@ async def restore_pinned_meal(
         )
         existing_items = list((await session.exec(items_stmt)).all())
         for it in existing_items:
-            if it.status is None:
-                await session.delete(it)
+            await session.delete(it)
 
     pin_items = await get_pinned_meal_items(session, pin.id)
-    marked_items = [it for it in existing_items if it.status is not None]
-    max_marked_pos = max((it.position for it in marked_items), default=0)
-
-    for idx, it in enumerate(pin_items, start=1):
+    for it in pin_items:
         menu_item = MenuItem(
             menu_id=menu.id,
             dish_id=it.dish_id,
@@ -375,9 +372,7 @@ async def restore_pinned_meal(
             kcal_est=it.kcal_est,
             kcal_source=KcalSource.USER if it.kcal_est is not None else None,
             origin=MenuItemOrigin.MANUAL,
-            position=max_marked_pos + idx if marked_items else it.position,
-            status=None,
-            eaten_at=None,
+            position=it.position,
         )
         session.add(menu_item)
 

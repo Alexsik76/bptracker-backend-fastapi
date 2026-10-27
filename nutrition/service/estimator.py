@@ -19,7 +19,6 @@ from nutrition.models import (
     KcalSource,
     Menu,
     MenuItem,
-    MenuItemStatus,
     MenuNoteRead,
     OffPlanEntryRead,
 )
@@ -31,7 +30,7 @@ from nutrition.service.generator import (
 
 logger = logging.getLogger(__name__)
 
-ESTIMATE_PROMPT_VERSION = "2026-10-27.1"
+ESTIMATE_PROMPT_VERSION = "2026-10-27.2"
 
 
 class ItemEstimate(BaseModel):
@@ -151,7 +150,7 @@ async def estimate_day_kcal(
         .where(
             Menu.user_id == user_id,
             Menu.date == menu_date,
-            (MenuItem.status != MenuItemStatus.SKIPPED) | MenuItem.status.is_(None),
+            Menu.eaten_at.is_(None),
             MenuItem.kcal_est.is_(None),
         )
         .order_by(col(Menu.slot).asc(), col(MenuItem.position).asc())

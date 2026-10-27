@@ -124,7 +124,10 @@ async def test_menu_note_correction_regenerates_unmarked_items(
         json={"product_id": prod_id, "portion_g": 100, "kcal_est": 50},
     )
     breakfast_menu_id = breakfast_resp.json()["menu_id"]
-    await client.patch(f"/nutrition/menus/{breakfast_menu_id}", json={"status": "eaten"})
+    await client.patch(
+        f"/nutrition/menus/{breakfast_menu_id}",
+        json={"eaten_at": "2026-10-24T08:00:00Z"},
+    )
 
     # 2. Setup Lunch as planned (with apple)
     lunch_resp = await client.post(

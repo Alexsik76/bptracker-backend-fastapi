@@ -1,7 +1,7 @@
 import re
 from datetime import date as dt_date
 from datetime import datetime
-from typing import ClassVar, Literal
+from typing import ClassVar
 from uuid import UUID
 
 import sqlalchemy as sa
@@ -26,7 +26,6 @@ from nutrition.models.enums import (
     GenerationScope,
     KcalSource,
     MenuItemOrigin,
-    MenuItemStatus,
     MenuStatus,
 )
 from nutrition.models.notes_and_offplan import MenuNoteRead, OffPlanEntryRead
@@ -67,6 +66,10 @@ class Menu(MenuBase, table=True):
     pin_dismissed: bool = Field(
         default=False,
         sa_column=Column(Boolean, nullable=False, server_default=text("false")),
+    )
+    eaten_at: datetime | None = Field(
+        default=None,
+        sa_column=Column(DateTime(timezone=True), nullable=True),
     )
     created_at: datetime | None = Field(
         default=None,
@@ -130,21 +133,6 @@ class MenuItemBase(SQLModel):
         default=0,
         sa_column=Column(Integer, nullable=False, server_default=text("0")),
     )
-    status: MenuItemStatus | None = Field(
-        default=None,
-        sa_column=Column(
-            sa.Enum(
-                MenuItemStatus,
-                name="menuitemstatus",
-                values_callable=lambda x: [e.value for e in x],
-            ),
-            nullable=True,
-        ),
-    )
-    eaten_at: datetime | None = Field(
-        default=None,
-        sa_column=Column(DateTime(timezone=True), nullable=True),
-    )
 
 
 class MenuItem(MenuItemBase, table=True):
@@ -176,8 +164,6 @@ class MenuItemCreate(SQLModel):
     portion_text: str | None = None
     kcal_est: int | None = None
     position: int = 0
-    status: MenuItemStatus | None = None
-    eaten_at: datetime | None = None
 
     @model_validator(mode="after")
     def validate_reference(self) -> "MenuItemCreate":
@@ -208,8 +194,6 @@ class MenuItemUpdate(SQLModel):
     portion_text: str | None = None
     kcal_est: int | None = None
     position: int | None = None
-    status: MenuItemStatus | None = None
-    eaten_at: datetime | None = None
 
 
 class MenuRead(SQLModel):
@@ -230,7 +214,7 @@ class MenuRead(SQLModel):
     @model_validator(mode="after")
     def compute_kcal_incomplete(self) -> "MenuRead":
         self.kcal_incomplete = any(
-            it.status != MenuItemStatus.SKIPPED and it.kcal_est is None
+            it.kcal_est is None
             for it in self.items
         )
         return self
@@ -240,13 +224,11 @@ def is_meal_generatable(menu: MenuRead) -> bool:
     """Check if a canvas meal can be generated.
 
     A meal is generatable if it is on the canvas, not pinned,
-    and has no items or at least one unmarked item.
+    and not marked as eaten.
     """
     if getattr(menu, "pinned", False) or getattr(menu, "pinned_meal_id", None) is not None:
         return False
-    if not menu.items:
-        return True
-    return any(item.status is None for item in menu.items)
+    return menu.status != MenuStatus.EATEN and menu.eaten_at is None
 
 
 def compute_day_generation_flags(menus: list[MenuRead]) -> tuple[bool, bool]:
@@ -254,17 +236,13 @@ def compute_day_generation_flags(menus: list[MenuRead]) -> tuple[bool, bool]:
     can_generate = any(is_meal_generatable(m) for m in menus)
     replaces_manual = any(
         is_meal_generatable(m)
-        and any(
-            it.status is None and it.origin == MenuItemOrigin.MANUAL
-            for it in m.items
-        )
+        and any(it.origin == MenuItemOrigin.MANUAL for it in m.items)
         for m in menus
     )
     return can_generate, replaces_manual
 
 
 class MenuUpdate(SQLModel):
-    status: Literal["eaten", "planned"] | None = None
     eaten_at: datetime | None = None
 
 

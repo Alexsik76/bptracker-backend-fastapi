@@ -15,7 +15,6 @@ from nutrition.models import (
     MenuItemCreate,
     MenuItemOrigin,
     MenuItemRead,
-    MenuItemStatus,
     MenuItemUpdate,
     MenuRead,
     MenuStatus,
@@ -33,12 +32,13 @@ class MealSlotConflictError(Exception):
     """Raised when creating a meal slot that already actively exists on the canvas."""
 
 
-class EatenItemImmutableError(Exception):
-    """Raised when an operation attempts to modify content or delete an eaten item."""
+class EatenMealImmutableError(Exception):
+    """Raised when an operation attempts to modify an eaten meal or its items."""
 
 
-class MealHasEatenItemsError(Exception):
-    """Raised when attempting to delete a meal slot that contains eaten items."""
+# Backward compatibility aliases
+EatenItemImmutableError = EatenMealImmutableError
+MealHasEatenItemsError = EatenMealImmutableError
 
 
 def sort_menu_reads(menus: list[MenuRead]) -> list[MenuRead]:
@@ -69,76 +69,45 @@ def compute_menu_item_read(
         kcal_source=item.kcal_source,
         origin=item.origin,
         position=item.position,
-        status=item.status,
-        eaten_at=item.eaten_at,
         incomplete=incomplete,
     )
 
 
-async def adjust_item_ready_dish_stock(
+async def adjust_meal_ready_dish_stock(
     session: AsyncSession,
     user_id: UUID,
+    menu_id: UUID,
     *,
-    old_dish_id: UUID | None = None,
-    old_status: MenuItemStatus | None = None,
-    old_portion_g: int | None = None,
-    new_dish_id: UUID | None = None,
-    new_status: MenuItemStatus | None = None,
-    new_portion_g: int | None = None,
+    mark_eaten: bool,
 ) -> None:
-    """Adjust ready dish stock by reverting old item effect and applying new item effect.
+    """Adjust ready dish stock when marking a meal eaten (subtract) or unmarking (return)."""
+    items_stmt = select(MenuItem).where(MenuItem.menu_id == menu_id)
+    items = list((await session.exec(items_stmt)).all())
 
-    Effect = portion_g subtracted from remaining_g while the item is eaten.
-    Reverting adds back the portion; applying subtracts the new portion.
-    Ensures remaining_g >= 0 and not exceeding cooked_weight_g.
-    """
-    old_eaten = (old_status == MenuItemStatus.EATEN) and (old_dish_id is not None)
-    new_eaten = (new_status == MenuItemStatus.EATEN) and (new_dish_id is not None)
+    dish_portions: dict[UUID, int] = {}
+    for item in items:
+        if item.dish_id is not None and item.portion_g:
+            dish_portions[item.dish_id] = dish_portions.get(item.dish_id, 0) + item.portion_g
 
-    if not old_eaten and not new_eaten:
+    if not dish_portions:
         return
 
-    old_portion = (old_portion_g or 0) if old_eaten else 0
-    new_portion = (new_portion_g or 0) if new_eaten else 0
-
-    if old_dish_id == new_dish_id:
-        diff = new_portion - old_portion
-        if diff != 0 and old_dish_id is not None:
-            dish = (
-                await session.exec(
-                    select(Dish).where(Dish.id == old_dish_id, Dish.user_id == user_id)
-                )
-            ).first()
-            if dish and dish.kind == DishKind.READY and dish.remaining_g is not None:
-                max_bound = dish.cooked_weight_g if dish.cooked_weight_g is not None else 999999
-                dish.remaining_g = max(0, min(max_bound, dish.remaining_g - diff))
-                session.add(dish)
-    else:
-        if old_eaten and old_dish_id is not None and old_portion > 0:
-            old_dish = (
-                await session.exec(
-                    select(Dish).where(Dish.id == old_dish_id, Dish.user_id == user_id)
-                )
-            ).first()
-            if old_dish and old_dish.kind == DishKind.READY and old_dish.remaining_g is not None:
-                max_bound = (
-                    old_dish.cooked_weight_g if old_dish.cooked_weight_g is not None else 999999
-                )
-                old_dish.remaining_g = max(0, min(max_bound, old_dish.remaining_g + old_portion))
-                session.add(old_dish)
-
-        if new_eaten and new_dish_id is not None and new_portion > 0:
-            new_dish = (
-                await session.exec(
-                    select(Dish).where(Dish.id == new_dish_id, Dish.user_id == user_id)
-                )
-            ).first()
-            if new_dish and new_dish.kind == DishKind.READY and new_dish.remaining_g is not None:
-                max_bound = (
-                    new_dish.cooked_weight_g if new_dish.cooked_weight_g is not None else 999999
-                )
-                new_dish.remaining_g = max(0, min(max_bound, new_dish.remaining_g - new_portion))
-                session.add(new_dish)
+    d_stmt = select(Dish).where(
+        col(Dish.id).in_(list(dish_portions.keys())),
+        Dish.user_id == user_id,
+    )
+    dishes = list((await session.exec(d_stmt)).all())
+    for dish in dishes:
+        if dish.kind == DishKind.READY and dish.remaining_g is not None:
+            portion = dish_portions.get(dish.id, 0)
+            if portion <= 0:
+                continue
+            max_bound = dish.cooked_weight_g if dish.cooked_weight_g is not None else 999999
+            if mark_eaten:
+                dish.remaining_g = max(0, min(max_bound, dish.remaining_g - portion))
+            else:
+                dish.remaining_g = max(0, min(max_bound, dish.remaining_g + portion))
+            session.add(dish)
 
 
 async def evaluate_day_menu_reads(
@@ -190,18 +159,20 @@ async def evaluate_day_menu_reads(
         for p in (await session.exec(p_stmt)).all():
             products_map[p.id] = p
 
-    # Running cumulative consumption reservation for ready dishes across unmarked items of the day
+    # Running cumulative consumption reservation for ready dishes
+    # across items of non-eaten meals of the day
     reserved_portions: dict[UUID, int] = {}
     menu_reads: list[MenuRead] = []
 
     for menu in menus:
         menu_items = items_by_menu.get(menu.id, [])
         item_reads: list[MenuItemRead] = []
+        is_eaten = menu.eaten_at is not None
 
         for item in menu_items:
             incomplete = False
-            # Only unmarked items can be incomplete
-            if item.status is None:
+            # The derived incomplete of an item is computed only for items of non-eaten meals
+            if not is_eaten:
                 if item.dish_id is not None:
                     dish = dishes_map.get(item.dish_id)
                     if dish is None:
@@ -220,29 +191,12 @@ async def evaluate_day_menu_reads(
 
             item_reads.append(compute_menu_item_read(item, incomplete=incomplete))
 
-        if not item_reads:
-            status = MenuStatus.PLANNED
-            latest_eaten_at = None
+        if is_eaten:
+            status = MenuStatus.EATEN
+        elif any(it.incomplete for it in item_reads):
+            status = MenuStatus.INCOMPLETE
         else:
-            total = len(item_reads)
-            eaten_count = sum(1 for it in item_reads if it.status == MenuItemStatus.EATEN)
-            skipped_count = sum(1 for it in item_reads if it.status == MenuItemStatus.SKIPPED)
-            marked_count = eaten_count + skipped_count
-
-            if eaten_count == total:
-                status = MenuStatus.EATEN
-            elif skipped_count == total:
-                status = MenuStatus.SKIPPED
-            elif marked_count > 0:
-                status = MenuStatus.PARTIAL
-            else:
-                if any(it.incomplete for it in item_reads):
-                    status = MenuStatus.INCOMPLETE
-                else:
-                    status = MenuStatus.PLANNED
-
-            eaten_ats = [it.eaten_at for it in item_reads if it.eaten_at is not None]
-            latest_eaten_at = max(eaten_ats) if eaten_ats else None
+            status = MenuStatus.PLANNED
 
         menu_reads.append(
             MenuRead(
@@ -252,7 +206,7 @@ async def evaluate_day_menu_reads(
                 slot=menu.slot,
                 time=menu.time,
                 status=status,
-                eaten_at=latest_eaten_at,
+                eaten_at=menu.eaten_at,
                 regenerations=menu.regenerations,
                 created_at=menu.created_at,
                 updated_at=menu.updated_at,
@@ -408,56 +362,24 @@ async def update_menu(
     user_id: UUID,
     data: MenuUpdate,
 ) -> MenuRead | None:
-    """Bulk update meal status (eaten, planned) across all items of the meal."""
+    """Update meal eaten mark and adjust ready-dish stock."""
     menu = await get_menu_by_id(session, menu_id, user_id)
     if menu is None or menu.removed:
         return None
 
-    items_stmt = (
-        select(MenuItem)
-        .where(MenuItem.menu_id == menu.id)
-        .order_by(col(MenuItem.position).asc())
-    )
-    items = list((await session.exec(items_stmt)).all())
+    if "eaten_at" in data.model_fields_set:
+        was_eaten = menu.eaten_at is not None
+        will_be_eaten = data.eaten_at is not None
 
-    if data.status is not None:
-        if data.status == "eaten":
-            target_status = MenuItemStatus.EATEN
-            target_eaten_at = data.eaten_at or datetime.now(UTC)
-        elif data.status == "planned":
-            target_status = None
-            target_eaten_at = None
-        else:
-            raise ValueError(f"Invalid menu update status: {data.status}")
+        if not was_eaten and will_be_eaten:
+            await adjust_meal_ready_dish_stock(session, user_id, menu.id, mark_eaten=True)
+        elif was_eaten and not will_be_eaten:
+            await adjust_meal_ready_dish_stock(session, user_id, menu.id, mark_eaten=False)
 
-        for item in items:
-            old_dish_id = item.dish_id
-            old_status = item.status
-            old_portion_g = item.portion_g
-
-            item.status = target_status
-            item.eaten_at = target_eaten_at
-
-            await adjust_item_ready_dish_stock(
-                session,
-                user_id,
-                old_dish_id=old_dish_id,
-                old_status=old_status,
-                old_portion_g=old_portion_g,
-                new_dish_id=item.dish_id,
-                new_status=item.status,
-                new_portion_g=item.portion_g,
-            )
-            session.add(item)
-    elif data.eaten_at is not None:
-        for item in items:
-            if item.status == MenuItemStatus.EATEN:
-                item.eaten_at = data.eaten_at
-                session.add(item)
-
-    menu.updated_at = datetime.now(UTC)
-    session.add(menu)
-    await session.commit()
+        menu.eaten_at = data.eaten_at
+        menu.updated_at = datetime.now(UTC)
+        session.add(menu)
+        await session.commit()
 
     return await get_menu_read(session, menu.id, user_id)
 
@@ -468,7 +390,7 @@ async def delete_meal_slot(
     menu_date: date,
     slot: str,
 ) -> bool:
-    """Delete a meal slot: remove all items (restoring stock) and tombstone the menu row."""
+    """Delete a meal slot: remove all items and tombstone the menu row."""
     stmt = select(Menu).where(
         Menu.user_id == user_id,
         Menu.date == menu_date,
@@ -480,22 +402,15 @@ async def delete_meal_slot(
         if menu.removed:
             return False
 
+        if menu.eaten_at is not None:
+            raise EatenMealImmutableError(
+                f"Cannot delete meal slot '{slot}' because it is marked as eaten"
+            )
+
         items_stmt = select(MenuItem).where(MenuItem.menu_id == menu.id)
         items = list((await session.exec(items_stmt)).all())
 
-        if any(item.status == MenuItemStatus.EATEN for item in items):
-            raise MealHasEatenItemsError(
-                f"Cannot delete meal slot '{slot}' because it contains eaten items"
-            )
-
         for item in items:
-            await adjust_item_ready_dish_stock(
-                session,
-                user_id,
-                old_dish_id=item.dish_id,
-                old_status=item.status,
-                old_portion_g=item.portion_g,
-            )
             await session.delete(item)
 
         if menu.pinned_meal_id is not None:
@@ -631,13 +546,8 @@ async def add_menu_item(
             title = product.name
 
     menu = await get_or_create_menu(session, user_id, menu_date, slot)
-
-    status = data.status
-    eaten_at = data.eaten_at
-    if status == MenuItemStatus.EATEN and eaten_at is None:
-        eaten_at = datetime.now(UTC)
-    elif status != MenuItemStatus.EATEN:
-        eaten_at = None
+    if menu.eaten_at is not None:
+        raise EatenMealImmutableError(f"Cannot add items to eaten meal '{slot}'")
 
     item = MenuItem(
         menu_id=menu.id,
@@ -650,21 +560,10 @@ async def add_menu_item(
         kcal_source=KcalSource.USER if data.kcal_est is not None else None,
         origin=MenuItemOrigin.MANUAL,
         position=data.position,
-        status=status,
-        eaten_at=eaten_at,
     )
     session.add(item)
     menu.updated_at = datetime.now(UTC)
     session.add(menu)
-
-    await adjust_item_ready_dish_stock(
-        session,
-        user_id,
-        new_dish_id=item.dish_id,
-        new_status=item.status,
-        new_portion_g=item.portion_g,
-    )
-
     await session.commit()
     await session.refresh(item)
 
@@ -697,24 +596,14 @@ async def update_menu_item(
     user_id: UUID,
     data: MenuItemUpdate,
 ) -> MenuItemRead | None:
-    """Update a menu item and adjust ready dish stock."""
+    """Update a menu item."""
     row = await get_menu_item_with_menu(session, item_id, user_id)
     if row is None:
         return None
     item, menu = row
 
-    old_dish_id = item.dish_id
-    old_status = item.status
-    old_portion_g = item.portion_g
-
-    content_fields = ("dish_id", "product_id", "title", "portion_g", "portion_text", "kcal_est")
-    has_content_change = any(
-        f in data.model_fields_set and getattr(data, f) != getattr(item, f)
-        for f in content_fields
-    )
-
-    if item.status == MenuItemStatus.EATEN and has_content_change:
-        raise EatenItemImmutableError("Cannot modify content of an eaten menu item")
+    if menu.eaten_at is not None:
+        raise EatenMealImmutableError("Cannot modify items of an eaten meal")
 
     reset_fields = ("title", "portion_g", "portion_text", "dish_id", "product_id")
     has_relevant_change = any(
@@ -768,34 +657,6 @@ async def update_menu_item(
     if data.position is not None:
         item.position = data.position
 
-    # Handle status & eaten_at
-    if "status" in data.model_fields_set:
-        if data.status is None:
-            item.status = None
-            item.eaten_at = None
-        elif data.status == MenuItemStatus.EATEN:
-            item.status = MenuItemStatus.EATEN
-            if "eaten_at" in data.model_fields_set and data.eaten_at is not None:
-                item.eaten_at = data.eaten_at
-            elif item.eaten_at is None:
-                item.eaten_at = datetime.now(UTC)
-        elif data.status == MenuItemStatus.SKIPPED:
-            item.status = MenuItemStatus.SKIPPED
-            item.eaten_at = None
-    elif "eaten_at" in data.model_fields_set:
-        item.eaten_at = data.eaten_at
-
-    await adjust_item_ready_dish_stock(
-        session,
-        user_id,
-        old_dish_id=old_dish_id,
-        old_status=old_status,
-        old_portion_g=old_portion_g,
-        new_dish_id=item.dish_id,
-        new_status=item.status,
-        new_portion_g=item.portion_g,
-    )
-
     session.add(item)
     menu.updated_at = datetime.now(UTC)
     session.add(menu)
@@ -815,22 +676,14 @@ async def delete_menu_item(
     item_id: UUID,
     user_id: UUID,
 ) -> bool:
-    """Delete a menu item, restoring dish stock if item was eaten."""
+    """Delete a menu item."""
     row = await get_menu_item_with_menu(session, item_id, user_id)
     if row is None:
         return False
     item, menu = row
 
-    if item.status == MenuItemStatus.EATEN:
-        raise EatenItemImmutableError("Cannot delete an eaten menu item")
-
-    await adjust_item_ready_dish_stock(
-        session,
-        user_id,
-        old_dish_id=item.dish_id,
-        old_status=item.status,
-        old_portion_g=item.portion_g,
-    )
+    if menu.eaten_at is not None:
+        raise EatenMealImmutableError("Cannot delete items of an eaten meal")
 
     await session.delete(item)
     menu.updated_at = datetime.now(UTC)
@@ -844,23 +697,19 @@ async def replace_unmarked_slot_items(
     menu: Menu,
     new_items_data: list[MenuItemCreate],
 ) -> None:
-    """Replace only unmarked items in a meal slot, preserving marked items."""
+    """Replace all items in a non-eaten meal slot."""
+    if menu.eaten_at is not None:
+        raise EatenMealImmutableError(f"Cannot replace items of eaten meal '{menu.slot}'")
+
     stmt = (
         select(MenuItem)
         .where(MenuItem.menu_id == menu.id)
         .order_by(col(MenuItem.position).asc())
     )
     existing_items = list((await session.exec(stmt)).all())
-    marked_items = [it for it in existing_items if it.status is not None]
-    unmarked_items = [it for it in existing_items if it.status is None]
-
-    if existing_items and len(unmarked_items) == 0:
-        return
-
-    for it in unmarked_items:
+    for it in existing_items:
         await session.delete(it)
 
-    max_marked_pos = max((it.position for it in marked_items), default=0)
     for idx, it_data in enumerate(new_items_data, start=1):
         item = MenuItem(
             menu_id=menu.id,
@@ -872,9 +721,7 @@ async def replace_unmarked_slot_items(
             kcal_est=it_data.kcal_est,
             kcal_source=KcalSource.MODEL if it_data.kcal_est is not None else None,
             origin=MenuItemOrigin.GENERATED,
-            position=max_marked_pos + idx,
-            status=None,
-            eaten_at=None,
+            position=it_data.position if it_data.position else idx,
         )
         session.add(item)
 

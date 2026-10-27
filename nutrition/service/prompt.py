@@ -1,9 +1,9 @@
 import json
 
-from nutrition.models import KcalSource, MenuItemStatus
+from nutrition.models import KcalSource, MenuStatus
 from nutrition.service.context import GenerationContext
 
-PROMPT_VERSION = "2026-10-27.1"
+PROMPT_VERSION = "2026-10-27.2"
 
 
 def build_generation_prompt(context: GenerationContext) -> str:
@@ -92,11 +92,6 @@ def build_generation_prompt(context: GenerationContext) -> str:
                 "items": [
                     {
                         "title": it.title,
-                        "status": (
-                            "skipped — do not propose again in this meal"
-                            if it.status == MenuItemStatus.SKIPPED
-                            else (it.status.value if it.status else None)
-                        ),
                         "dish_id": str(it.dish_id) if it.dish_id else None,
                         "product_id": str(it.product_id) if it.product_id else None,
                         "portion_g": it.portion_g,
@@ -121,18 +116,17 @@ def build_generation_prompt(context: GenerationContext) -> str:
             }
         )
 
-    # History summary (only eaten items as facts)
+    # History summary (only eaten meals as facts)
     history_summary = []
     for h in context.history_menus:
-        eaten_items = [it for it in h.items if it.status == MenuItemStatus.EATEN]
-        if eaten_items:
+        if (h.status == MenuStatus.EATEN or h.eaten_at is not None) and h.items:
             history_summary.append(
                 {
                     "date": str(h.date),
                     "slot": h.slot,
                     "items": [
                         f"{i.title} ({i.portion_g}g)" if i.portion_g else i.title
-                        for i in eaten_items
+                        for i in h.items
                     ],
                 }
             )
@@ -141,25 +135,19 @@ def build_generation_prompt(context: GenerationContext) -> str:
     if context.scope == "slot" and context.target_slot:
         scope_instructions += (
             f" Згенерувати або оновити пропозиції лише для прийому: '{context.target_slot}'. "
-            "Замінювати лише непозначені позиції цього прийому. "
-            "Усі інші прийоми їжі цього дня є вже сформованими (зафіксованими фактами "
-            "разом із їхньою калорійністю) — "
+            "Замінити всі позиції цього прийому (якщо він незакріплений і не з'їдений). "
+            "Усі інші прийоми їжі цього дня є вже сформованими — "
             "врахуй їх як фіксований контекст і не генеруй для них нових позицій. "
-            "Позиції зі статусом 'eaten' чи 'skipped' є незмінними фактами — не замінюй їх. "
-            "Якщо позицію позначено як 'skipped — do not propose again in this meal', "
-            "не пропонуй її знову у цьому прийомі."
+            "Прийоми зі статусом 'eaten', а також закріплені прийоми (pinned) "
+            "є незмінними фактами — не змінюй їх."
         )
     elif context.scope in ("day", "unmarked"):
-        # 'unmarked' is an alias for 'day': in the per-item model,
-        # generation always targets unmarked items
+        # 'unmarked' is an alias for 'day': generation targets all non-eaten, non-pinned meals
         scope_instructions += (
             " Скласти меню на день для всіх доступних прийомів їжі на канвасі. "
-            "Усі непозначені позиції (включаючи додані вручну) підлягають перегенерації. "
-            "Позиції зі статусом 'eaten' чи 'skipped', а також закріплені прийоми їжі (pinned) "
-            "є вже сформованими незмінними фактами — врахуй їх і не змінюй; "
-            "замінюй лише непозначені позиції у незакріплених прийомах. "
-            "Якщо позицію позначено як 'skipped — do not propose again in this meal', "
-            "не пропонуй її знову у відповідному прийомі."
+            "Позиції незакріплених і не з'їдених прийомів замінюються повністю. "
+            "Прийоми зі статусом 'eaten', а також закріплені прийоми їжі (pinned) "
+            "є вже сформованими незмінними фактами — врахуй їх і не змінюй."
         )
 
     has_evening_snack = any(
@@ -254,7 +242,6 @@ def build_generation_prompt(context: GenerationContext) -> str:
 - shopping_list: список продуктів, які варто докупити (якщо все є, пустий список);
 - items: масив позицій меню (slot — назва прийому їжі без часу, dish_id, product_id,
   title, portion_g, portion_text, kcal_est, position). Generating items for meals already
-  marked 'eaten' or 'skipped' is not required.
-  Never propose items marked 'skipped — do not propose again in this meal'.
+  marked 'eaten' or pinned is not required.
 """
     return prompt

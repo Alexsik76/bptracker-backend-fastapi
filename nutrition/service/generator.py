@@ -124,7 +124,7 @@ async def generate_menu(
         target_meal = next(m for m in canvas_menus if m.slot == slot)
         if not is_meal_generatable(target_meal):
             raise NothingToGenerateError(
-                f"Meal '{slot}' has no unmarked items to generate"
+                f"Meal '{slot}' is not generatable (locked or already eaten)"
             )
     elif scope in (GenerationScope.DAY, GenerationScope.UNMARKED):
         generatable_meals = [m for m in canvas_menus if is_meal_generatable(m)]

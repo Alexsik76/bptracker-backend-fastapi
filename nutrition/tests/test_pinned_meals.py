@@ -255,17 +255,17 @@ async def test_pin_update_resyncs_untouched_future_rows(client: AsyncClient):
     assert today_res.status_code == 200
     assert fut_res.status_code == 200
 
-    today_item_id = today_res.json()["menus"][0]["items"][0]["id"]
+    today_menu_id = today_res.json()["menus"][0]["id"]
 
-    # Mark item on today as eaten
+    # Mark meal on today as eaten
     mark_res = await client.patch(
-        f"/nutrition/menu-items/{today_item_id}",
-        json={"status": "eaten"},
+        f"/nutrition/menus/{today_menu_id}",
+        json={"eaten_at": "2026-10-27T08:00:00Z"},
     )
     assert mark_res.status_code == 200
     assert mark_res.json()["status"] == "eaten"
 
-    # Future date has untouched items (no marked items)
+    # Future date has untouched items (not eaten)
     # Now update pin for Сніданок
     await client.put(
         "/nutrition/pinned-meals/Сніданок",
@@ -275,14 +275,14 @@ async def test_pin_update_resyncs_untouched_future_rows(client: AsyncClient):
         },
     )
 
-    # Today had a marked item -> it remains untouched!
+    # Today had an eaten meal -> it remains untouched!
     today_res2 = await client.get(f"/nutrition/menus/{today}")
     today_b = next(m for m in today_res2.json()["menus"] if m["slot"] == "Сніданок")
     assert len(today_b["items"]) == 1
     assert today_b["items"][0]["title"] == "Сирники"
-    assert today_b["items"][0]["status"] == "eaten"
+    assert today_b["status"] == "eaten"
 
-    # Future had NO marked items -> resynced to new pin!
+    # Future was not eaten -> resynced to new pin!
     fut_res2 = await client.get(f"/nutrition/menus/{future}")
     fut_b = next(m for m in fut_res2.json()["menus"] if m["slot"] == "Сніданок")
     assert len(fut_b["items"]) == 1
@@ -380,10 +380,23 @@ async def test_restore_preserves_marked_items(client: AsyncClient):
 
     read1 = await client.get(f"/nutrition/menus/{today}")
     b1 = next(m for m in read1.json()["menus"] if m["slot"] == "Сніданок")
-    omlet_id = b1["items"][0]["id"]
+    b1_id = b1["id"]
 
-    # Mark Омлет as eaten
-    await client.patch(f"/nutrition/menu-items/{omlet_id}", json={"status": "eaten"})
+    # Mark Breakfast as eaten
+    await client.patch(
+        f"/nutrition/menus/{b1_id}",
+        json={"eaten_at": "2026-10-27T08:00:00Z"},
+    )
+
+    # Calling restore on an eaten meal is refused with 409
+    refused_resp = await client.post(f"/nutrition/menus/{today}/meals/Сніданок/pin")
+    assert refused_resp.status_code == 409
+
+    # Unmark meal
+    await client.patch(
+        f"/nutrition/menus/{b1_id}",
+        json={"eaten_at": None},
+    )
 
     # Add a manual item
     await client.post(
@@ -391,23 +404,15 @@ async def test_restore_preserves_marked_items(client: AsyncClient):
         json={"title": "Апельсин", "portion_g": 100, "kcal_est": 45},
     )
 
-    # Call restore
+    # Call restore now succeeds
     restore_resp = await client.post(f"/nutrition/menus/{today}/meals/Сніданок/pin")
     assert restore_resp.status_code == 200
     items = restore_resp.json()["items"]
-
-    # Омлет (eaten) was preserved!
-    # Апельсин (unmarked) was removed.
-    # The pin items were copied.
-    eaten_items = [it for it in items if it["status"] == "eaten"]
-    assert len(eaten_items) == 1
-    assert eaten_items[0]["title"] == "Омлет"
-
-    unmarked_items = [it for it in items if it["status"] is None]
-    assert len(unmarked_items) == 2
-    titles = [it["title"] for it in unmarked_items]
+    assert len(items) == 2
+    titles = [it["title"] for it in items]
     assert "Омлет" in titles
     assert "Тост" in titles
+    assert "Апельсин" not in titles
 
 
 def test_generation_flags_and_generatability_with_pinned_meal():

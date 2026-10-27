@@ -128,7 +128,7 @@ async def test_ready_dish_stock_and_meal_lifecycle(client: AsyncClient):
     # 3. Mark meal eaten
     patch_meal = await client.patch(
         f"/nutrition/menus/{menu_id}",
-        json={"status": "eaten"},
+        json={"eaten_at": "2026-10-23T12:00:00Z"},
     )
     assert patch_meal.status_code == 200
     assert patch_meal.json()["status"] == "eaten"
@@ -152,7 +152,7 @@ async def test_ready_dish_stock_and_meal_lifecycle(client: AsyncClient):
     # 5. Clear status (back to planned) -> stock restored to 600g
     patch_meal = await client.patch(
         f"/nutrition/menus/{menu_id}",
-        json={"status": "planned"},
+        json={"eaten_at": None},
     )
     assert patch_meal.status_code == 200
     assert patch_meal.json()["status"] == "planned"
@@ -172,7 +172,7 @@ async def test_ready_dish_stock_and_meal_lifecycle(client: AsyncClient):
     # 6. Mark eaten again -> 250g deducted (600 - 250 = 350g)
     await client.patch(
         f"/nutrition/menus/{menu_id}",
-        json={"status": "eaten"},
+        json={"eaten_at": "2026-10-23T12:00:00Z"},
     )
     dish_check = await client.get(f"/nutrition/dishes/{dish_id}")
     assert dish_check.json()["remaining_g"] == 350
@@ -183,8 +183,8 @@ async def test_ready_dish_stock_and_meal_lifecycle(client: AsyncClient):
     dish_check = await client.get(f"/nutrition/dishes/{dish_id}")
     assert dish_check.json()["remaining_g"] == 350
 
-    # Unmark item then delete
-    await client.patch(f"/nutrition/menu-items/{item_id}", json={"status": None})
+    # Unmark meal then delete
+    await client.patch(f"/nutrition/menus/{menu_id}", json={"eaten_at": None})
     dish_check = await client.get(f"/nutrition/dishes/{dish_id}")
     assert dish_check.json()["remaining_g"] == 600
 
@@ -229,7 +229,7 @@ async def test_item_replacement_stock_correction(client: AsyncClient):
     item_id = item_resp.json()["id"]
     menu_id = item_resp.json()["menu_id"]
 
-    await client.patch(f"/nutrition/menus/{menu_id}", json={"status": "eaten"})
+    await client.patch(f"/nutrition/menus/{menu_id}", json={"eaten_at": "2026-10-23T12:00:00Z"})
     assert (await client.get(f"/nutrition/dishes/{dish_a['id']}")).json()["remaining_g"] == 300
     assert (await client.get(f"/nutrition/dishes/{dish_b['id']}")).json()["remaining_g"] == 500
 
@@ -242,12 +242,12 @@ async def test_item_replacement_stock_correction(client: AsyncClient):
     assert (await client.get(f"/nutrition/dishes/{dish_a['id']}")).json()["remaining_g"] == 300
     assert (await client.get(f"/nutrition/dishes/{dish_b['id']}")).json()["remaining_g"] == 500
 
-    # Unmark eaten item first -> A restored to 500g
-    unmark_resp = await client.patch(f"/nutrition/menu-items/{item_id}", json={"status": None})
+    # Unmark eaten meal first -> A restored to 500g
+    unmark_resp = await client.patch(f"/nutrition/menus/{menu_id}", json={"eaten_at": None})
     assert unmark_resp.status_code == 200
     assert (await client.get(f"/nutrition/dishes/{dish_a['id']}")).json()["remaining_g"] == 500
 
-    # Replace Dish A with Dish B (200g) on unmarked item
+    # Replace Dish A with Dish B (200g) on unmarked meal
     replace_resp = await client.patch(
         f"/nutrition/menu-items/{item_id}",
         json={"dish_id": dish_b["id"]},
@@ -255,7 +255,7 @@ async def test_item_replacement_stock_correction(client: AsyncClient):
     assert replace_resp.status_code == 200
 
     # Mark eaten -> B deducted to 300g, A remains 500g
-    await client.patch(f"/nutrition/menu-items/{item_id}", json={"status": "eaten"})
+    await client.patch(f"/nutrition/menus/{menu_id}", json={"eaten_at": "2026-10-23T12:00:00Z"})
     assert (await client.get(f"/nutrition/dishes/{dish_a['id']}")).json()["remaining_g"] == 500
     assert (await client.get(f"/nutrition/dishes/{dish_b['id']}")).json()["remaining_g"] == 300
 
@@ -295,7 +295,10 @@ async def test_meal_becomes_incomplete_when_dish_exhausted_or_deleted(client: As
     assert all(m["status"] == "planned" for m in menus)
 
     # Eat lunch -> remaining becomes 300g
-    await client.patch(f"/nutrition/menus/{lunch_item['menu_id']}", json={"status": "eaten"})
+    await client.patch(
+        f"/nutrition/menus/{lunch_item['menu_id']}",
+        json={"eaten_at": "2026-10-23T12:00:00Z"},
+    )
     assert (await client.get(f"/nutrition/dishes/{p_id}")).json()["remaining_g"] == 300
 
     # User manually corrects remaining potatoes to 0 (dropped on floor)
@@ -351,7 +354,7 @@ async def test_menu_user_isolation(client_factory, make_user):
     # User 2 cannot patch user 1's meal
     u2_patch_menu = await client2.patch(
         f"/nutrition/menus/{menu_id}",
-        json={"status": "eaten"},
+        json={"eaten_at": "2026-10-23T12:00:00Z"},
     )
     assert u2_patch_menu.status_code == 404
 
@@ -368,7 +371,7 @@ async def test_menu_user_isolation(client_factory, make_user):
 
 
 @pytest.mark.asyncio
-async def test_per_item_mark_unmark_with_stock(client: AsyncClient):
+async def test_meal_mark_unmark_with_stock(client: AsyncClient):
     dish = (
         await client.post(
             "/nutrition/dishes",
@@ -388,37 +391,36 @@ async def test_per_item_mark_unmark_with_stock(client: AsyncClient):
             json={"dish_id": dish_id, "portion_g": 200},
         )
     ).json()
-    item_id = item["id"]
+    menu_id = item["menu_id"]
 
     # Initially unmarked, remaining_g is 500
-    assert item["status"] is None
-    assert item["eaten_at"] is None
     assert (await client.get(f"/nutrition/dishes/{dish_id}")).json()["remaining_g"] == 500
 
-    # Mark item eaten without eaten_at -> defaults to now (UTC)
+    # Mark meal eaten with eaten_at
+    fixed_time = "2026-10-26T12:30:00Z"
     patch1 = (
         await client.patch(
-            f"/nutrition/menu-items/{item_id}",
-            json={"status": "eaten"},
+            f"/nutrition/menus/{menu_id}",
+            json={"eaten_at": fixed_time},
         )
     ).json()
     assert patch1["status"] == "eaten"
-    assert patch1["eaten_at"] is not None
+    assert patch1["eaten_at"] == fixed_time
     assert (await client.get(f"/nutrition/dishes/{dish_id}")).json()["remaining_g"] == 300
 
     # Meal is now eaten
     menu = (await client.get("/nutrition/menus/2026-10-26")).json()["menus"][0]
     assert menu["status"] == "eaten"
-    assert menu["eaten_at"] == patch1["eaten_at"]
+    assert menu["eaten_at"] == fixed_time
 
-    # Explicit null unmarks and clears eaten_at
+    # Explicit null unmarks and clears eaten_at, restores stock
     patch2 = (
         await client.patch(
-            f"/nutrition/menu-items/{item_id}",
-            json={"status": None},
+            f"/nutrition/menus/{menu_id}",
+            json={"eaten_at": None},
         )
     ).json()
-    assert patch2["status"] is None
+    assert patch2["status"] == "planned"
     assert patch2["eaten_at"] is None
     assert (await client.get(f"/nutrition/dishes/{dish_id}")).json()["remaining_g"] == 500
 
@@ -427,31 +429,16 @@ async def test_per_item_mark_unmark_with_stock(client: AsyncClient):
     assert menu["status"] == "planned"
     assert menu["eaten_at"] is None
 
-    # Mark item skipped -> clears eaten_at, does not affect stock
+    # Omitted field is no-op
     patch3 = (
         await client.patch(
-            f"/nutrition/menu-items/{item_id}",
-            json={"status": "skipped"},
+            f"/nutrition/menus/{menu_id}",
+            json={},
         )
     ).json()
-    assert patch3["status"] == "skipped"
+    assert patch3["status"] == "planned"
     assert patch3["eaten_at"] is None
     assert (await client.get(f"/nutrition/dishes/{dish_id}")).json()["remaining_g"] == 500
-
-    menu = (await client.get("/nutrition/menus/2026-10-26")).json()["menus"][0]
-    assert menu["status"] == "skipped"
-
-    # Mark eaten with explicit eaten_at
-    fixed_time = "2026-10-26T12:30:00+00:00"
-    patch4 = (
-        await client.patch(
-            f"/nutrition/menu-items/{item_id}",
-            json={"status": "eaten", "eaten_at": fixed_time},
-        )
-    ).json()
-    assert patch4["status"] == "eaten"
-    assert patch4["eaten_at"] == "2026-10-26T12:30:00Z"
-    assert (await client.get(f"/nutrition/dishes/{dish_id}")).json()["remaining_g"] == 300
 
 
 @pytest.mark.asyncio
@@ -481,60 +468,33 @@ async def test_bulk_meal_patch(client: AsyncClient):
             json={"dish_id": dish["id"], "portion_g": 250},
         )
     ).json()
-    item2 = (
-        await client.post(
-            "/nutrition/menus/2026-10-26/items?slot=Обід",
-            json={"product_id": prod["id"], "portion_g": 100},
-        )
-    ).json()
+    await client.post(
+        "/nutrition/menus/2026-10-26/items?slot=Обід",
+        json={"product_id": prod["id"], "portion_g": 100},
+    )
     menu_id = item1["menu_id"]
 
-    # Bulk mark meal eaten
+    # Mark meal eaten
     meal_eaten = (
         await client.patch(
             f"/nutrition/menus/{menu_id}",
-            json={"status": "eaten"},
+            json={"eaten_at": "2026-10-26T13:00:00Z"},
         )
     ).json()
     assert meal_eaten["status"] == "eaten"
-    assert meal_eaten["eaten_at"] is not None
-    assert all(it["status"] == "eaten" for it in meal_eaten["items"])
+    assert meal_eaten["eaten_at"] == "2026-10-26T13:00:00Z"
     assert (await client.get(f"/nutrition/dishes/{dish['id']}")).json()["remaining_g"] == 350
 
-    # Bulk mark meal planned (unmark all items)
+    # Mark meal planned (unmark meal)
     meal_planned = (
         await client.patch(
             f"/nutrition/menus/{menu_id}",
-            json={"status": "planned"},
+            json={"eaten_at": None},
         )
     ).json()
     assert meal_planned["status"] == "planned"
     assert meal_planned["eaten_at"] is None
-    assert all(it["status"] is None for it in meal_planned["items"])
     assert (await client.get(f"/nutrition/dishes/{dish['id']}")).json()["remaining_g"] == 600
-
-    # Mark one item eaten -> meal status becomes partial
-    await client.patch(f"/nutrition/menu-items/{item1['id']}", json={"status": "eaten"})
-    menu_resp = (await client.get("/nutrition/menus/2026-10-26")).json()["menus"][0]
-    assert menu_resp["status"] == "partial"
-
-    # Mark second item skipped -> mixed eaten + skipped -> status is partial
-    await client.patch(f"/nutrition/menu-items/{item2['id']}", json={"status": "skipped"})
-    menu_resp2 = (await client.get("/nutrition/menus/2026-10-26")).json()["menus"][0]
-    assert menu_resp2["status"] == "partial"
-
-    # Bulk mark skipped is cancelled -> 422
-    patch_skipped = await client.patch(
-        f"/nutrition/menus/{menu_id}",
-        json={"status": "skipped"},
-    )
-    assert patch_skipped.status_code == 422
-
-    # But per-item skipping stays: when both items are skipped, derived meal status is skipped
-    await client.patch(f"/nutrition/menu-items/{item1['id']}", json={"status": "skipped"})
-    meal_resp = (await client.get("/nutrition/menus/2026-10-26")).json()["menus"][0]
-    assert meal_resp["status"] == "skipped"
-    assert all(it["status"] == "skipped" for it in meal_resp["items"])
 
 
 @pytest.mark.asyncio
@@ -562,19 +522,20 @@ async def test_swap_dish_on_eaten_item(client: AsyncClient):
         )
     ).json()
 
-    # Add item with dish A, portion 150g, and mark eaten directly via item patch
+    # Add item with dish A, portion 150g, and mark meal eaten
     item = (
         await client.post(
             "/nutrition/menus/2026-10-26/items?slot=Обід",
             json={"dish_id": dish_a["id"], "portion_g": 150},
         )
     ).json()
-    await client.patch(f"/nutrition/menu-items/{item['id']}", json={"status": "eaten"})
+    menu_id = item["menu_id"]
+    await client.patch(f"/nutrition/menus/{menu_id}", json={"eaten_at": "2026-10-26T13:00:00Z"})
 
     assert (await client.get(f"/nutrition/dishes/{dish_a['id']}")).json()["remaining_g"] == 350
     assert (await client.get(f"/nutrition/dishes/{dish_b['id']}")).json()["remaining_g"] == 400
 
-    # Swapping dish A for dish B on the eaten item is refused with 409
+    # Swapping dish A for dish B on the eaten meal is refused with 409
     patch_swap = await client.patch(
         f"/nutrition/menu-items/{item['id']}",
         json={"dish_id": dish_b["id"], "portion_g": 200},
@@ -583,11 +544,11 @@ async def test_swap_dish_on_eaten_item(client: AsyncClient):
     assert (await client.get(f"/nutrition/dishes/{dish_a['id']}")).json()["remaining_g"] == 350
     assert (await client.get(f"/nutrition/dishes/{dish_b['id']}")).json()["remaining_g"] == 400
 
-    # Unmark item first
-    await client.patch(f"/nutrition/menu-items/{item['id']}", json={"status": None})
+    # Unmark meal first
+    await client.patch(f"/nutrition/menus/{menu_id}", json={"eaten_at": None})
     assert (await client.get(f"/nutrition/dishes/{dish_a['id']}")).json()["remaining_g"] == 500
 
-    # Swap dish A for dish B and change portion to 200g on unmarked item
+    # Swap dish A for dish B and change portion to 200g on unmarked meal
     patch_swap = await client.patch(
         f"/nutrition/menu-items/{item['id']}",
         json={"dish_id": dish_b["id"], "portion_g": 200},
@@ -596,8 +557,8 @@ async def test_swap_dish_on_eaten_item(client: AsyncClient):
     assert patch_swap.json()["dish_id"] == dish_b["id"]
     assert patch_swap.json()["portion_g"] == 200
 
-    # Remark as eaten -> Dish B deducted (-200g = 200g), Dish A remains restored (500g)
-    await client.patch(f"/nutrition/menu-items/{item['id']}", json={"status": "eaten"})
+    # Remark meal as eaten -> Dish B deducted (-200g = 200g), Dish A remains restored (500g)
+    await client.patch(f"/nutrition/menus/{menu_id}", json={"eaten_at": "2026-10-26T13:00:00Z"})
     assert (await client.get(f"/nutrition/dishes/{dish_a['id']}")).json()["remaining_g"] == 500
     assert (await client.get(f"/nutrition/dishes/{dish_b['id']}")).json()["remaining_g"] == 200
 
@@ -644,7 +605,7 @@ async def test_unmarked_meal_on_previous_date_does_not_make_today_incomplete(
 
 
 @pytest.mark.asyncio
-async def test_generation_keeps_marked_items_of_partially_marked_slot(client: AsyncClient):
+async def test_generation_skips_eaten_meals_and_replaces_planned_meals(client: AsyncClient):
     # Setup profile with meals
     await client.put(
         "/nutrition/profile",
@@ -674,21 +635,23 @@ async def test_generation_keeps_marked_items_of_partially_marked_slot(client: As
         )
     ).json()
 
-    # Lunch has 2 items:
-    # 1. marked eaten (portion 100g)
-    # 2. unmarked (portion 100g)
-    item1 = (
+    # Breakfast: eaten
+    b_item = (
         await client.post(
-            "/nutrition/menus/2026-10-26/items?slot=Обід",
+            "/nutrition/menus/2026-10-26/items?slot=Сніданок",
             json={"dish_id": dish["id"], "portion_g": 100, "kcal_est": 130, "position": 1},
         )
     ).json()
-    await client.patch(f"/nutrition/menu-items/{item1['id']}", json={"status": "eaten"})
+    await client.patch(
+        f"/nutrition/menus/{b_item['menu_id']}",
+        json={"eaten_at": "2026-10-26T08:30:00Z"},
+    )
 
-    item2 = (
+    # Lunch: planned, with an old item
+    old_lunch_item = (
         await client.post(
             "/nutrition/menus/2026-10-26/items?slot=Обід",
-            json={"dish_id": dish["id"], "portion_g": 100, "kcal_est": 130, "position": 2},
+            json={"dish_id": dish["id"], "portion_g": 100, "kcal_est": 130, "position": 1},
         )
     ).json()
 
@@ -719,27 +682,32 @@ async def test_generation_keeps_marked_items_of_partially_marked_slot(client: As
         mock_gen.return_value = mock_gemini
         gen_resp = await client.post(
             "/nutrition/menus/2026-10-26/generate",
-            json={"scope": "slot", "slot": "Обід"},
+            json={"scope": "day"},
         )
         assert gen_resp.status_code == 200
 
-    # Verify Lunch items
+    # Verify meals
     menu_resp = await client.get("/nutrition/menus/2026-10-26")
-    lunch = [m for m in menu_resp.json()["menus"] if m["slot"] == "Обід"][0]
-    items = lunch["items"]
+    menus = {m["slot"]: m for m in menu_resp.json()["menus"]}
 
-    # Must contain 2 items: item1 (eaten, kept) and new generated item
-    assert len(items) == 2
-    assert items[0]["id"] == item1["id"]
-    assert items[0]["status"] == "eaten"
-    assert items[0]["portion_g"] == 100
-    assert items[0]["position"] == 1
+    # Breakfast was eaten -> untouched, original item kept
+    assert menus["Сніданок"]["status"] == "eaten"
+    assert len(menus["Сніданок"]["items"]) == 1
+    assert menus["Сніданок"]["items"][0]["id"] == b_item["id"]
+    assert menus["Сніданок"]["items"][0]["portion_g"] == 100
 
-    # item2 was replaced; new item has position after marked items (position 2)
-    assert items[1]["id"] != item2["id"]
-    assert items[1]["portion_g"] == 200
-    assert items[1]["position"] == 2
-    assert items[1]["status"] is None
+    # Lunch was planned -> all items replaced with new generated items
+    assert menus["Обід"]["status"] == "planned"
+    assert len(menus["Обід"]["items"]) == 1
+    assert menus["Обід"]["items"][0]["id"] != old_lunch_item["id"]
+    assert menus["Обід"]["items"][0]["portion_g"] == 200
+
+    # Generating slot scope for an eaten meal returns 409
+    slot_gen_resp = await client.post(
+        "/nutrition/menus/2026-10-26/generate",
+        json={"scope": "slot", "slot": "Сніданок"},
+    )
+    assert slot_gen_resp.status_code == 409
 
 
 @pytest.mark.asyncio
@@ -827,7 +795,6 @@ async def test_create_free_text_menu_item(client: AsyncClient):
     assert item1["portion_text"] == "1 горнятко"
     assert item1["kcal_est"] == 85
     assert item1["kcal_source"] == "user"
-    assert item1["status"] is None
     assert item1["incomplete"] is False
     assert item1["origin"] == "manual"
 
@@ -843,7 +810,6 @@ async def test_create_free_text_menu_item(client: AsyncClient):
     assert item2["portion_text"] is None
     assert item2["kcal_est"] is None
     assert item2["kcal_source"] is None
-    assert item2["status"] is None
     assert item2["incomplete"] is False
 
 
@@ -1127,18 +1093,23 @@ async def test_canvas_delete_projected_and_persisted_meals(client: AsyncClient):
     slots = [m["slot"] for m in day_resp.json()["menus"]]
     assert slots == ["Сніданок", "Обід"]
 
-    # 2. Persisted meal with eaten item (Lunch)
+    # 2. Persisted meal with eaten mark (Lunch)
     item_resp = await client.post(
         "/nutrition/menus/2026-10-28/items?slot=Обід",
-        json={"dish_id": dish["id"], "portion_g": 200, "status": "eaten"},
+        json={"dish_id": dish["id"], "portion_g": 200},
     )
     assert item_resp.status_code == 201
+    menu_id = item_resp.json()["menu_id"]
+    await client.patch(
+        f"/nutrition/menus/{menu_id}",
+        json={"eaten_at": "2026-10-28T12:00:00Z"},
+    )
 
     # Dish stock was deducted
     dish_state = (await client.get(f"/nutrition/dishes/{dish['id']}")).json()
     assert dish_state["remaining_g"] == 400
 
-    # Delete persisted Lunch with eaten item is refused with 409
+    # Delete persisted Lunch while eaten is refused with 409
     del_lunch = await client.delete("/nutrition/menus/2026-10-28/meals/Обід")
     assert del_lunch.status_code == 409
 
@@ -1146,13 +1117,12 @@ async def test_canvas_delete_projected_and_persisted_meals(client: AsyncClient):
     dish_state2 = (await client.get(f"/nutrition/dishes/{dish['id']}")).json()
     assert dish_state2["remaining_g"] == 400
 
-    # Unmark eaten item (status back to planned)
-    item_id = item_resp.json()["id"]
-    await client.patch(f"/nutrition/menu-items/{item_id}", json={"status": None})
+    # Unmark eaten meal (eaten_at back to null)
+    await client.patch(f"/nutrition/menus/{menu_id}", json={"eaten_at": None})
     dish_state3 = (await client.get(f"/nutrition/dishes/{dish['id']}")).json()
     assert dish_state3["remaining_g"] == 600
 
-    # Now delete persisted Lunch without eaten items -> 204
+    # Now delete persisted Lunch without eaten mark -> 204
     del_lunch_ok = await client.delete("/nutrition/menus/2026-10-28/meals/Обід")
     assert del_lunch_ok.status_code == 204
 
@@ -1444,7 +1414,7 @@ async def test_canvas_generation_does_not_touch_removed_meals(client: AsyncClien
 
 
 @pytest.mark.asyncio
-async def test_menu_update_rejects_skipped(client: AsyncClient):
+async def test_menu_update_eaten_at_validation(client: AsyncClient):
     # Create a meal with item
     item_resp = await client.post(
         "/nutrition/menus/2026-10-28/items?slot=Сніданок",
@@ -1453,27 +1423,31 @@ async def test_menu_update_rejects_skipped(client: AsyncClient):
     assert item_resp.status_code == 201
     menu_id = item_resp.json()["menu_id"]
 
-    # MenuUpdate status "skipped" is rejected with 422
-    patch_skipped = await client.patch(
+    # Invalid datetime rejected with 422
+    patch_invalid = await client.patch(
         f"/nutrition/menus/{menu_id}",
-        json={"status": "skipped"},
+        json={"eaten_at": "not-a-datetime"},
     )
-    assert patch_skipped.status_code == 422
+    assert patch_invalid.status_code == 422
 
-    # "eaten" and "planned" work
+    # Datetime marks meal eaten
+    fixed_time = "2026-10-28T08:30:00Z"
     patch_eaten = await client.patch(
         f"/nutrition/menus/{menu_id}",
-        json={"status": "eaten"},
+        json={"eaten_at": fixed_time},
     )
     assert patch_eaten.status_code == 200
     assert patch_eaten.json()["status"] == "eaten"
+    assert patch_eaten.json()["eaten_at"] == fixed_time
 
+    # Explicit null unmarks meal (back to planned)
     patch_planned = await client.patch(
         f"/nutrition/menus/{menu_id}",
-        json={"status": "planned"},
+        json={"eaten_at": None},
     )
     assert patch_planned.status_code == 200
     assert patch_planned.json()["status"] == "planned"
+    assert patch_planned.json()["eaten_at"] is None
 
 
 @pytest.mark.asyncio
@@ -1571,9 +1545,14 @@ async def test_delete_meal_with_eaten_item_refused(client: AsyncClient):
 
     item_resp = await client.post(
         f"/nutrition/menus/{date_str}/items?slot=Обід",
-        json={"dish_id": dish["id"], "portion_g": 200, "status": "eaten"},
+        json={"dish_id": dish["id"], "portion_g": 200},
     )
     assert item_resp.status_code == 201
+    menu_id = item_resp.json()["menu_id"]
+    await client.patch(
+        f"/nutrition/menus/{menu_id}",
+        json={"eaten_at": "2026-10-27T13:00:00Z"},
+    )
 
     # Dish stock deducted: 500 - 200 = 300
     assert (await client.get(f"/nutrition/dishes/{dish['id']}")).json()["remaining_g"] == 300
@@ -1581,7 +1560,7 @@ async def test_delete_meal_with_eaten_item_refused(client: AsyncClient):
     # DELETE /menus/{date}/meals/Обід fails with 409
     del_res = await client.delete(f"/nutrition/menus/{date_str}/meals/Обід")
     assert del_res.status_code == 409
-    assert "eaten items" in del_res.json()["detail"].lower()
+    assert "eaten" in del_res.json()["detail"].lower()
 
     # Nothing changed: stock still 300, meal still present and eaten
     assert (await client.get(f"/nutrition/dishes/{dish['id']}")).json()["remaining_g"] == 300
@@ -1589,9 +1568,8 @@ async def test_delete_meal_with_eaten_item_refused(client: AsyncClient):
     lunch = next(m for m in day["menus"] if m["slot"] == "Обід")
     assert lunch["status"] == "eaten"
     assert len(lunch["items"]) == 1
-    assert lunch["items"][0]["status"] == "eaten"
 
-    # 2. Pinned meal with eaten item
+    # 2. Pinned meal with eaten mark
     await client.put(
         "/nutrition/pinned-meals/Сніданок",
         json={
@@ -1606,24 +1584,26 @@ async def test_delete_meal_with_eaten_item_refused(client: AsyncClient):
     day_pinned = (await client.get(f"/nutrition/menus/{date_str}")).json()
     breakfast = next(m for m in day_pinned["menus"] if m["slot"] == "Сніданок")
     assert breakfast["pinned"] is True
-    b_item_id = breakfast["items"][0]["id"]
+    b_menu_id = breakfast["id"]
 
     # Mark as eaten
-    mark_res = await client.patch(f"/nutrition/menu-items/{b_item_id}", json={"status": "eaten"})
+    mark_res = await client.patch(
+        f"/nutrition/menus/{b_menu_id}",
+        json={"eaten_at": "2026-10-27T08:30:00Z"},
+    )
     assert mark_res.status_code == 200
 
     # DELETE /menus/{date}/meals/Сніданок fails with 409
     del_pin_res = await client.delete(f"/nutrition/menus/{date_str}/meals/Сніданок")
     assert del_pin_res.status_code == 409
-    assert "eaten items" in del_pin_res.json()["detail"].lower()
+    assert "eaten" in del_pin_res.json()["detail"].lower()
 
-    # Nothing changed: still pinned, pin not dismissed, not in available_pins, item still eaten
+    # Nothing changed: still pinned, pin not dismissed, not in available_pins, meal still eaten
     day_pinned_after = (await client.get(f"/nutrition/menus/{date_str}")).json()
     b_after = next(m for m in day_pinned_after["menus"] if m["slot"] == "Сніданок")
     assert b_after["pinned"] is True
     assert b_after["status"] == "eaten"
     assert len(b_after["items"]) == 1
-    assert b_after["items"][0]["status"] == "eaten"
     assert not any(p["slot"] == "Сніданок" for p in day_pinned_after["available_pins"])
 
 
@@ -1668,13 +1648,19 @@ async def test_patch_content_of_eaten_item_refused(client: AsyncClient):
                 "portion_g": 200,
                 "portion_text": "200 г",
                 "kcal_est": 250,
-                "status": "eaten",
             },
         )
     ).json()
     item_id = item["id"]
+    menu_id = item["menu_id"]
 
-    # Changing any content field -> 409
+    # Mark meal eaten
+    await client.patch(
+        f"/nutrition/menus/{menu_id}",
+        json={"eaten_at": "2026-10-27T19:00:00Z"},
+    )
+
+    # Changing any content field on item of eaten meal -> 409
     content_patches = [
         {"dish_id": dish2["id"]},
         {"product_id": prod["id"]},
@@ -1682,23 +1668,30 @@ async def test_patch_content_of_eaten_item_refused(client: AsyncClient):
         {"portion_g": 300},
         {"portion_text": "300 г"},
         {"kcal_est": 350},
-        {"portion_g": 300, "status": None},
     ]
     for payload in content_patches:
         res = await client.patch(f"/nutrition/menu-items/{item_id}", json=payload)
         assert res.status_code == 409, f"Payload {payload} should have been refused with 409"
         assert "eaten" in res.json()["detail"].lower()
 
+    # Adding an item to an eaten meal -> 409
+    add_res = await client.post(
+        f"/nutrition/menus/{date_str}/items?slot=Вечеря",
+        json={"title": "Ще страва", "portion_g": 100},
+    )
+    assert add_res.status_code == 409
+    assert "eaten" in add_res.json()["detail"].lower()
+
     # Item content remained completely unchanged
     day = (await client.get(f"/nutrition/menus/{date_str}")).json()
     dinner = next(m for m in day["menus"] if m["slot"] == "Вечеря")
+    assert dinner["status"] == "eaten"
     it = dinner["items"][0]
     assert it["dish_id"] == dish1["id"]
     assert it["title"] == "Рис з овочами"
     assert it["portion_g"] == 200
     assert it["portion_text"] == "200 г"
     assert it["kcal_est"] == 250
-    assert it["status"] == "eaten"
 
 
 @pytest.mark.asyncio
@@ -1712,42 +1705,30 @@ async def test_eaten_item_unchanged_resend_accepted(client: AsyncClient):
                 "portion_g": 50,
                 "portion_text": "50 г",
                 "kcal_est": 300,
-                "status": "eaten",
-                "eaten_at": "2026-10-27T10:00:00Z",
             },
         )
     ).json()
-    item_id = item["id"]
+    menu_id = item["menu_id"]
 
-    # Resending identical content fields -> accepted 200
-    resend1 = await client.patch(
-        f"/nutrition/menu-items/{item_id}",
-        json={
-            "title": "Горіхи",
-            "portion_g": 50,
-            "portion_text": "50 г",
-            "kcal_est": 300,
-        },
+    # Mark meal eaten
+    first_time = "2026-10-27T10:00:00Z"
+    mark_res = await client.patch(
+        f"/nutrition/menus/{menu_id}",
+        json={"eaten_at": first_time},
     )
-    assert resend1.status_code == 200
-    assert resend1.json()["status"] == "eaten"
+    assert mark_res.status_code == 200
+    assert mark_res.json()["status"] == "eaten"
+    assert mark_res.json()["eaten_at"] == first_time
 
-    # Only changing eaten_at -> accepted 200
+    # Updating meal's eaten_at timestamp -> accepted 200
     new_time = "2026-10-27T10:30:00Z"
-    resend2 = await client.patch(
-        f"/nutrition/menu-items/{item_id}",
+    resend = await client.patch(
+        f"/nutrition/menus/{menu_id}",
         json={"eaten_at": new_time},
     )
-    assert resend2.status_code == 200
-    assert resend2.json()["eaten_at"] == new_time
-
-    # Only changing status to eaten -> accepted 200
-    resend3 = await client.patch(
-        f"/nutrition/menu-items/{item_id}",
-        json={"status": "eaten"},
-    )
-    assert resend3.status_code == 200
-    assert resend3.json()["status"] == "eaten"
+    assert resend.status_code == 200
+    assert resend.json()["status"] == "eaten"
+    assert resend.json()["eaten_at"] == new_time
 
 
 @pytest.mark.asyncio
@@ -1760,22 +1741,35 @@ async def test_eaten_item_unmark_then_edit_works(client: AsyncClient):
                 "title": "Борщ",
                 "portion_g": 300,
                 "kcal_est": 220,
-                "status": "eaten",
             },
         )
     ).json()
     item_id = item["id"]
+    menu_id = item["menu_id"]
 
-    # 1. Unmark eaten mark (status back to null)
-    unmark_res = await client.patch(
+    # Mark meal eaten
+    await client.patch(
+        f"/nutrition/menus/{menu_id}",
+        json={"eaten_at": "2026-10-27T13:00:00Z"},
+    )
+
+    # 1. While eaten, editing item is refused with 409
+    patch_refused = await client.patch(
         f"/nutrition/menu-items/{item_id}",
-        json={"status": None},
+        json={"portion_g": 350},
+    )
+    assert patch_refused.status_code == 409
+
+    # 2. Unmark eaten mark (eaten_at back to null)
+    unmark_res = await client.patch(
+        f"/nutrition/menus/{menu_id}",
+        json={"eaten_at": None},
     )
     assert unmark_res.status_code == 200
-    assert unmark_res.json()["status"] is None
+    assert unmark_res.json()["status"] == "planned"
     assert unmark_res.json()["eaten_at"] is None
 
-    # 2. After unmarking, content can be edited as usual
+    # 3. After unmarking, content can be edited as usual
     edit_res = await client.patch(
         f"/nutrition/menu-items/{item_id}",
         json={
@@ -1808,15 +1802,22 @@ async def test_delete_eaten_item_refused(client: AsyncClient):
     item = (
         await client.post(
             f"/nutrition/menus/{date_str}/items?slot=Сніданок",
-            json={"dish_id": dish["id"], "portion_g": 150, "status": "eaten"},
+            json={"dish_id": dish["id"], "portion_g": 150},
         )
     ).json()
     item_id = item["id"]
+    menu_id = item["menu_id"]
+
+    # Mark meal eaten
+    await client.patch(
+        f"/nutrition/menus/{menu_id}",
+        json={"eaten_at": "2026-10-27T08:00:00Z"},
+    )
 
     # Dish stock deducted: 300 - 150 = 150
     assert (await client.get(f"/nutrition/dishes/{dish['id']}")).json()["remaining_g"] == 150
 
-    # DELETE /menu-items/{id} on eaten item -> 409
+    # DELETE /menu-items/{id} on eaten meal -> 409
     del_res = await client.delete(f"/nutrition/menu-items/{item_id}")
     assert del_res.status_code == 409
     assert "eaten" in del_res.json()["detail"].lower()
@@ -1826,12 +1827,15 @@ async def test_delete_eaten_item_refused(client: AsyncClient):
     day = (await client.get(f"/nutrition/menus/{date_str}")).json()
     assert len(day["menus"][0]["items"]) == 1
 
-    # Unmark item -> stock restored
-    unmark_res = await client.patch(f"/nutrition/menu-items/{item_id}", json={"status": None})
+    # Unmark meal -> stock restored
+    unmark_res = await client.patch(
+        f"/nutrition/menus/{menu_id}",
+        json={"eaten_at": None},
+    )
     assert unmark_res.status_code == 200
     assert (await client.get(f"/nutrition/dishes/{dish['id']}")).json()["remaining_g"] == 300
 
-    # DELETE on unmarked item -> 204
+    # DELETE on unmarked meal -> 204
     del_ok = await client.delete(f"/nutrition/menu-items/{item_id}")
     assert del_ok.status_code == 204
     day_after = (await client.get(f"/nutrition/menus/{date_str}")).json()

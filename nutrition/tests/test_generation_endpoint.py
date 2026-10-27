@@ -153,7 +153,10 @@ async def test_generate_keeps_eaten_and_skipped_meals(client: AsyncClient):
         },
     )
     menu_id = item1_resp.json()["menu_id"]
-    await client.patch(f"/nutrition/menus/{menu_id}", json={"status": "eaten"})
+    await client.patch(
+        f"/nutrition/menus/{menu_id}",
+        json={"eaten_at": "2026-10-23T08:00:00Z"},
+    )
 
     # Add Lunch manual item (planned)
     item2_resp = await client.post(
@@ -404,101 +407,71 @@ async def test_day_generation_replaces_unmarked_manual_items_not_eaten_or_skippe
     dish_id = data["dish_id"]
     prod_id = data["prod_id"]
 
-    # Breakfast: item1 (eaten), item2 (unmarked manual)
+    # Breakfast: manual item, mark meal eaten
     b1_resp = await client.post(
         "/nutrition/menus/2026-10-23/items?slot=Сніданок",
         json={"product_id": prod_id, "portion_g": 100, "kcal_est": 50},
     )
     b1_id = b1_resp.json()["id"]
-    await client.patch(f"/nutrition/menu-items/{b1_id}", json={"status": "eaten"})
-
-    b2_resp = await client.post(
-        "/nutrition/menus/2026-10-23/items?slot=Сніданок",
-        json={"title": "Бутерброд", "portion_g": 80, "kcal_est": 180},
+    b_menu_id = b1_resp.json()["menu_id"]
+    await client.patch(
+        f"/nutrition/menus/{b_menu_id}",
+        json={"eaten_at": "2026-10-23T08:00:00Z"},
     )
-    b2_id = b2_resp.json()["id"]
 
-    # Lunch: item3 (skipped), item4 (unmarked manual)
+    # Lunch: manual item (non-eaten meal)
     l1_resp = await client.post(
         "/nutrition/menus/2026-10-23/items?slot=Обід",
         json={"dish_id": dish_id, "portion_g": 150, "kcal_est": 200},
     )
     l1_id = l1_resp.json()["id"]
-    await client.patch(f"/nutrition/menu-items/{l1_id}", json={"status": "skipped"})
 
-    l2_resp = await client.post(
-        "/nutrition/menus/2026-10-23/items?slot=Обід",
-        json={"title": "Суп", "portion_g": 250, "kcal_est": 120},
+    mock_result = GeminiResult(
+        data={
+            "rationale": "Оновлення раціону",
+            "shopping_list": [],
+            "items": [
+                {
+                    "slot": "Обід",
+                    "dish_id": dish_id,
+                    "product_id": None,
+                    "title": "Індичка запечена",
+                    "portion_g": 200,
+                    "portion_text": "200 г",
+                    "kcal_est": 260,
+                    "position": 1,
+                },
+            ],
+        },
+        raw_text="{}",
+        model="gemini-2.0-flash",
+        input_tokens=100,
+        output_tokens=50,
     )
-    l2_id = l2_resp.json()["id"]
 
-    captured_prompt = None
-
-    async def mock_gen(prompt, model, settings, response_schema):
-        nonlocal captured_prompt
-        captured_prompt = prompt
-        return GeminiResult(
-            data={
-                "rationale": "Оновлення раціону",
-                "shopping_list": [],
-                "items": [
-                    {
-                        "slot": "Сніданок",
-                        "dish_id": None,
-                        "product_id": prod_id,
-                        "title": "Яблуко",
-                        "portion_g": 150,
-                        "portion_text": "1 шт",
-                        "kcal_est": 75,
-                        "position": 1,
-                    },
-                    {
-                        "slot": "Обід",
-                        "dish_id": dish_id,
-                        "product_id": None,
-                        "title": "Індичка запечена",
-                        "portion_g": 200,
-                        "portion_text": "200 г",
-                        "kcal_est": 260,
-                        "position": 1,
-                    },
-                ],
-            },
-            raw_text="{}",
-            model="gemini-2.0-flash",
-            input_tokens=100,
-            output_tokens=50,
-        )
-
-    with patch("gemini_infra.generate_json", side_effect=mock_gen):
+    with patch("gemini_infra.generate_json", new_callable=AsyncMock) as mock_generate:
+        mock_generate.return_value = mock_result
         resp = await client.post(
             "/nutrition/menus/2026-10-23/generate",
             json={"scope": "day"},
         )
         assert resp.status_code == 200
 
-    assert "skipped — do not propose again in this meal" in captured_prompt
-
     day_resp = await client.get("/nutrition/menus/2026-10-23")
     menus = {m["slot"]: m for m in day_resp.json()["menus"]}
 
-    # Breakfast: eaten kept, unmarked manual replaced
+    # Breakfast: eaten meal kept completely intact
     b_items = menus["Сніданок"]["items"]
-    assert len(b_items) == 2
+    assert len(b_items) == 1
     assert b_items[0]["id"] == b1_id
-    assert b_items[0]["status"] == "eaten"
-    assert b_items[1]["id"] != b2_id
-    assert b_items[1]["origin"] == "generated"
-    assert b_items[1]["title"] == "Яблуко"
+    assert menus["Сніданок"]["status"] == "eaten"
 
-    # Lunch: skipped kept, unmarked manual replaced
+    # Lunch: non-eaten meal items replaced
     l_items = menus["Обід"]["items"]
-    assert len(l_items) == 2
-    assert l_items[0]["id"] == l1_id
-    assert l_items[0]["status"] == "skipped"
-    assert l_items[1]["id"] != l2_id
-    assert l_items[1]["origin"] == "generated"
-    assert l_items[1]["title"] == "Індичка запечена"
+    assert len(l_items) == 1
+    assert l_items[0]["id"] != l1_id
+    assert l_items[0]["origin"] == "generated"
+    assert l_items[0]["title"] == "Індичка запечена"
 
 
 @pytest.mark.asyncio
@@ -564,14 +537,17 @@ async def test_409_when_nothing_to_generate_no_gemini_call(client: AsyncClient):
     data = await setup_nutrition_data(client)
     prod_id = data["prod_id"]
 
-    # Mark Breakfast, Lunch, Dinner as completed (eaten or skipped)
-    for slot, st in [("Сніданок", "eaten"), ("Обід", "skipped"), ("Вечеря", "eaten")]:
+    # Mark Breakfast, Lunch, Dinner as eaten
+    for slot in ["Сніданок", "Обід", "Вечеря"]:
         resp = await client.post(
             f"/nutrition/menus/2026-10-23/items?slot={slot}",
             json={"product_id": prod_id, "portion_g": 100, "kcal_est": 50},
         )
-        item_id = resp.json()["id"]
-        await client.patch(f"/nutrition/menu-items/{item_id}", json={"status": st})
+        menu_id = resp.json()["menu_id"]
+        await client.patch(
+            f"/nutrition/menus/{menu_id}",
+            json={"eaten_at": "2026-10-23T12:00:00Z"},
+        )
 
     with patch("gemini_infra.generate_json", new_callable=AsyncMock) as mock_gen:
         # Day scope: 409
@@ -682,23 +658,32 @@ async def test_day_menu_read_flags(client: AsyncClient):
     assert r2["can_generate_day"] is True
     assert r2["day_generation_replaces_manual"] is True
 
-    # 3. Mark the manual item as eaten
-    await client.patch(f"/nutrition/menu-items/{i1['id']}", json={"status": "eaten"})
-    # Also add marked items to other slots so no meal has unmarked items
+    # 3. Mark the manual item's meal as eaten and add eaten items to all meals
+    b_menu_id = i1["menu_id"]
+    await client.patch(
+        f"/nutrition/menus/{b_menu_id}",
+        json={"eaten_at": "2026-10-23T08:00:00Z"},
+    )
     i2 = (
         await client.post(
             "/nutrition/menus/2026-10-23/items?slot=Обід",
             json={"dish_id": dish_id, "portion_g": 200, "kcal_est": 250},
         )
     ).json()
-    await client.patch(f"/nutrition/menu-items/{i2['id']}", json={"status": "skipped"})
+    await client.patch(
+        f"/nutrition/menus/{i2['menu_id']}",
+        json={"eaten_at": "2026-10-23T13:00:00Z"},
+    )
     i3 = (
         await client.post(
             "/nutrition/menus/2026-10-23/items?slot=Вечеря",
             json={"product_id": prod_id, "portion_g": 150, "kcal_est": 75},
         )
     ).json()
-    await client.patch(f"/nutrition/menu-items/{i3['id']}", json={"status": "eaten"})
+    await client.patch(
+        f"/nutrition/menus/{i3['menu_id']}",
+        json={"eaten_at": "2026-10-23T19:00:00Z"},
+    )
 
     r3 = (await client.get("/nutrition/menus/2026-10-23")).json()
     assert r3["can_generate_day"] is False
@@ -710,14 +695,17 @@ async def test_notes_flow_with_nothing_to_generate_does_not_fail(client: AsyncCl
     data = await setup_nutrition_data(client)
     prod_id = data["prod_id"]
 
-    # Mark all slots eaten/skipped
+    # Mark all slots eaten
     for slot in ["Сніданок", "Обід", "Вечеря"]:
         resp = await client.post(
             f"/nutrition/menus/2026-10-23/items?slot={slot}",
             json={"product_id": prod_id, "portion_g": 100, "kcal_est": 50},
         )
-        item_id = resp.json()["id"]
-        await client.patch(f"/nutrition/menu-items/{item_id}", json={"status": "eaten"})
+        menu_id = resp.json()["menu_id"]
+        await client.patch(
+            f"/nutrition/menus/{menu_id}",
+            json={"eaten_at": "2026-10-23T12:00:00Z"},
+        )
 
     with patch("gemini_infra.generate_json", new_callable=AsyncMock) as mock_gen:
         # Posting a correction note triggers generation of unmarked items.

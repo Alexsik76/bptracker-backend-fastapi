@@ -67,8 +67,6 @@ async def materialize_pinned_meals(
                     kcal_source=KcalSource.USER if it.kcal_est is not None else None,
                     origin=MenuItemOrigin.MANUAL,
                     position=it.position,
-                    status=None,
-                    eaten_at=None,
                 )
                 session.add(menu_item)
             materialized_any = True

@@ -33,17 +33,10 @@ class KcalSource(StrEnum):
     MODEL = "model"
 
 
-class MenuItemStatus(StrEnum):
-    EATEN = "eaten"
-    SKIPPED = "skipped"
-
-
 class MenuStatus(StrEnum):
     PLANNED = "planned"
     INCOMPLETE = "incomplete"
     EATEN = "eaten"
-    SKIPPED = "skipped"
-    PARTIAL = "partial"
 
 
 class GenerationScope(StrEnum):
