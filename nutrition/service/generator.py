@@ -1,7 +1,7 @@
 import logging
 import time
 from collections import defaultdict
-from datetime import date
+from datetime import date, datetime
 from uuid import UUID
 
 from pydantic import ValidationError
@@ -97,8 +97,12 @@ async def generate_menu(
     scope: GenerationScope,
     meal_type: MealType | None,
     settings: Settings,
+    now: datetime | None = None,
 ) -> GenerationResultRead:
     """Generate or update nutrition menu propositions for the specified scope."""
+    if not await crud.is_day_created(session, user_id, menu_date):
+        raise crud.DayNotCreatedError(f"Day {menu_date} not created")
+
     if scope == GenerationScope.SLOT and not meal_type:
         raise InvalidGenerationRequest("Meal type is required when scope is 'slot'")
 
@@ -114,8 +118,9 @@ async def generate_menu(
 
     await materialize_pinned_meals(session, user_id, menu_date)
 
-    canvas_menus = await crud.get_day_menus(session, user_id, menu_date)
+    canvas_menus = await crud.get_day_menus(session, user_id, menu_date, now=now)
     allowed_meal_types = [m.meal_type for m in canvas_menus]
+    generatable_meals = [m for m in canvas_menus if is_meal_generatable(m)]
 
     if scope == GenerationScope.SLOT:
         if meal_type not in allowed_meal_types:
@@ -127,10 +132,9 @@ async def generate_menu(
         if not is_meal_generatable(target_meal):
             raise NothingToGenerateError(
                 f"Meal '{meal_type.value if meal_type else None}' "
-                "is not generatable (locked or already eaten)"
+                "is not generatable (locked, missed, or already eaten)"
             )
     elif scope in (GenerationScope.DAY, GenerationScope.UNMARKED):
-        generatable_meals = [m for m in canvas_menus if is_meal_generatable(m)]
         if not generatable_meals:
             raise NothingToGenerateError(
                 "No generatable meals on the canvas"
@@ -155,6 +159,7 @@ async def generate_menu(
         scope=scope.value,
         target_meal_type=meal_type,
         history_days=settings.menu_history_days,
+        now=now,
     )
 
     # Build prompt
@@ -352,7 +357,7 @@ async def generate_menu(
     await session.commit()
 
     # Re-read day's menus
-    day_menus = await crud.get_day_menus(session, user_id, menu_date)
+    day_menus = await crud.get_day_menus(session, user_id, menu_date, now=now)
 
     return GenerationResultRead(
         menus=day_menus,

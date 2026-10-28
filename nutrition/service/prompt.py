@@ -3,7 +3,7 @@ import json
 from nutrition.models import MEAL_TYPE_LABELS, MealType, MenuStatus, NutritionSource
 from nutrition.service.context import GenerationContext
 
-PROMPT_VERSION = "2026-10-27.4"
+PROMPT_VERSION = "2026-10-28.1"
 
 
 def build_generation_prompt(context: GenerationContext) -> str:
@@ -116,6 +116,33 @@ def build_generation_prompt(context: GenerationContext) -> str:
                                 else it.kcal
                             )
                         ),
+                        "protein_g": (
+                            (
+                                f"{it.protein_g} (approximate estimate)"
+                                if it.nutrition_source == NutritionSource.MODEL
+                                else it.protein_g
+                            )
+                            if it.protein_g is not None
+                            else None
+                        ),
+                        "fat_g": (
+                            (
+                                f"{it.fat_g} (approximate estimate)"
+                                if it.nutrition_source == NutritionSource.MODEL
+                                else it.fat_g
+                            )
+                            if it.fat_g is not None
+                            else None
+                        ),
+                        "carbs_g": (
+                            (
+                                f"{it.carbs_g} (approximate estimate)"
+                                if it.nutrition_source == NutritionSource.MODEL
+                                else it.carbs_g
+                            )
+                            if it.carbs_g is not None
+                            else None
+                        ),
                         "nutrition_source": (
                             "approximate estimate"
                             if it.nutrition_source == NutritionSource.MODEL
@@ -148,19 +175,24 @@ def build_generation_prompt(context: GenerationContext) -> str:
         scope_instructions += (
             f" Згенерувати або оновити пропозиції лише для прийому: "
             f"'{context.target_meal_type.value}' ({label}). "
-            "Замінити всі позиції цього прийому (якщо він незакріплений і не з'їдений). "
+            "Замінити всі позиції цього прийому "
+            "(якщо він незакріплений, не з'їдений і не пропущений). "
             "Усі інші прийоми їжі цього дня є вже сформованими — "
             "врахуй їх як фіксований контекст і не генеруй для них нових позицій. "
             "Прийоми зі статусом 'eaten', а також закріплені прийоми (pinned) "
-            "є незмінними фактами — не змінюй їх."
+            "є незмінними фактами з їхньою поживністю — не змінюй їх. "
+            "Пропущені прийоми (missed) вважаються не з'їденими; не генеруй для них позицій. "
+            "Якщо решта дня не вміщує добову ціль, у rationale можна порадити додати прийом їжі."
         )
     elif context.scope in ("day", "unmarked"):
-        # 'unmarked' is an alias for 'day': generation targets all non-eaten, non-pinned meals
+        # 'unmarked' is an alias for 'day': targets non-eaten, non-pinned, non-missed meals
         scope_instructions += (
             " Скласти меню на день для всіх доступних прийомів їжі на канвасі. "
-            "Позиції незакріплених і не з'їдених прийомів замінюються повністю. "
+            "Позиції незакріплених, не з'їдених та не пропущених прийомів замінюються повністю. "
             "Прийоми зі статусом 'eaten', а також закріплені прийоми їжі (pinned) "
-            "є вже сформованими незмінними фактами — врахуй їх і не змінюй."
+            "є вже сформованими незмінними фактами з їхньою поживністю — врахуй їх і не змінюй. "
+            "Пропущені прийоми (missed) вважаються не з'їденими; не генеруй для них позицій. "
+            "Якщо решта дня не вміщує добову ціль, у rationale можна порадити додати прийом їжі."
         )
 
     has_evening_snack = any(
@@ -192,7 +224,9 @@ def build_generation_prompt(context: GenerationContext) -> str:
         "7. Добова ціль — з дефіцитом відносно підтримання для темпу 0,5–1 кг на тиждень.\n"
         "8. Кожна згенерована позиція містить посилання на наявну страву (dish_id).\n"
         "   Назва (title) має відповідати назві обраної страви.\n"
-        "9. Якщо виникає дисбаланс раціону, додай це у shopping_list (рекомендації докупити)."
+        "9. Якщо виникає дисбаланс раціону, додай це у shopping_list (рекомендації докупити).\n"
+        "10. Пропущені прийоми (missed) не з'їдені; для них страви не плануються.\n"
+        "    Якщо решта дня не вміщує добову ціль, у rationale можна порадити додати прийом їжі."
     )
 
     corrections_block = ""
@@ -250,13 +284,14 @@ def build_generation_prompt(context: GenerationContext) -> str:
 {scope_instructions}
 
 Сформуй збалансоване меню та поверни JSON, що містить:
-- rationale: коротке зрозуміле пояснення вибору та калорійності;
+- rationale: коротке зрозуміле пояснення вибору та калорійності
+  (може радити додати прийом їжі, якщо решта дня не вміщує ціль);
 - shopping_list: список продуктів, які варто докупити (якщо все є, пустий список);
 - items: масив позицій меню (meal_type — тип прийому їжі:
   breakfast, lunch, dinner, morning_snack, afternoon_snack, evening_snack;
   dish_id, title, portion_g, portion_text, position).
   Модель розподіляє лише наявні готові та постійні страви;
   не пропонує нових страв чи продуктів.
-  Generating items for meals already marked 'eaten' or pinned is not required.
+  Generating items for meals already marked 'eaten', pinned, or missed is not required.
 """
     return prompt

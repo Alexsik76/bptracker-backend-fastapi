@@ -509,6 +509,7 @@ async def test_kcal_incomplete_flags(session: AsyncSession, test_user_id: UUID):
 @pytest.mark.asyncio
 async def test_endpoint_happy_path_and_errors(client: AsyncClient):
     date_str = "2026-11-01"
+    await client.post(f"/nutrition/menus/{date_str}/create")
 
     # Create 2 items
     resp1 = await client.post(
@@ -605,6 +606,7 @@ async def test_endpoint_happy_path_and_errors(client: AsyncClient):
 @pytest.mark.asyncio
 async def test_unchanged_patch_keeps_model_estimate(client: AsyncClient):
     date_str = "2026-11-02"
+    await client.post(f"/nutrition/menus/{date_str}/create")
 
     # 1. Create item
     resp = await client.post(

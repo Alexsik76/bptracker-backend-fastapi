@@ -17,6 +17,7 @@ from nutrition.models import (
     GenerationLog,
     MealType,
     Menu,
+    MenuDay,
     MenuItem,
     MenuItemCreate,
     MenuItemOrigin,
@@ -45,6 +46,74 @@ class EatenMealImmutableError(Exception):
 # Backward compatibility aliases
 EatenItemImmutableError = EatenMealImmutableError
 MealHasEatenItemsError = EatenMealImmutableError
+
+
+class DayAlreadyCreatedError(Exception):
+    """Raised when trying to explicitly create a day that already exists."""
+
+
+class DayNotCreatedError(Exception):
+    """Raised when trying to perform operations on an uncreated day."""
+
+
+async def is_day_created(
+    session: AsyncSession,
+    user_id: UUID,
+    menu_date: dt_date,
+) -> bool:
+    """Check if a MenuDay row exists for user on menu_date."""
+    stmt = (
+        select(MenuDay.date)
+        .where(
+            MenuDay.user_id == user_id,
+            MenuDay.date == menu_date,
+        )
+        .limit(1)
+    )
+    return (await session.exec(stmt)).first() is not None
+
+
+async def create_menu_day(
+    session: AsyncSession,
+    user_id: UUID,
+    menu_date: dt_date,
+) -> MenuDay:
+    """Create a menu day, inserting one menu row per profile meal,
+    and materializing pinned meals.
+    """
+    if await is_day_created(session, user_id, menu_date):
+        raise DayAlreadyCreatedError(f"Menu day for {menu_date} already exists")
+
+    menu_day = MenuDay(user_id=user_id, date=menu_date)
+    session.add(menu_day)
+
+    profile = await get_nutrition_profile(session, user_id)
+    if profile and profile.meals:
+        existing_stmt = select(Menu.meal_type).where(
+            Menu.user_id == user_id,
+            Menu.date == menu_date,
+        )
+        existing_types = set((await session.exec(existing_stmt)).all())
+
+        for p_meal in profile.meals:
+            if p_meal.type not in existing_types:
+                menu = Menu(
+                    user_id=user_id,
+                    date=menu_date,
+                    meal_type=p_meal.type,
+                    time=p_meal.time,
+                    removed=False,
+                    pin_dismissed=False,
+                )
+                session.add(menu)
+        await session.flush()
+
+        from nutrition.service.pinned import materialize_pinned_meals
+
+        await materialize_pinned_meals(session, user_id, menu_date, commit=False)
+
+    await session.commit()
+    return menu_day
 
 
 def sort_menu_reads(menus: list[MenuRead]) -> list[MenuRead]:
@@ -282,10 +351,19 @@ async def evaluate_day_menu_reads(
     session: AsyncSession,
     user_id: UUID,
     menus: list[Menu],
+    now: datetime | None = None,
 ) -> list[MenuRead]:
     """Derive MenuRead instances with read-time status, eaten_at and item incompleteness."""
     if not menus:
         return []
+
+    if now is None:
+        now = datetime.now(UTC)
+    elif now.tzinfo is None:
+        now = now.replace(tzinfo=UTC)
+
+    now_date = now.date()
+    now_time = now.strftime("%H:%M")
 
     menus = sorted(
         menus,
@@ -317,7 +395,14 @@ async def evaluate_day_menu_reads(
             if d.id in dish_ids:
                 dishes_map[d.id] = d
 
-    reserves_map = await get_product_reserves_map(session, user_id)
+    reserves_map = await get_product_reserves_map(session, user_id, now=now)
+
+    # Later-time meal eaten check for today or other dates
+    eaten_times = [
+        m.time for m in menus
+        if m.eaten_at is not None and m.time is not None
+    ]
+    max_eaten_time = max(eaten_times) if eaten_times else None
 
     reserved_portions: dict[UUID, int] = {}
     menu_reads: list[MenuRead] = []
@@ -327,11 +412,24 @@ async def evaluate_day_menu_reads(
         item_reads: list[MenuItemRead] = []
         is_eaten = menu.eaten_at is not None
 
+        is_missed = False
+        if not is_eaten:
+            if menu.date < now_date:
+                is_missed = True
+            elif menu.date == now_date and menu.time is not None and menu.time < now_time:
+                is_missed = True
+            elif (
+                menu.time is not None
+                and max_eaten_time is not None
+                and menu.time < max_eaten_time
+            ):
+                is_missed = True
+
         for item in menu_items:
             incomplete = False
             dish = dishes_map.get(item.dish_id) if item.dish_id is not None else None
 
-            if not is_eaten:
+            if not is_eaten and not is_missed:
                 if item.dish_id is not None:
                     if dish is None:
                         incomplete = True
@@ -361,6 +459,8 @@ async def evaluate_day_menu_reads(
 
         if is_eaten:
             status_val = MenuStatus.EATEN
+        elif is_missed:
+            status_val = MenuStatus.MISSED
         elif any(it.incomplete for it in item_reads):
             status_val = MenuStatus.INCOMPLETE
         else:
@@ -390,21 +490,52 @@ async def get_day_menus(
     session: AsyncSession,
     user_id: UUID,
     menu_date: dt_date,
+    now: datetime | None = None,
 ) -> list[MenuRead]:
     """Fetch day canvas for a user on a given date, ordered by time then meal_type."""
+    if now is None:
+        eff_now = datetime.now(UTC)
+    elif now.tzinfo is None:
+        eff_now = now.replace(tzinfo=UTC)
+    else:
+        eff_now = now
+
+    now_date = eff_now.date()
+    now_time = eff_now.strftime("%H:%M")
+
     stmt = select(Menu).where(Menu.user_id == user_id, Menu.date == menu_date)
     all_rows = list((await session.exec(stmt)).all())
 
     active_rows = [m for m in all_rows if not m.removed]
     persisted_types = {m.meal_type for m in all_rows}
 
-    active_reads = await evaluate_day_menu_reads(session, user_id, active_rows)
+    active_reads = await evaluate_day_menu_reads(session, user_id, active_rows, now=eff_now)
+
+    eaten_times = [
+        m.time for m in active_rows
+        if m.eaten_at is not None and m.time is not None
+    ]
+    max_eaten_time = max(eaten_times) if eaten_times else None
 
     profile = await get_nutrition_profile(session, user_id)
     projected_reads: list[MenuRead] = []
     if profile and profile.meals:
         for p_meal in profile.meals:
             if p_meal.type not in persisted_types:
+                is_missed = (
+                    (menu_date < now_date)
+                    or (
+                        menu_date == now_date
+                        and p_meal.time is not None
+                        and p_meal.time < now_time
+                    )
+                    or (
+                        p_meal.time is not None
+                        and max_eaten_time is not None
+                        and p_meal.time < max_eaten_time
+                    )
+                )
+                status_val = MenuStatus.MISSED if is_missed else MenuStatus.PLANNED
                 projected_reads.append(
                     MenuRead(
                         id=None,
@@ -412,7 +543,7 @@ async def get_day_menus(
                         date=menu_date,
                         meal_type=p_meal.type,
                         time=p_meal.time,
-                        status=MenuStatus.PLANNED,
+                        status=status_val,
                         eaten_at=None,
                         regenerations=0,
                         created_at=None,
@@ -440,9 +571,10 @@ async def get_menu(
     user_id: UUID,
     menu_date: dt_date,
     meal_type: MealType,
+    now: datetime | None = None,
 ) -> MenuRead | None:
     """Fetch a specific meal slot menu by date and meal type."""
-    day_reads = await get_day_menus(session, user_id, menu_date)
+    day_reads = await get_day_menus(session, user_id, menu_date, now=now)
     for m in day_reads:
         if m.meal_type == meal_type:
             return m
@@ -463,12 +595,13 @@ async def get_menu_read(
     session: AsyncSession,
     menu_id: UUID,
     user_id: UUID,
+    now: datetime | None = None,
 ) -> MenuRead | None:
     """Fetch MenuRead by ID with derived status and items."""
     menu = await get_menu_by_id(session, menu_id, user_id)
     if menu is None or menu.removed:
         return None
-    day_reads = await get_day_menus(session, user_id, menu.date)
+    day_reads = await get_day_menus(session, user_id, menu.date, now=now)
     for m in day_reads:
         if m.id == menu.id:
             return m

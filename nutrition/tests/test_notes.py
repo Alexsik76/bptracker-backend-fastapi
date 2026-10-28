@@ -1,5 +1,5 @@
 import logging
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -11,6 +11,9 @@ from config import get_settings
 from gemini_infra.types import GeminiInvalidResponse, GeminiResult, GeminiUnavailable
 from main import app
 from nutrition.models import GenerationLog, MenuNote, MenuNoteKind
+
+TEST_DATE = date.today() + timedelta(days=2)
+TEST_DATE_STR = TEST_DATE.isoformat()
 
 
 async def setup_test_environment(client: AsyncClient):
@@ -41,7 +44,7 @@ async def setup_test_environment(client: AsyncClient):
             "name": "Індичка запечена",
             "kind": "ready",
             "cooked_weight_g": 600,
-            "cooked_on": "2026-10-24",
+            "cooked_on": TEST_DATE_STR,
         },
     )
     dish_id = dish_resp.json()["id"]
@@ -55,6 +58,9 @@ async def setup_test_environment(client: AsyncClient):
         },
     )
     prod_id = prod_resp.json()["id"]
+
+    # Create day
+    await client.post(f"/nutrition/menus/{TEST_DATE_STR}/create")
 
     return {"dish_id": dish_id, "prod_id": prod_id}
 
@@ -75,7 +81,7 @@ async def test_menu_note_info_success(client: AsyncClient, session: AsyncSession
         mock_generate.return_value = mock_result
 
         resp = await client.post(
-            "/nutrition/menus/2026-10-24/notes",
+            f"/nutrition/menus/{TEST_DATE_STR}/notes",
             json={
                 "kind": "info",
                 "text": "є виноград — скільки можна",
@@ -87,12 +93,12 @@ async def test_menu_note_info_success(client: AsyncClient, session: AsyncSession
         assert data["kind"] == "info"
         assert data["text"] == "є виноград — скільки можна"
         assert data["answer"] == "Можна з'їсти до 150 г винограду, краще в першій половині дня."
-        assert data["date"] == "2026-10-24"
+        assert data["date"] == TEST_DATE_STR
         assert "id" in data
         assert "created_at" in data
 
         # Verify saved in menu_notes table
-        stmt = select(MenuNote).where(MenuNote.date == date(2026, 10, 24))
+        stmt = select(MenuNote).where(MenuNote.date == TEST_DATE)
         notes = (await session.exec(stmt)).all()
         assert len(notes) == 1
         assert notes[0].kind == MenuNoteKind.INFO
@@ -100,7 +106,7 @@ async def test_menu_note_info_success(client: AsyncClient, session: AsyncSession
 
         # Verify logged in generation_log with scope info
         log_stmt = select(GenerationLog).where(
-            GenerationLog.date == date(2026, 10, 24),
+            GenerationLog.date == TEST_DATE,
             GenerationLog.scope == "info",
         )
         logs = (await session.exec(log_stmt)).all()
@@ -118,18 +124,18 @@ async def test_menu_note_correction_regenerates_unmarked_items(
 
     # 1. Setup Breakfast as eaten
     breakfast_resp = await client.post(
-        "/nutrition/menus/2026-10-24/items?meal_type=breakfast",
+        f"/nutrition/menus/{TEST_DATE_STR}/items?meal_type=breakfast",
         json={"title": "Яблуко", "portion_g": 100, "kcal": 50.0},
     )
     breakfast_menu_id = breakfast_resp.json()["menu_id"]
     await client.patch(
         f"/nutrition/menus/{breakfast_menu_id}",
-        json={"eaten_at": "2026-10-24T08:00:00Z"},
+        json={"eaten_at": f"{TEST_DATE_STR}T08:00:00Z"},
     )
 
     # 2. Setup Lunch as planned (with apple)
     lunch_resp = await client.post(
-        "/nutrition/menus/2026-10-24/items?meal_type=lunch",
+        f"/nutrition/menus/{TEST_DATE_STR}/items?meal_type=lunch",
         json={"title": "Яблуко", "portion_g": 150, "kcal": 75.0},
     )
     lunch_item_id = lunch_resp.json()["id"]
@@ -168,7 +174,7 @@ async def test_menu_note_correction_regenerates_unmarked_items(
         mock_generate.return_value = mock_result
 
         resp = await client.post(
-            "/nutrition/menus/2026-10-24/notes",
+            f"/nutrition/menus/{TEST_DATE_STR}/notes",
             json={
                 "kind": "correction",
                 "text": "не хочу сьогодні казеїн, заміни",
@@ -189,7 +195,7 @@ async def test_menu_note_correction_regenerates_unmarked_items(
         assert "unmarked" in prompt_sent
 
         # Check menus of the day
-        menu_resp = await client.get("/nutrition/menus/2026-10-24")
+        menu_resp = await client.get(f"/nutrition/menus/{TEST_DATE_STR}")
         assert menu_resp.status_code == 200
         menus = menu_resp.json()["menus"]
         menu_by_type = {m["meal_type"]: m for m in menus}
@@ -208,7 +214,7 @@ async def test_menu_note_correction_regenerates_unmarked_items(
 
         # Verify generation log has scope unmarked
         log_stmt = select(GenerationLog).where(
-            GenerationLog.date == date(2026, 10, 24),
+            GenerationLog.date == TEST_DATE,
             GenerationLog.scope == "unmarked",
         )
         logs = (await session.exec(log_stmt)).all()
@@ -218,7 +224,7 @@ async def test_menu_note_correction_regenerates_unmarked_items(
 @pytest.mark.asyncio
 async def test_menu_note_missing_profile_returns_409(client: AsyncClient):
     resp = await client.post(
-        "/nutrition/menus/2026-10-24/notes",
+        f"/nutrition/menus/{TEST_DATE_STR}/notes",
         json={"kind": "info", "text": "якась порада"},
     )
     assert resp.status_code == 409
@@ -229,7 +235,7 @@ async def test_menu_note_missing_profile_returns_409(client: AsyncClient):
 async def test_menu_note_empty_text_returns_400(client: AsyncClient):
     await setup_test_environment(client)
     resp = await client.post(
-        "/nutrition/menus/2026-10-24/notes",
+        f"/nutrition/menus/{TEST_DATE_STR}/notes",
         json={"kind": "info", "text": "   "},
     )
     assert resp.status_code == 400
@@ -243,7 +249,7 @@ async def test_menu_note_gemini_unavailable_returns_502(client: AsyncClient):
         mock_generate.side_effect = GeminiUnavailable()
 
         resp = await client.post(
-            "/nutrition/menus/2026-10-24/notes",
+            f"/nutrition/menus/{TEST_DATE_STR}/notes",
             json={"kind": "info", "text": "питання"},
         )
         assert resp.status_code == 502
@@ -261,7 +267,7 @@ async def test_menu_note_invalid_gemini_response_returns_422(
         )
 
         resp = await client.post(
-            "/nutrition/menus/2026-10-24/notes",
+            f"/nutrition/menus/{TEST_DATE_STR}/notes",
             json={"kind": "info", "text": "питання"},
         )
         assert resp.status_code == 422
@@ -292,7 +298,7 @@ async def test_menu_note_user_isolation(client_factory, make_user):
     with patch("gemini_infra.generate_json", new_callable=AsyncMock) as mock_generate:
         mock_generate.return_value = mock_result
         resp_a = await client_a.post(
-            "/nutrition/menus/2026-10-24/notes",
+            f"/nutrition/menus/{TEST_DATE_STR}/notes",
             json={"kind": "info", "text": "питання А"},
         )
         assert resp_a.status_code == 201
@@ -314,7 +320,7 @@ async def test_menu_note_user_isolation(client_factory, make_user):
     with patch("gemini_infra.generate_json", new_callable=AsyncMock) as mock_generate_b:
         mock_generate_b.return_value = mock_correction
         resp_b = await client_b.post(
-            "/nutrition/menus/2026-10-24/notes",
+            f"/nutrition/menus/{TEST_DATE_STR}/notes",
             json={"kind": "correction", "text": "корекція В"},
         )
         assert resp_b.status_code == 201
@@ -333,13 +339,13 @@ async def test_correction_note_persists_on_gemini_unavailable_502(
         mock_generate.side_effect = GeminiUnavailable()
 
         resp = await client.post(
-            "/nutrition/menus/2026-10-24/notes",
+            f"/nutrition/menus/{TEST_DATE_STR}/notes",
             json={"kind": "correction", "text": "не хочу молочне"},
         )
         assert resp.status_code == 502
 
         stmt = select(MenuNote).where(
-            MenuNote.date == date(2026, 10, 24),
+            MenuNote.date == TEST_DATE,
             MenuNote.kind == MenuNoteKind.CORRECTION,
         )
         notes = (await session.exec(stmt)).all()
@@ -358,13 +364,13 @@ async def test_correction_note_persists_on_invalid_response_422(
         )
 
         resp = await client.post(
-            "/nutrition/menus/2026-10-24/notes",
+            f"/nutrition/menus/{TEST_DATE_STR}/notes",
             json={"kind": "correction", "text": "додай яблуко"},
         )
         assert resp.status_code == 422
 
         stmt = select(MenuNote).where(
-            MenuNote.date == date(2026, 10, 24),
+            MenuNote.date == TEST_DATE,
             MenuNote.kind == MenuNoteKind.CORRECTION,
         )
         notes = (await session.exec(stmt)).all()
@@ -379,12 +385,12 @@ async def test_menu_generation_with_off_plan_entry_succeeds(
     env = await setup_test_environment(client)
     dish_id = env["dish_id"]
 
-    # Add off-plan entry for 2026-10-24
+    # Add off-plan entry for {TEST_DATE_STR}
     at_str = datetime(2026, 10, 24, 15, 0, tzinfo=UTC).isoformat()
     off_resp = await client.post(
         "/nutrition/off-plan",
         json={
-            "date": "2026-10-24",
+            "date": TEST_DATE_STR,
             "at": at_str,
             "text": "Кава з печивом 2 шт.",
             "kcal_est": 180,
@@ -417,7 +423,7 @@ async def test_menu_generation_with_off_plan_entry_succeeds(
         mock_generate.return_value = mock_result
 
         resp = await client.post(
-            "/nutrition/menus/2026-10-24/generate",
+            f"/nutrition/menus/{TEST_DATE_STR}/generate",
             json={"scope": "day"},
         )
         assert resp.status_code == 200
@@ -442,7 +448,7 @@ async def test_info_note_with_off_plan_entry_succeeds(
     off_resp = await client.post(
         "/nutrition/off-plan",
         json={
-            "date": "2026-10-24",
+            "date": TEST_DATE_STR,
             "at": at_str,
             "text": "Яблуко",
             "kcal_est": 60,
@@ -462,7 +468,7 @@ async def test_info_note_with_off_plan_entry_succeeds(
         mock_generate.return_value = mock_result
 
         resp = await client.post(
-            "/nutrition/menus/2026-10-24/notes",
+            f"/nutrition/menus/{TEST_DATE_STR}/notes",
             json={"kind": "info", "text": "чи можна ще банан?"},
         )
         assert resp.status_code == 201
@@ -514,7 +520,7 @@ async def test_gemini_called_outside_transaction(
 
     with patch("gemini_infra.generate_json", side_effect=mock_generate_menu):
         resp = await client.post(
-            "/nutrition/menus/2026-10-24/generate",
+            f"/nutrition/menus/{TEST_DATE_STR}/generate",
             json={"scope": "day"},
         )
         assert resp.status_code == 200
@@ -537,7 +543,7 @@ async def test_gemini_called_outside_transaction(
 
     with patch("gemini_infra.generate_json", side_effect=mock_generate_note):
         resp = await client.post(
-            "/nutrition/menus/2026-10-24/notes",
+            f"/nutrition/menus/{TEST_DATE_STR}/notes",
             json={"kind": "info", "text": "тестове питання"},
         )
         assert resp.status_code == 201
@@ -564,14 +570,14 @@ async def test_llm_exchange_log_db_and_stdout(
         with patch("gemini_infra.generate_json", new_callable=AsyncMock) as mock_gen:
             mock_gen.return_value = mock_result
             resp = await client.post(
-                "/nutrition/menus/2026-10-24/notes",
+                f"/nutrition/menus/{TEST_DATE_STR}/notes",
                 json={"kind": "info", "text": "питання про лог"},
             )
             assert resp.status_code == 201
 
     # Verify DB generation_log columns: prompt and duration_ms
     stmt = select(GenerationLog).where(
-        GenerationLog.date == date(2026, 10, 24),
+        GenerationLog.date == TEST_DATE,
         GenerationLog.scope == "info",
     )
     logs = (await session.exec(stmt)).all()
@@ -589,7 +595,7 @@ async def test_llm_exchange_log_db_and_stdout(
     assert len(llm_records) == 1
     record_msg = llm_records[0].getMessage()
     assert f"user_id={log_entry.user_id}" in record_msg
-    assert "date=2026-10-24" in record_msg
+    assert f"date={TEST_DATE_STR}" in record_msg
     assert "scope=info" in record_msg
     assert "model=gemini-2.0-flash" in record_msg
     assert "prompt_version=" in record_msg
@@ -623,7 +629,7 @@ async def test_llm_exchange_log_disabled_switches_stdout_off(
             with patch("gemini_infra.generate_json", new_callable=AsyncMock) as mock_gen:
                 mock_gen.return_value = mock_result
                 resp = await client.post(
-                    "/nutrition/menus/2026-10-24/notes",
+                    f"/nutrition/menus/{TEST_DATE_STR}/notes",
                     json={"kind": "info", "text": "тест відключеного логу"},
                 )
                 assert resp.status_code == 201
@@ -636,7 +642,7 @@ async def test_llm_exchange_log_disabled_switches_stdout_off(
 
     # DB columns were still written
     stmt = select(GenerationLog).where(
-        GenerationLog.date == date(2026, 10, 24),
+        GenerationLog.date == TEST_DATE,
         GenerationLog.scope == "info",
     )
     logs = (await session.exec(stmt)).all()
@@ -655,13 +661,13 @@ async def test_gemini_unavailable_logs_to_db(
     with patch("gemini_infra.generate_json", new_callable=AsyncMock) as mock_gen:
         mock_gen.side_effect = GeminiUnavailable("Timeout connecting to Gemini")
         resp = await client.post(
-            "/nutrition/menus/2026-10-24/notes",
+            f"/nutrition/menus/{TEST_DATE_STR}/notes",
             json={"kind": "info", "text": "таймаут тест"},
         )
         assert resp.status_code == 502
 
     stmt = select(GenerationLog).where(
-        GenerationLog.date == date(2026, 10, 24),
+        GenerationLog.date == TEST_DATE,
         GenerationLog.scope == "info",
     )
     logs = (await session.exec(stmt)).all()
@@ -677,13 +683,13 @@ async def test_gemini_unavailable_logs_to_db(
     with patch("gemini_infra.generate_json", new_callable=AsyncMock) as mock_gen:
         mock_gen.side_effect = GeminiUnavailable("Service down")
         resp2 = await client.post(
-            "/nutrition/menus/2026-10-24/generate",
+            f"/nutrition/menus/{TEST_DATE_STR}/generate",
             json={"scope": "day"},
         )
         assert resp2.status_code == 502
 
     stmt_gen = select(GenerationLog).where(
-        GenerationLog.date == date(2026, 10, 24),
+        GenerationLog.date == TEST_DATE,
         GenerationLog.scope == "day",
     )
     gen_logs = (await session.exec(stmt_gen)).all()

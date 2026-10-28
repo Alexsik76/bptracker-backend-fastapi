@@ -496,9 +496,11 @@ async def estimate_day_kcal(
     notes = await crud.get_menu_notes(session, user_id, menu_date)
     off_plan = await crud.get_off_plan_entries(session, user_id, menu_date)
     available_pins = await crud.get_available_pins(session, user_id, menu_date)
+    day_created = await crud.is_day_created(session, user_id, menu_date)
 
     return DayMenuRead(
         date=menu_date,
+        day_created=day_created,
         menus=day_menus,
         notes=[MenuNoteRead.model_validate(n) for n in notes],
         off_plan=[OffPlanEntryRead.model_validate(e) for e in off_plan],

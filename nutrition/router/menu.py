@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import UTC, date, datetime
 from typing import Annotated
 from uuid import UUID
 
@@ -20,6 +20,7 @@ from nutrition.models import (
     MenuNoteCreate,
     MenuNoteRead,
     MenuRead,
+    MenuStatus,
     MenuUpdate,
     OffPlanEntryRead,
 )
@@ -33,7 +34,6 @@ from nutrition.service.generator import (
     generate_menu,
 )
 from nutrition.service.notes import InvalidNoteRequest, process_menu_note
-from nutrition.service.pinned import materialize_pinned_meals
 
 menus_router = APIRouter(prefix="/menus")
 items_router = APIRouter(prefix="/menu-items")
@@ -44,22 +44,117 @@ async def get_day_menus(
     menu_date: date,
     session: SessionDep,
     user_id: CurrentUserId,
+    now: datetime | None = None,
 ) -> DayMenuRead:
-    await materialize_pinned_meals(session, user_id, menu_date)
-    menus = await crud.get_day_menus(session, user_id, menu_date)
+    if now is None:
+        eff_now = datetime.now(UTC)
+    elif now.tzinfo is None:
+        eff_now = now.replace(tzinfo=UTC)
+    else:
+        eff_now = now
+
+    local_now_date = eff_now.date()
+    is_created = await crud.is_day_created(session, user_id, menu_date)
+    if not is_created and menu_date == local_now_date:
+        await crud.create_menu_day(session, user_id, menu_date)
+        is_created = True
+
+    if is_created:
+        menus = await crud.get_day_menus(session, user_id, menu_date, now=eff_now)
+        notes = await crud.get_menu_notes(session, user_id, menu_date)
+        off_plan = await crud.get_off_plan_entries(session, user_id, menu_date)
+        available_pins = await crud.get_available_pins(session, user_id, menu_date)
+        return DayMenuRead(
+            date=menu_date,
+            day_created=True,
+            menus=menus,
+            notes=[MenuNoteRead.model_validate(n) for n in notes],
+            off_plan=[OffPlanEntryRead.model_validate(e) for e in off_plan],
+            available_pins=available_pins,
+        )
+
+    profile = await crud.get_nutrition_profile(session, user_id)
     notes = await crud.get_menu_notes(session, user_id, menu_date)
     off_plan = await crud.get_off_plan_entries(session, user_id, menu_date)
-    profile = await crud.get_nutrition_profile(session, user_id)
     has_profile_meals = bool(profile and profile.meals)
-    has_rows = await crud.has_menu_rows(session, user_id, menu_date)
-    if not menus and not has_profile_meals and not has_rows and not notes and not off_plan:
+    if not has_profile_meals and not notes and not off_plan:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Menu not found",
         )
+
+    now_time = eff_now.strftime("%H:%M")
+    projected_menus: list[MenuRead] = []
+    if profile and profile.meals:
+        for p_meal in profile.meals:
+            is_missed = (
+                (menu_date < local_now_date)
+                or (
+                    menu_date == local_now_date
+                    and p_meal.time is not None
+                    and p_meal.time < now_time
+                )
+            )
+            status_val = MenuStatus.MISSED if is_missed else MenuStatus.PLANNED
+            projected_menus.append(
+                MenuRead(
+                    id=None,
+                    user_id=user_id,
+                    date=menu_date,
+                    meal_type=p_meal.type,
+                    time=p_meal.time,
+                    status=status_val,
+                    pinned=False,
+                    eaten_at=None,
+                    regenerations=0,
+                    created_at=None,
+                    updated_at=None,
+                    items=[],
+                )
+            )
+
     available_pins = await crud.get_available_pins(session, user_id, menu_date)
     return DayMenuRead(
         date=menu_date,
+        day_created=False,
+        menus=crud.sort_menu_reads(projected_menus),
+        notes=[MenuNoteRead.model_validate(n) for n in notes],
+        off_plan=[OffPlanEntryRead.model_validate(e) for e in off_plan],
+        available_pins=available_pins,
+    )
+
+
+@menus_router.post(
+    "/{menu_date}/create",
+    response_model=DayMenuRead,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_day(
+    menu_date: date,
+    session: SessionDep,
+    user_id: CurrentUserId,
+    now: datetime | None = None,
+) -> DayMenuRead:
+    if await crud.is_day_created(session, user_id, menu_date):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Day already created",
+        )
+    if now is None:
+        eff_now = datetime.now(UTC)
+    elif now.tzinfo is None:
+        eff_now = now.replace(tzinfo=UTC)
+    else:
+        eff_now = now
+
+    await crud.create_menu_day(session, user_id, menu_date)
+    menus = await crud.get_day_menus(session, user_id, menu_date, now=eff_now)
+    notes = await crud.get_menu_notes(session, user_id, menu_date)
+    off_plan = await crud.get_off_plan_entries(session, user_id, menu_date)
+    available_pins = await crud.get_available_pins(session, user_id, menu_date)
+    return DayMenuRead(
+        date=menu_date,
+        day_created=True,
         menus=menus,
         notes=[MenuNoteRead.model_validate(n) for n in notes],
         off_plan=[OffPlanEntryRead.model_validate(e) for e in off_plan],
@@ -78,6 +173,11 @@ async def create_meal_slot(
     session: SessionDep,
     user_id: CurrentUserId,
 ) -> MenuRead:
+    if not await crud.is_day_created(session, user_id, menu_date):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Day not created",
+        )
     try:
         return await crud.create_or_revive_meal_slot(
             session=session,
@@ -165,6 +265,11 @@ async def generate_menu_items(
     user_id: CurrentUserId,
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> GenerationResultRead:
+    if not await crud.is_day_created(session, user_id, menu_date):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Day not created",
+        )
     try:
         return await generate_menu(
             session=session,
@@ -173,7 +278,13 @@ async def generate_menu_items(
             scope=data.scope,
             meal_type=data.meal_type,
             settings=settings,
+            now=data.now,
         )
+    except crud.DayNotCreatedError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Day not created",
+        ) from exc
     except (ProfileNotFoundError, NothingToGenerateError) as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -288,6 +399,11 @@ async def add_menu_item(
     session: SessionDep,
     user_id: CurrentUserId,
 ) -> MenuItemRead:
+    if not await crud.is_day_created(session, user_id, menu_date):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Day not created",
+        )
     try:
         return await crud.add_menu_item(session, user_id, menu_date, meal_type, data)
     except (crud.MealSlotRemovedError, crud.EatenMealImmutableError) as exc:

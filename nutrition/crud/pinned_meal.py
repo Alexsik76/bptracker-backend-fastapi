@@ -217,6 +217,16 @@ async def upsert_pinned_meal(
 
     # Resync untouched future rows
     await cleanup_unmarked_materialized_pinned_menus(session, user_id, meal_type)
+    if data.active:
+        from nutrition.models.menu import MenuDay
+        from nutrition.service.pinned import materialize_pinned_meals
+
+        day_stmt = select(MenuDay.date).where(
+            MenuDay.user_id == user_id, MenuDay.date >= dt_date.today()
+        )
+        created_dates = (await session.exec(day_stmt)).all()
+        for d in created_dates:
+            await materialize_pinned_meals(session, user_id, d, commit=False)
 
     await session.commit()
     await session.refresh(pin)

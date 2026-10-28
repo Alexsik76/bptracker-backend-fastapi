@@ -161,6 +161,7 @@ async def test_day_menu_contains_notes_and_off_plan(client: AsyncClient):
     )
     prod_id = prod_resp.json()["id"]
 
+    await client.post("/nutrition/menus/2026-10-24/create")
     await client.post(
         "/nutrition/menus/2026-10-24/items?meal_type=breakfast",
         json={"product_id": prod_id, "portion_g": 150},
@@ -205,7 +206,7 @@ async def test_day_menu_contains_notes_and_off_plan(client: AsyncClient):
     assert [m["meal_type"] for m in day_data["menus"]] == ["breakfast", "lunch"]
     assert day_data["menus"][0]["meal_type"] == "breakfast"
     assert day_data["menus"][1]["meal_type"] == "lunch"
-    assert day_data["menus"][1]["id"] is None
+    assert day_data["menus"][1]["id"] is not None
 
     assert len(day_data["notes"]) == 1
     assert day_data["notes"][0]["text"] == "чи можна сир на сніданок?"

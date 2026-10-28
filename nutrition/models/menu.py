@@ -102,6 +102,23 @@ class Menu(MenuBase, table=True):
     )
 
 
+class MenuDay(SQLModel, table=True):
+    __tablename__: ClassVar[str] = "menu_days"
+
+    user_id: UUID = Field(
+        sa_column=Column(
+            Uuid, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True, nullable=False
+        )
+    )
+    date: dt_date = Field(
+        sa_column=Column(Date, primary_key=True, nullable=False)
+    )
+    created_at: datetime | None = Field(
+        default=None,
+        sa_column=Column(DateTime(timezone=True), server_default=func.now(), nullable=False),
+    )
+
+
 class MenuItemBase(NutritionSet):
     dish_id: UUID | None = Field(
         default=None,
@@ -228,9 +245,11 @@ def is_meal_generatable(menu: MenuRead) -> bool:
     """Check if a canvas meal can be generated.
 
     A meal is generatable if it is on the canvas, not pinned,
-    and not marked as eaten.
+    not marked as eaten, and not missed.
     """
     if getattr(menu, "pinned", False) or getattr(menu, "pinned_meal_id", None) is not None:
+        return False
+    if menu.status == MenuStatus.MISSED:
         return False
     return menu.status != MenuStatus.EATEN and menu.eaten_at is None
 
@@ -265,6 +284,7 @@ class MealCreate(SQLModel):
 class GenerationRequest(SQLModel):
     scope: GenerationScope = GenerationScope.DAY
     meal_type: MealType | None = None
+    now: datetime | None = None
 
 
 class GenerationResultRead(SQLModel):
@@ -280,6 +300,7 @@ class AvailablePinRead(SQLModel):
 
 class DayMenuRead(SQLModel):
     date: dt_date
+    day_created: bool = False
     menus: list[MenuRead] = []
     notes: list[MenuNoteRead] = []
     off_plan: list[OffPlanEntryRead] = []
