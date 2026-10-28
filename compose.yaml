@@ -5,7 +5,7 @@ services:
   db:
     image: postgres:18
     container_name: bptracker-fa-db
-    restart: unless-stopped
+    restart: "no"
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-bp}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-bp}
