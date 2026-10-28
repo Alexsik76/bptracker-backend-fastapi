@@ -10,7 +10,6 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Integer,
-    String,
     UniqueConstraint,
     Uuid,
     func,
@@ -19,19 +18,17 @@ from sqlalchemy import (
 from sqlmodel import Field, SQLModel
 
 from nutrition.models.enums import MealType
-from nutrition.models.nutrition import NutritionSet
 
 
-class PinnedMealItemBase(NutritionSet):
-    dish_id: UUID | None = Field(
-        default=None,
+class PinnedMealItemBase(SQLModel):
+    frequent_dish_id: UUID = Field(
         sa_column=Column(
-            Uuid, ForeignKey("dishes.id", ondelete="SET NULL"), nullable=True
-        ),
+            Uuid,
+            ForeignKey("frequent_dishes.id", ondelete="CASCADE"),
+            index=True,
+            nullable=False,
+        )
     )
-    title: str = Field(sa_column=Column(String, nullable=False))
-    portion_g: int | None = Field(default=None, sa_column=Column(Integer, nullable=True))
-    portion_text: str | None = Field(default=None, sa_column=Column(String, nullable=True))
     position: int = Field(
         default=0,
         sa_column=Column(Integer, nullable=False, server_default=text("0")),
@@ -55,24 +52,9 @@ class PinnedMealItem(PinnedMealItemBase, table=True):
     )
 
 
-class PinnedMealItemCreate(NutritionSet):
-    dish_id: UUID | None = None
-    title: str | None = None
-    portion_g: int | None = None
-    portion_text: str | None = None
+class PinnedMealItemCreate(SQLModel):
+    frequent_dish_id: UUID
     position: int = 0
-
-    @model_validator(mode="after")
-    def validate_reference(self) -> "PinnedMealItemCreate":
-        if self.dish_id is None:
-            if not self.title or not self.title.strip():
-                raise ValueError(
-                    "Title is required when dish_id is not provided"
-                )
-            self.title = self.title.strip()
-        elif self.title:
-            self.title = self.title.strip()
-        return self
 
 
 class PinnedMealItemRead(PinnedMealItemBase):
@@ -133,6 +115,12 @@ class PinnedMeal(PinnedMealBase, table=True):
 class PinnedMealUpsert(SQLModel):
     active: bool = True
     items: list[PinnedMealItemCreate] = []
+
+    @model_validator(mode="after")
+    def validate_items(self) -> "PinnedMealUpsert":
+        if not self.items:
+            raise ValueError("A pinned meal must have at least 1 item")
+        return self
 
 
 PinnedMealCreate = PinnedMealUpsert

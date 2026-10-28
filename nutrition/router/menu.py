@@ -55,8 +55,9 @@ async def get_day_menus(
 
     local_now_date = eff_now.date()
     is_created = await crud.is_day_created(session, user_id, menu_date)
+    warnings = []
     if not is_created and menu_date == local_now_date:
-        await crud.create_menu_day(session, user_id, menu_date)
+        _, warnings = await crud.create_menu_day(session, user_id, menu_date)
         is_created = True
 
     if is_created:
@@ -71,6 +72,7 @@ async def get_day_menus(
             notes=[MenuNoteRead.model_validate(n) for n in notes],
             off_plan=[OffPlanEntryRead.model_validate(e) for e in off_plan],
             available_pins=available_pins,
+            stock_warnings=warnings,
         )
 
     profile = await crud.get_nutrition_profile(session, user_id)
@@ -147,7 +149,7 @@ async def create_day(
     else:
         eff_now = now
 
-    await crud.create_menu_day(session, user_id, menu_date)
+    _, warnings = await crud.create_menu_day(session, user_id, menu_date)
     menus = await crud.get_day_menus(session, user_id, menu_date, now=eff_now)
     notes = await crud.get_menu_notes(session, user_id, menu_date)
     off_plan = await crud.get_off_plan_entries(session, user_id, menu_date)
@@ -159,6 +161,7 @@ async def create_day(
         notes=[MenuNoteRead.model_validate(n) for n in notes],
         off_plan=[OffPlanEntryRead.model_validate(e) for e in off_plan],
         available_pins=available_pins,
+        stock_warnings=warnings,
     )
 
 

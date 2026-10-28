@@ -9,10 +9,11 @@ from nutrition.models.dish import (
     DishRead,
     DishUpdate,
     NewProductInput,
+    NewRecipeInput,
+    StockWarning,
 )
 from nutrition.models.enums import (
     MEAL_TYPE_LABELS,
-    DishKind,
     GenerationScope,
     KcalSource,
     MealType,
@@ -23,6 +24,18 @@ from nutrition.models.enums import (
     ProductAvailability,
     ProductPreference,
     Sex,
+)
+from nutrition.models.frequent_dish import (
+    FrequentDish,
+    FrequentDishBase,
+    FrequentDishComponent,
+    FrequentDishComponentBase,
+    FrequentDishComponentCreate,
+    FrequentDishComponentRead,
+    FrequentDishCookRequest,
+    FrequentDishCreate,
+    FrequentDishRead,
+    FrequentDishUpdate,
 )
 from nutrition.models.generation_log import GenerationLog
 from nutrition.models.menu import (
@@ -80,6 +93,14 @@ from nutrition.models.profile import (
     NutritionProfileRead,
     NutritionProfileUpsert,
 )
+from nutrition.models.recipe import (
+    Recipe,
+    RecipeBase,
+    RecipeCreate,
+    RecipeProduct,
+    RecipeRead,
+    RecipeUpdate,
+)
 
 __all__ = [
     "Sex",
@@ -87,7 +108,6 @@ __all__ = [
     "MEAL_TYPE_LABELS",
     "ProductAvailability",
     "ProductPreference",
-    "DishKind",
     "KcalSource",
     "NutritionSource",
     "NutritionSet",
@@ -112,11 +132,29 @@ __all__ = [
     "DishComponentCreate",
     "DishComponentRead",
     "NewProductInput",
+    "NewRecipeInput",
+    "StockWarning",
     "DishBase",
     "Dish",
     "DishCreate",
     "DishRead",
     "DishUpdate",
+    "RecipeBase",
+    "Recipe",
+    "RecipeProduct",
+    "RecipeCreate",
+    "RecipeUpdate",
+    "RecipeRead",
+    "FrequentDishBase",
+    "FrequentDish",
+    "FrequentDishComponentBase",
+    "FrequentDishComponent",
+    "FrequentDishComponentCreate",
+    "FrequentDishComponentRead",
+    "FrequentDishCreate",
+    "FrequentDishUpdate",
+    "FrequentDishRead",
+    "FrequentDishCookRequest",
     "MenuBase",
     "Menu",
     "MenuDay",

@@ -1,17 +1,27 @@
 from datetime import date as dt_date
-from datetime import datetime, timedelta
+from datetime import timedelta
 from unittest.mock import AsyncMock, patch
-from uuid import UUID
 
 import pytest
 from httpx import AsyncClient
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from conftest import test_session_factory as _session_factory
 from gemini_infra.types import GeminiResult
-from nutrition import crud
 from nutrition.models import Menu, MenuDay, MenuItem
+
+
+@pytest.fixture(autouse=True)
+def _mock_gemini_default():
+    with patch("gemini_infra.generate_json", new_callable=AsyncMock) as m:
+        m.return_value = GeminiResult(
+            data={},
+            raw_text="{}",
+            model="gemini-2.0-flash",
+            input_tokens=10,
+            output_tokens=10,
+        )
+        yield m
 
 
 @pytest.mark.asyncio
@@ -34,13 +44,29 @@ async def test_today_auto_created_on_get(client: AsyncClient, session: AsyncSess
         },
     )
 
+    p = (
+        await client.post(
+            "/nutrition/products", json={"name": "Вівсянка", "stock_g": 500}
+        )
+    ).json()
+    r = (
+        await client.post(
+            "/nutrition/recipes", json={"name": "Вівсянка", "product_ids": [p["id"]]}
+        )
+    ).json()
+    fd = (await client.post("/nutrition/frequent-dishes", json={
+        "recipe_id": r["id"],
+        "cooked_weight_g": 200,
+        "components": [{"product_id": p["id"], "weight_g": 200}],
+    })).json()
+
     # Pin breakfast
     await client.put(
         "/nutrition/pinned-meals/breakfast",
         json={
             "active": True,
             "items": [
-                {"title": "Вівсянка", "portion_g": 200, "kcal": 250},
+                {"frequent_dish_id": fd["id"]},
             ],
         },
     )
@@ -59,7 +85,7 @@ async def test_today_auto_created_on_get(client: AsyncClient, session: AsyncSess
     breakfast = next(m for m in data["menus"] if m["meal_type"] == "breakfast")
     assert breakfast["pinned"] is True
     assert len(breakfast["items"]) == 1
-    assert breakfast["items"][0]["title"] == "Вівсянка"
+    assert "Вівсянка" in breakfast["items"][0]["title"]
 
     # Verify menu_days row in DB
     day_row = (await session.exec(select(MenuDay).where(MenuDay.date == today))).first()
@@ -267,22 +293,22 @@ async def test_missed_derivation(client: AsyncClient):
 
 
 @pytest.mark.asyncio
-async def test_reserve_excludes_missed_meals(client: AsyncClient):
-    prod = (
+async def test_day_creation_stock_warnings(client: AsyncClient):
+    # Product with shortage (stock 50g, needs 100g)
+    p = (await client.post("/nutrition/products", json={"name": "Гречка", "stock_g": 50})).json()
+    r = (
         await client.post(
-            "/nutrition/products",
-            json={"name": "Гречка", "stock_g": 500},
+            "/nutrition/recipes",
+            json={"name": "Гречана каша рецепт", "product_ids": [p["id"]]},
         )
     ).json()
-    prod_id = prod["id"]
-
-    dish = (
+    fd = (
         await client.post(
-            "/nutrition/dishes",
+            "/nutrition/frequent-dishes",
             json={
-                "name": "Гречана каша",
-                "kind": "constant",
-                "components": [{"product_id": prod_id, "weight_g": 100}],
+                "recipe_id": r["id"],
+                "cooked_weight_g": 100,
+                "components": [{"product_id": p["id"], "weight_g": 100}],
             },
         )
     ).json()
@@ -303,28 +329,24 @@ async def test_reserve_excludes_missed_meals(client: AsyncClient):
             ],
         },
     )
-    await client.post(f"/nutrition/menus/{d}/create")
-
-    # Add item to lunch (100g component)
-    await client.post(
-        f"/nutrition/menus/{d}/items?meal_type=lunch",
-        json={"dish_id": dish["id"], "portion_g": 200},
+    # Pin breakfast
+    await client.put(
+        "/nutrition/pinned-meals/breakfast",
+        json={"active": True, "items": [{"frequent_dish_id": fd["id"]}]},
     )
 
-    # When now is early morning on date d -> lunch is planned, so reserves 100g
-    early_now = datetime.fromisoformat(f"{d}T08:00:00+00:00")
-    async with _session_factory() as s:
-        stmt = select(Menu.user_id).where(Menu.date == dt_date.fromisoformat(d))
-        user_id = (await s.exec(stmt)).first()
-        assert user_id is not None
+    # Explicit day creation materializes pinned meals and returns stock_warnings
+    create_resp = await client.post(f"/nutrition/menus/{d}/create")
+    assert create_resp.status_code == 201
+    data = create_resp.json()
+    assert len(data["stock_warnings"]) == 1
+    assert data["stock_warnings"][0]["product_id"] == p["id"]
+    assert data["stock_warnings"][0]["product_name"] == "Гречка"
+    assert data["stock_warnings"][0]["missing_g"] == 50
 
-        reserves_early = await crud.get_product_reserves_map(s, user_id, now=early_now)
-        assert reserves_early.get(UUID(prod_id), 0) == 100
-
-        # When now is afternoon on date d (15:00 > 13:00) -> lunch is missed, so reserves 0g
-        late_now = datetime.fromisoformat(f"{d}T15:00:00+00:00")
-        reserves_late = await crud.get_product_reserves_map(s, user_id, now=late_now)
-        assert reserves_late.get(UUID(prod_id), 0) == 0
+    # Product stock was reduced to 0
+    p_check = (await client.get(f"/nutrition/products/{p['id']}")).json()
+    assert p_check["stock_g"] == 0
 
 
 @pytest.mark.asyncio
@@ -352,9 +374,30 @@ async def test_generation_skips_missed_and_pinned_meals(client: AsyncClient):
             "/nutrition/dishes",
             json={
                 "name": "Легка вечеря",
-                "kind": "ready",
                 "cooked_weight_g": 500,
                 "cooked_on": d,
+            },
+        )
+    ).json()
+
+    p_lunch = (
+        await client.post(
+            "/nutrition/products", json={"name": "Обідній продукт", "stock_g": 500}
+        )
+    ).json()
+    r_lunch = (
+        await client.post(
+            "/nutrition/recipes",
+            json={"name": "Закріплений обід", "product_ids": [p_lunch["id"]]},
+        )
+    ).json()
+    fd_lunch = (
+        await client.post(
+            "/nutrition/frequent-dishes",
+            json={
+                "recipe_id": r_lunch["id"],
+                "cooked_weight_g": 250,
+                "components": [{"product_id": p_lunch["id"], "weight_g": 250}],
             },
         )
     ).json()
@@ -364,7 +407,7 @@ async def test_generation_skips_missed_and_pinned_meals(client: AsyncClient):
         "/nutrition/pinned-meals/lunch",
         json={
             "active": True,
-            "items": [{"title": "Закріплений обід", "portion_g": 250, "kcal": 400}],
+            "items": [{"frequent_dish_id": fd_lunch["id"]}],
         },
     )
 
@@ -408,7 +451,7 @@ async def test_generation_skips_missed_and_pinned_meals(client: AsyncClient):
         assert menus_by_type["breakfast"]["items"] == []
         # Lunch: pinned, untouched
         assert len(menus_by_type["lunch"]["items"]) == 1
-        assert menus_by_type["lunch"]["items"][0]["title"] == "Закріплений обід"
+        assert "Закріплений обід" in menus_by_type["lunch"]["items"][0]["title"]
         # Dinner: generated
         assert len(menus_by_type["dinner"]["items"]) == 1
         assert menus_by_type["dinner"]["items"][0]["title"] == "Легка вечеря"

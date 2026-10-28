@@ -1,7 +1,6 @@
 import logging
 from collections.abc import Sequence
 from datetime import UTC, datetime
-from datetime import date as dt_date
 from uuid import UUID
 
 from sqlmodel import col, select
@@ -9,11 +8,6 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 
 from config import Settings, get_settings
 from nutrition.models import (
-    Dish,
-    DishComponent,
-    DishKind,
-    Menu,
-    MenuItem,
     Product,
     ProductAvailability,
     ProductCreate,
@@ -23,76 +17,10 @@ from nutrition.models import (
 
 logger = logging.getLogger(__name__)
 
-
-async def get_product_reserves_map(
-    session: AsyncSession,
-    user_id: UUID,
-    now: datetime | None = None,
-) -> dict[UUID, int]:
-    """Calculate reserved weights per product from constant dishes in
-    future/today uneaten, non-missed meals.
-    """
-    if now is None:
-        now = datetime.now(UTC)
-    elif now.tzinfo is None:
-        now = now.replace(tzinfo=UTC)
-
-    now_date = now.date()
-    now_time = now.strftime("%H:%M")
-
-    eaten_stmt = (
-        select(Menu.date, Menu.time)
-        .where(
-            Menu.user_id == user_id,
-            Menu.removed.is_(False),
-            Menu.eaten_at.is_not(None),
-            Menu.date >= now_date,
-            Menu.time.is_not(None),
-        )
-    )
-    eaten_rows = (await session.exec(eaten_stmt)).all()
-    max_eaten_time_by_date: dict[dt_date, str] = {}
-    for d, t in eaten_rows:
-        if d not in max_eaten_time_by_date or t > max_eaten_time_by_date[d]:
-            max_eaten_time_by_date[d] = t
-
-    stmt = (
-        select(Menu, DishComponent.product_id, DishComponent.weight_g)
-        .join(MenuItem, col(MenuItem.menu_id) == col(Menu.id))
-        .join(Dish, col(MenuItem.dish_id) == col(Dish.id))
-        .join(DishComponent, col(DishComponent.dish_id) == col(Dish.id))
-        .where(
-            Menu.user_id == user_id,
-            Menu.removed.is_(False),
-            Menu.eaten_at.is_(None),
-            Menu.date >= now_date,
-            Dish.kind == DishKind.CONSTANT,
-        )
-    )
-    results = (await session.exec(stmt)).all()
-
-    reserves: dict[UUID, int] = {}
-    for menu, product_id, weight_g in results:
-        max_eaten = max_eaten_time_by_date.get(menu.date)
-        is_missed = (
-            (menu.date < now_date)
-            or (menu.date == now_date and menu.time is not None and menu.time < now_time)
-            or (menu.time is not None and max_eaten is not None and menu.time < max_eaten)
-        )
-        if not is_missed:
-            reserves[product_id] = reserves.get(product_id, 0) + int(weight_g)
-
-    return reserves
+NUTR_FIELDS = ("kcal", "protein_g", "fat_g", "carbs_g", "fiber_g", "sugar_g", "sodium_mg")
 
 
-def to_product_read(product: Product, reserve_g: int = 0) -> ProductRead:
-    if product.stock_g is None:
-        reserved_g = None
-        available_g = None
-    else:
-        reserved_g = reserve_g
-        available_g = product.stock_g - reserved_g
-
+def to_product_read(product: Product) -> ProductRead:
     return ProductRead(
         id=product.id,
         user_id=product.user_id,
@@ -102,8 +30,6 @@ def to_product_read(product: Product, reserve_g: int = 0) -> ProductRead:
         eat_raw=product.eat_raw,
         count=product.count,
         stock_g=product.stock_g,
-        reserved_g=reserved_g,
-        available_g=available_g,
         kcal=product.kcal,
         protein_g=product.protein_g,
         fat_g=product.fat_g,
@@ -168,8 +94,7 @@ async def create_product(
     except Exception as exc:
         logger.warning("Product estimation failed on create for '%s': %s", product.name, exc)
 
-    reserves = await get_product_reserves_map(session, user_id)
-    return to_product_read(product, reserves.get(product.id, 0))
+    return to_product_read(product)
 
 
 async def get_products(
@@ -186,8 +111,7 @@ async def get_products(
     if not products:
         return []
 
-    reserves = await get_product_reserves_map(session, user_id)
-    return [to_product_read(p, reserves.get(p.id, 0)) for p in products]
+    return [to_product_read(p) for p in products]
 
 
 async def get_available_products(
@@ -207,8 +131,7 @@ async def get_available_products(
     if not products:
         return []
 
-    reserves = await get_product_reserves_map(session, user_id)
-    return [to_product_read(p, reserves.get(p.id, 0)) for p in products]
+    return [to_product_read(p) for p in products]
 
 
 async def get_product(
@@ -216,12 +139,11 @@ async def get_product(
     product_id: UUID,
     user_id: UUID,
 ) -> ProductRead | None:
-    """Return a single product by id for the given user with reserve values."""
+    """Return a single product by id for the given user."""
     product = await get_product_entity(session, product_id, user_id)
     if product is None:
         return None
-    reserves = await get_product_reserves_map(session, user_id)
-    return to_product_read(product, reserves.get(product.id, 0))
+    return to_product_read(product)
 
 
 async def update_product(
@@ -237,6 +159,8 @@ async def update_product(
         return None
 
     name_changed = data.name is not None and data.name.strip() != product.name
+    nutrition_updated = any(f in data.model_fields_set for f in NUTR_FIELDS)
+
     updates = data.model_dump(exclude_unset=True)
     for field, value in updates.items():
         setattr(product, field, value)
@@ -280,13 +204,18 @@ async def update_product(
                 session.add(product)
                 await session.commit()
                 await session.refresh(product)
+                nutrition_updated = True
         except Exception as exc:
             logger.warning(
                 "Product estimation failed on name change for '%s': %s", product.name, exc
             )
 
-    reserves = await get_product_reserves_map(session, user_id)
-    return to_product_read(product, reserves.get(product.id, 0))
+    if nutrition_updated:
+        from nutrition.crud.frequent_dish import recompute_frequent_dishes_for_product
+
+        await recompute_frequent_dishes_for_product(session, user_id, product.id)
+
+    return to_product_read(product)
 
 
 async def estimate_product(
@@ -322,8 +251,11 @@ async def estimate_product(
         await session.commit()
         await session.refresh(product)
 
-    reserves = await get_product_reserves_map(session, user_id)
-    return to_product_read(product, reserves.get(product.id, 0))
+        from nutrition.crud.frequent_dish import recompute_frequent_dishes_for_product
+
+        await recompute_frequent_dishes_for_product(session, user_id, product.id)
+
+    return to_product_read(product)
 
 
 async def delete_product(

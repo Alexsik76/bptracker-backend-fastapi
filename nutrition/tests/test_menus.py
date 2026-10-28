@@ -13,6 +13,19 @@ from nutrition.models import MealType, Menu, MenuItemCreate
 from users.models import User
 
 
+@pytest.fixture(autouse=True)
+def _mock_gemini_default():
+    with patch("gemini_infra.generate_json", new_callable=AsyncMock) as m:
+        m.return_value = GeminiResult(
+            data={},
+            raw_text="{}",
+            model="gemini-2.0-flash",
+            input_tokens=10,
+            output_tokens=10,
+        )
+        yield m
+
+
 @pytest.mark.asyncio
 async def test_get_menu_not_found(client: AsyncClient):
     resp = await client.get("/nutrition/menus/2026-10-23")
@@ -1608,13 +1621,32 @@ async def test_delete_meal_with_eaten_item_refused(client: AsyncClient):
     assert len(lunch["items"]) == 1
 
     # 2. Pinned meal with eaten mark
+    p_b = (
+        await client.post(
+            "/nutrition/products", json={"name": "Вівсянка", "stock_g": 500}
+        )
+    ).json()
+    r_b = (
+        await client.post(
+            "/nutrition/recipes",
+            json={"name": "Вівсянка сніданок", "product_ids": [p_b["id"]]},
+        )
+    ).json()
+    fd_b = (
+        await client.post(
+            "/nutrition/frequent-dishes",
+            json={
+                "recipe_id": r_b["id"],
+                "cooked_weight_g": 150,
+                "components": [{"product_id": p_b["id"], "weight_g": 150}],
+            },
+        )
+    ).json()
     await client.put(
         "/nutrition/pinned-meals/breakfast",
         json={
             "active": True,
-            "items": [
-                {"title": "Вівсянка", "portion_g": 150, "kcal": 200, "position": 1},
-            ],
+            "items": [{"frequent_dish_id": fd_b["id"], "position": 1}],
         },
     )
 
@@ -1911,157 +1943,56 @@ async def test_menu_unique_date_meal_type_constraint(client: AsyncClient):
 
 
 @pytest.mark.asyncio
-async def test_constant_dish_reserve_and_available_stock(client: AsyncClient):
-    # Product with stock_g = 500
-    prod_resp = await client.post(
-        "/nutrition/products",
-        json={"name": "Вівсяні пластівці", "stock_g": 500},
-    )
-    assert prod_resp.status_code == 201
-    prod_id = prod_resp.json()["id"]
-    assert prod_resp.json()["reserved_g"] == 0
-    assert prod_resp.json()["available_g"] == 500
-
-    # Constant dish requiring 100g of the product
+async def test_menu_item_dish_nutrition_computed_from_stored(client: AsyncClient):
+    # Create dish with stored nutrition
     dish_resp = await client.post(
         "/nutrition/dishes",
         json={
             "name": "Вівсянка звичайна",
-            "kind": "constant",
-            "components": [{"product_id": prod_id, "weight_g": 100}],
+            "cooked_weight_g": 500,
+            "kcal": 200.0,
+            "protein_g": 10.0,
+            "fat_g": 5.0,
+            "carbs_g": 30.0,
         },
     )
     assert dish_resp.status_code == 201
     dish_id = dish_resp.json()["id"]
 
-    today = dt_date.today()
-    today_str = today.isoformat()
-    tomorrow_str = (today + timedelta(days=1)).isoformat()
-    yesterday_str = (today - timedelta(days=1)).isoformat()
+    today = dt_date.today().isoformat()
+    await client.post(f"/nutrition/menus/{today}/create")
 
-    await client.post(f"/nutrition/menus/{today_str}/create")
-    await client.post(f"/nutrition/menus/{tomorrow_str}/create")
-    await client.post(f"/nutrition/menus/{yesterday_str}/create")
-
-    # Add custom slot with late time on today so it is not missed
-    await client.post(
-        f"/nutrition/menus/{today_str}/meals",
-        json={"meal_type": "evening_snack", "time": "23:59"},
+    # Add item with portion_g = 150g -> ratio 1.5
+    # kcal = 200 * 1.5 = 300.0, protein = 10 * 1.5 = 15.0
+    item_resp = await client.post(
+        f"/nutrition/menus/{today}/items?meal_type=breakfast",
+        json={"dish_id": dish_id, "portion_g": 150},
     )
-
-    # 1. Add item to today's evening_snack -> reserves 100g
-    item1_resp = await client.post(
-        f"/nutrition/menus/{today_str}/items?meal_type=evening_snack",
-        json={"dish_id": dish_id, "portion_g": 200},
-    )
-    assert item1_resp.status_code == 201
-    p = (await client.get(f"/nutrition/products/{prod_id}")).json()
-    assert p["stock_g"] == 500
-    assert p["reserved_g"] == 100
-    assert p["available_g"] == 400
-
-    # 2. Add item to tomorrow's breakfast -> reserves another 100g (total 200g)
-    item2_resp = await client.post(
-        f"/nutrition/menus/{tomorrow_str}/items?meal_type=breakfast",
-        json={"dish_id": dish_id, "portion_g": 200},
-    )
-    assert item2_resp.status_code == 201
-    p = (await client.get(f"/nutrition/products/{prod_id}")).json()
-    assert p["stock_g"] == 500
-    assert p["reserved_g"] == 200
-    assert p["available_g"] == 300
-
-    # 3. Add item to yesterday's breakfast -> past date does NOT reserve
-    item3_resp = await client.post(
-        f"/nutrition/menus/{yesterday_str}/items?meal_type=breakfast",
-        json={"dish_id": dish_id, "portion_g": 200},
-    )
-    assert item3_resp.status_code == 201
-    p = (await client.get(f"/nutrition/products/{prod_id}")).json()
-    assert p["stock_g"] == 500
-    assert p["reserved_g"] == 200
-    assert p["available_g"] == 300
+    assert item_resp.status_code == 201
+    item = item_resp.json()
+    assert item["kcal"] == 300.0
+    assert item["protein_g"] == 15.0
+    assert item["fat_g"] == 7.5
+    assert item["carbs_g"] == 45.0
 
 
 @pytest.mark.asyncio
-async def test_constant_dish_shortage_returns_409(client: AsyncClient):
-    # Product with limited stock_g = 150
-    prod_resp = await client.post(
-        "/nutrition/products",
-        json={"name": "Сир домашній", "stock_g": 150},
-    )
-    assert prod_resp.status_code == 201
-    prod_id = prod_resp.json()["id"]
-
-    # Constant dish using 100g of the product
-    dish_resp = await client.post(
-        "/nutrition/dishes",
-        json={
-            "name": "Сирна запіканка",
-            "kind": "constant",
-            "components": [{"product_id": prod_id, "weight_g": 100}],
-        },
-    )
-    assert dish_resp.status_code == 201
-    dish_id = dish_resp.json()["id"]
-
-    tomorrow_str = (dt_date.today() + timedelta(days=1)).isoformat()
-    await client.post(f"/nutrition/menus/{tomorrow_str}/create")
-
-    # First item takes 100g -> available becomes 50g
-    add1 = await client.post(
-        f"/nutrition/menus/{tomorrow_str}/items?meal_type=breakfast",
-        json={"dish_id": dish_id, "portion_g": 150},
-    )
-    assert add1.status_code == 201
-
-    # Second item needs 100g, but only 50g available -> 409 Conflict naming the product
-    add2 = await client.post(
-        f"/nutrition/menus/{tomorrow_str}/items?meal_type=dinner",
-        json={"dish_id": dish_id, "portion_g": 150},
-    )
-    assert add2.status_code == 409
-    assert "Сир домашній" in add2.json()["detail"]
-
-    # Add free-text item then try to patch to this constant dish -> 409
-    free_item = (
-        await client.post(
-            f"/nutrition/menus/{tomorrow_str}/items?meal_type=dinner",
-            json={"title": "Чай", "portion_g": 200},
-        )
-    ).json()
-
-    patch_refused = await client.patch(
-        f"/nutrition/menu-items/{free_item['id']}",
-        json={"dish_id": dish_id},
-    )
-    assert patch_refused.status_code == 409
-    assert "Сир домашній" in patch_refused.json()["detail"]
-
-
-@pytest.mark.asyncio
-async def test_constant_dish_eaten_writeoff_and_restore(client: AsyncClient):
-    prod_resp = await client.post(
-        "/nutrition/products",
-        json={"name": "Гречана крупа", "stock_g": 500},
-    )
-    assert prod_resp.status_code == 201
-    prod_id = prod_resp.json()["id"]
-
+async def test_dish_eaten_adjusts_remaining_and_restore(client: AsyncClient):
     dish_resp = await client.post(
         "/nutrition/dishes",
         json={
             "name": "Гречана каша звичайна",
-            "kind": "constant",
-            "components": [{"product_id": prod_id, "weight_g": 100}],
+            "cooked_weight_g": 500,
         },
     )
+    assert dish_resp.status_code == 201
     dish_id = dish_resp.json()["id"]
+    assert dish_resp.json()["remaining_g"] == 500
 
     tomorrow_str = (dt_date.today() + timedelta(days=1)).isoformat()
     await client.post(f"/nutrition/menus/{tomorrow_str}/create")
 
-    # Add item to tomorrow's lunch
+    # Add item to tomorrow's lunch (portion 200g)
     item_resp = await client.post(
         f"/nutrition/menus/{tomorrow_str}/items?meal_type=lunch",
         json={"dish_id": dish_id, "portion_g": 200},
@@ -2069,34 +2000,53 @@ async def test_constant_dish_eaten_writeoff_and_restore(client: AsyncClient):
     assert item_resp.status_code == 201
     menu_id = item_resp.json()["menu_id"]
 
-    p = (await client.get(f"/nutrition/products/{prod_id}")).json()
-    assert p["stock_g"] == 500
-    assert p["reserved_g"] == 100
-    assert p["available_g"] == 400
+    # Before eaten, remaining_g is still 500
+    d_before = (await client.get(f"/nutrition/dishes/{dish_id}")).json()
+    assert d_before["remaining_g"] == 500
 
-    # Mark meal eaten -> subtracts component weights from product stock
+    # Mark meal eaten -> adjusts remaining_g down by 200 -> 300
     mark_res = await client.patch(
         f"/nutrition/menus/{menu_id}",
         json={"eaten_at": f"{tomorrow_str}T13:00:00Z"},
     )
     assert mark_res.status_code == 200
 
-    p_eaten = (await client.get(f"/nutrition/products/{prod_id}")).json()
-    assert p_eaten["stock_g"] == 400
-    assert p_eaten["reserved_g"] == 0
-    assert p_eaten["available_g"] == 400
+    d_eaten = (await client.get(f"/nutrition/dishes/{dish_id}")).json()
+    assert d_eaten["remaining_g"] == 300
 
-    # Unmark meal -> returns weights to product stock and restores reserve
+    # Unmark meal -> restores remaining_g back to 500
     unmark_res = await client.patch(
         f"/nutrition/menus/{menu_id}",
         json={"eaten_at": None},
     )
     assert unmark_res.status_code == 200
 
-    p_restored = (await client.get(f"/nutrition/products/{prod_id}")).json()
-    assert p_restored["stock_g"] == 500
-    assert p_restored["reserved_g"] == 100
-    assert p_restored["available_g"] == 400
+    d_restored = (await client.get(f"/nutrition/dishes/{dish_id}")).json()
+    assert d_restored["remaining_g"] == 500
+
+
+@pytest.mark.asyncio
+async def test_no_shortage_check_or_409_on_menu_item_create(client: AsyncClient):
+    dish_resp = await client.post(
+        "/nutrition/dishes",
+        json={
+            "name": "Сирна запіканка",
+            "cooked_weight_g": 100,
+            "remaining_g": 50,
+        },
+    )
+    assert dish_resp.status_code == 201
+    dish_id = dish_resp.json()["id"]
+
+    tomorrow_str = (dt_date.today() + timedelta(days=1)).isoformat()
+    await client.post(f"/nutrition/menus/{tomorrow_str}/create")
+
+    # Portion exceeds remaining_g, but menu items never fail on shortage (no 409)
+    add_resp = await client.post(
+        f"/nutrition/menus/{tomorrow_str}/items?meal_type=dinner",
+        json={"dish_id": dish_id, "portion_g": 200},
+    )
+    assert add_resp.status_code == 201
 
 
 @pytest.mark.asyncio

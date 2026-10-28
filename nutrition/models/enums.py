@@ -37,11 +37,6 @@ class ProductPreference(StrEnum):
     AVOID = "avoid"
 
 
-class DishKind(StrEnum):
-    READY = "ready"
-    CONSTANT = "constant"
-
-
 class MenuItemOrigin(StrEnum):
     GENERATED = "generated"
     MANUAL = "manual"

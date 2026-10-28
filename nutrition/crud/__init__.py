@@ -5,6 +5,15 @@ from nutrition.crud.dish import (
     get_dishes,
     update_dish,
 )
+from nutrition.crud.frequent_dish import (
+    cook_frequent_dish,
+    create_frequent_dish,
+    delete_frequent_dish,
+    get_frequent_dish,
+    get_frequent_dishes,
+    recompute_frequent_dishes_for_product,
+    update_frequent_dish,
+)
 from nutrition.crud.menu import (
     DayAlreadyCreatedError,
     DayNotCreatedError,
@@ -15,6 +24,7 @@ from nutrition.crud.menu import (
     MealSlotRemovedError,
     add_generation_log,
     add_menu_item,
+    adjust_meal_dish_stock,
     adjust_meal_ready_dish_stock,
     create_menu_day,
     create_or_revive_meal_slot,
@@ -55,11 +65,19 @@ from nutrition.crud.product import (
     estimate_product,
     get_available_products,
     get_product,
-    get_product_reserves_map,
     get_products,
     update_product,
 )
 from nutrition.crud.profile import get_nutrition_profile, upsert_nutrition_profile
+from nutrition.crud.recipe import (
+    create_recipe,
+    delete_recipe,
+    get_recipe,
+    get_recipe_entity,
+    get_recipes,
+    resolve_recipe_name,
+    update_recipe,
+)
 
 __all__ = [
     "create_menu_note",
@@ -74,9 +92,22 @@ __all__ = [
     "get_products",
     "get_available_products",
     "get_product",
-    "get_product_reserves_map",
     "update_product",
     "delete_product",
+    "create_recipe",
+    "get_recipes",
+    "get_recipe",
+    "get_recipe_entity",
+    "update_recipe",
+    "delete_recipe",
+    "resolve_recipe_name",
+    "create_frequent_dish",
+    "get_frequent_dishes",
+    "get_frequent_dish",
+    "update_frequent_dish",
+    "delete_frequent_dish",
+    "cook_frequent_dish",
+    "recompute_frequent_dishes_for_product",
     "create_dish",
     "get_dishes",
     "get_dish",
@@ -101,6 +132,7 @@ __all__ = [
     "MealSlotConflictError",
     "MealSlotRemovedError",
     "add_menu_item",
+    "adjust_meal_dish_stock",
     "adjust_meal_ready_dish_stock",
     "update_menu_item",
     "delete_menu_item",

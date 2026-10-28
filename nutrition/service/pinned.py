@@ -5,7 +5,7 @@ from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from nutrition import crud
-from nutrition.models import Menu, MenuItem, MenuItemOrigin, NutritionSource
+from nutrition.models import Menu, MenuItem, MenuItemOrigin, NutritionSource, StockWarning
 
 
 async def materialize_pinned_meals(
@@ -14,22 +14,20 @@ async def materialize_pinned_meals(
     menu_date: dt_date,
     *,
     commit: bool = True,
-) -> bool:
+) -> tuple[bool, list[StockWarning]]:
     """Materialize active pinned meals into the day's menus.
 
-    For every active pin whose slot is in the profile schedule:
-    - If a menu row already exists (and is not eaten, removed, or pin_dismissed),
-      attaches pinned_meal_id.
-    - If no menu row exists, creates the menu row.
-    - Populates the menu with copies of pin items.
+    For each item, cook the frequent dish with cooked_on = menu date (stock rule)
+    and add a menu item referencing the new dish with portion_g = cooked_weight_g.
+    Returns (materialized_any, collected_stock_warnings).
     """
     profile = await crud.get_nutrition_profile(session, user_id)
     if not profile or not profile.meals:
-        return False
+        return False, []
 
     active_pins = await crud.get_active_pinned_meals(session, user_id)
     if not active_pins:
-        return False
+        return False, []
 
     stmt = select(Menu).where(Menu.user_id == user_id, Menu.date == menu_date)
     existing_menus = list((await session.exec(stmt)).all())
@@ -37,6 +35,8 @@ async def materialize_pinned_meals(
     profile_meals_map = {m.type: m for m in profile.meals}
 
     materialized_any = False
+    all_warnings: list[StockWarning] = []
+
     for pin in active_pins:
         if pin.meal_type in profile_meals_map:
             menu = existing_by_type.get(pin.meal_type)
@@ -69,21 +69,56 @@ async def materialize_pinned_meals(
 
             pin_items = await crud.get_pinned_meal_items(session, pin.id)
             for it in pin_items:
-                has_user_nutr = it.kcal is not None
+                dish_read = await crud.cook_frequent_dish(
+                    session=session,
+                    frequent_dish_id=it.frequent_dish_id,
+                    user_id=user_id,
+                    cooked_on=menu_date,
+                )
+                all_warnings.extend(dish_read.stock_warnings)
+
+                portion = dish_read.cooked_weight_g
+                ratio = portion / 100.0
                 menu_item = MenuItem(
                     menu_id=menu.id,
-                    dish_id=it.dish_id,
-                    title=it.title,
-                    portion_g=it.portion_g,
-                    portion_text=it.portion_text,
-                    kcal=it.kcal,
-                    protein_g=it.protein_g,
-                    fat_g=it.fat_g,
-                    carbs_g=it.carbs_g,
-                    fiber_g=it.fiber_g,
-                    sugar_g=it.sugar_g,
-                    sodium_mg=it.sodium_mg,
-                    nutrition_source=NutritionSource.USER if has_user_nutr else None,
+                    dish_id=dish_read.id,
+                    title=dish_read.name,
+                    portion_g=portion,
+                    portion_text=f"{portion} г",
+                    kcal=round(dish_read.kcal * ratio, 1) if dish_read.kcal is not None else None,
+                    protein_g=(
+                        round(dish_read.protein_g * ratio, 1)
+                        if dish_read.protein_g is not None
+                        else None
+                    ),
+                    fat_g=(
+                        round(dish_read.fat_g * ratio, 1)
+                        if dish_read.fat_g is not None
+                        else None
+                    ),
+                    carbs_g=(
+                        round(dish_read.carbs_g * ratio, 1)
+                        if dish_read.carbs_g is not None
+                        else None
+                    ),
+                    fiber_g=(
+                        round(dish_read.fiber_g * ratio, 1)
+                        if dish_read.fiber_g is not None
+                        else None
+                    ),
+                    sugar_g=(
+                        round(dish_read.sugar_g * ratio, 1)
+                        if dish_read.sugar_g is not None
+                        else None
+                    ),
+                    sodium_mg=(
+                        round(dish_read.sodium_mg * ratio, 1)
+                        if dish_read.sodium_mg is not None
+                        else None
+                    ),
+                    nutrition_source=(
+                        NutritionSource.COMPUTED if dish_read.kcal is not None else None
+                    ),
                     origin=MenuItemOrigin.MANUAL,
                     position=it.position,
                 )
@@ -95,4 +130,4 @@ async def materialize_pinned_meals(
         if commit:
             await session.commit()
 
-    return materialized_any
+    return materialized_any, all_warnings

@@ -9,7 +9,6 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from nutrition.models import (
     Dish,
     DishComponent,
-    DishKind,
     MealSchedule,
     MealType,
     MenuNote,
@@ -20,6 +19,7 @@ from nutrition.models import (
     Product,
     ProductAvailability,
     ProductPreference,
+    Recipe,
     Sex,
 )
 
@@ -103,12 +103,18 @@ async def test_dish_and_components_persistence(session: AsyncSession, test_user_
     await session.refresh(p1)
     await session.refresh(p2)
 
+    recipe = Recipe(user_id=test_user_id, name="Вівсянка з яблуком")
+    session.add(recipe)
+    await session.commit()
+    await session.refresh(recipe)
+
     dish = Dish(
         user_id=test_user_id,
+        recipe_id=recipe.id,
         name="Вівсянка з яблуком",
-        kind=DishKind.CONSTANT,
+        cooked_weight_g=300,
+        remaining_g=300,
         cooked_on=date.today(),
-        fixed_meal_type=MealType.BREAKFAST,
         notes="Постійна ранкова страва",
     )
     session.add(dish)

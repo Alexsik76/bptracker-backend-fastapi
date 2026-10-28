@@ -12,7 +12,7 @@ from nutrition.crud.menu import (
 from nutrition.crud.profile import get_nutrition_profile
 from nutrition.models import (
     AvailablePinRead,
-    Dish,
+    FrequentDish,
     MealType,
     Menu,
     MenuItem,
@@ -187,31 +187,21 @@ async def upsert_pinned_meal(
             await session.delete(old_item)
 
     for item in data.items:
-        resolved_title = item.title
-        if item.dish_id is not None:
-            dish = (
-                await session.exec(
-                    select(Dish).where(Dish.id == item.dish_id, Dish.user_id == user_id)
+        freq_dish = (
+            await session.exec(
+                select(FrequentDish).where(
+                    FrequentDish.id == item.frequent_dish_id,
+                    FrequentDish.user_id == user_id,
                 )
-            ).first()
-            if dish is None:
-                raise ValueError(f"Dish '{item.dish_id}' not found")
-            resolved_title = dish.name
+            )
+        ).first()
+        if freq_dish is None:
+            raise ValueError(f"Frequent dish '{item.frequent_dish_id}' not found")
 
         new_item = PinnedMealItem(
             pinned_meal_id=pin.id,
-            dish_id=item.dish_id,
-            title=resolved_title or "",
-            portion_g=item.portion_g,
-            portion_text=item.portion_text,
+            frequent_dish_id=item.frequent_dish_id,
             position=item.position,
-            kcal=item.kcal,
-            protein_g=item.protein_g,
-            fat_g=item.fat_g,
-            carbs_g=item.carbs_g,
-            fiber_g=item.fiber_g,
-            sugar_g=item.sugar_g,
-            sodium_mg=item.sodium_mg,
         )
         session.add(new_item)
 
@@ -338,23 +328,56 @@ async def restore_pinned_meal_to_day(
         await session.flush()
         await session.refresh(menu)
 
+    from nutrition.crud.frequent_dish import cook_frequent_dish
+
     pin_items = await get_pinned_meal_items(session, pin.id)
     for it in pin_items:
-        has_nutr = it.kcal is not None
+        dish_read = await cook_frequent_dish(
+            session=session,
+            frequent_dish_id=it.frequent_dish_id,
+            user_id=user_id,
+            cooked_on=menu_date,
+        )
+        portion = dish_read.cooked_weight_g
+        ratio = portion / 100.0
         menu_item = MenuItem(
             menu_id=menu.id,
-            dish_id=it.dish_id,
-            title=it.title,
-            portion_g=it.portion_g,
-            portion_text=it.portion_text,
-            kcal=it.kcal,
-            protein_g=it.protein_g,
-            fat_g=it.fat_g,
-            carbs_g=it.carbs_g,
-            fiber_g=it.fiber_g,
-            sugar_g=it.sugar_g,
-            sodium_mg=it.sodium_mg,
-            nutrition_source=NutritionSource.USER if has_nutr else None,
+            dish_id=dish_read.id,
+            title=dish_read.name,
+            portion_g=portion,
+            portion_text=f"{portion} г",
+            kcal=round(dish_read.kcal * ratio, 1) if dish_read.kcal is not None else None,
+            protein_g=(
+                round(dish_read.protein_g * ratio, 1)
+                if dish_read.protein_g is not None
+                else None
+            ),
+            fat_g=(
+                round(dish_read.fat_g * ratio, 1)
+                if dish_read.fat_g is not None
+                else None
+            ),
+            carbs_g=(
+                round(dish_read.carbs_g * ratio, 1)
+                if dish_read.carbs_g is not None
+                else None
+            ),
+            fiber_g=(
+                round(dish_read.fiber_g * ratio, 1)
+                if dish_read.fiber_g is not None
+                else None
+            ),
+            sugar_g=(
+                round(dish_read.sugar_g * ratio, 1)
+                if dish_read.sugar_g is not None
+                else None
+            ),
+            sodium_mg=(
+                round(dish_read.sodium_mg * ratio, 1)
+                if dish_read.sodium_mg is not None
+                else None
+            ),
+            nutrition_source=NutritionSource.COMPUTED if dish_read.kcal is not None else None,
             origin=MenuItemOrigin.MANUAL,
             position=it.position,
         )
