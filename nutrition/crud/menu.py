@@ -2,17 +2,14 @@ from datetime import UTC, datetime
 from datetime import date as dt_date
 from uuid import UUID
 
-from fastapi import HTTPException, status
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import col, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from nutrition.crud.dish import get_dish, get_dishes
-from nutrition.crud.product import get_product_entity, get_product_reserves_map
 from nutrition.crud.profile import get_nutrition_profile
 from nutrition.models import (
     Dish,
-    DishKind,
     DishRead,
     GenerationLog,
     MealType,
@@ -27,7 +24,7 @@ from nutrition.models import (
     MenuStatus,
     MenuUpdate,
     NutritionSource,
-    Product,
+    StockWarning,
 )
 
 
@@ -77,9 +74,9 @@ async def create_menu_day(
     session: AsyncSession,
     user_id: UUID,
     menu_date: dt_date,
-) -> MenuDay:
+) -> tuple[MenuDay, list[StockWarning]]:
     """Create a menu day, inserting one menu row per profile meal,
-    and materializing pinned meals.
+    and materializing pinned meals. Returns (menu_day, stock_warnings).
     """
     if await is_day_created(session, user_id, menu_date):
         raise DayAlreadyCreatedError(f"Menu day for {menu_date} already exists")
@@ -87,6 +84,7 @@ async def create_menu_day(
     menu_day = MenuDay(user_id=user_id, date=menu_date)
     session.add(menu_day)
 
+    all_warnings: list[StockWarning] = []
     profile = await get_nutrition_profile(session, user_id)
     if profile and profile.meals:
         existing_stmt = select(Menu.meal_type).where(
@@ -110,10 +108,10 @@ async def create_menu_day(
 
         from nutrition.service.pinned import materialize_pinned_meals
 
-        await materialize_pinned_meals(session, user_id, menu_date, commit=False)
+        _, all_warnings = await materialize_pinned_meals(session, user_id, menu_date, commit=False)
 
     await session.commit()
-    return menu_day
+    return menu_day, all_warnings
 
 
 def sort_menu_reads(menus: list[MenuRead]) -> list[MenuRead]:
@@ -135,11 +133,7 @@ def compute_menu_item_read(
     incomplete: bool = False,
 ) -> MenuItemRead:
     if not is_eaten and item.dish_id is not None and dish is not None:
-        if dish.kind == DishKind.READY:
-            ratio = (item.portion_g / 100.0) if item.portion_g is not None else 1.0
-        else:
-            tot_w = sum(c.weight_g for c in dish.components) if dish.components else 0
-            ratio = (item.portion_g / tot_w) if (item.portion_g is not None and tot_w > 0) else 1.0
+        ratio = (item.portion_g / 100.0) if item.portion_g is not None else 1.0
 
         kcal = round(dish.kcal * ratio, 1) if dish.kcal is not None else None
         protein_g = round(dish.protein_g * ratio, 1) if dish.protein_g is not None else None
@@ -181,14 +175,14 @@ def compute_menu_item_read(
     )
 
 
-async def adjust_meal_ready_dish_stock(
+async def adjust_meal_dish_stock(
     session: AsyncSession,
     user_id: UUID,
     menu_id: UUID,
     *,
     mark_eaten: bool,
 ) -> None:
-    """Adjust ready dish stock when marking a meal eaten (subtract) or unmarking (return)."""
+    """Adjust dish stock when marking a meal eaten (subtract) or unmarking (return)."""
     items_stmt = select(MenuItem).where(MenuItem.menu_id == menu_id)
     items = list((await session.exec(items_stmt)).all())
 
@@ -206,7 +200,7 @@ async def adjust_meal_ready_dish_stock(
     )
     dishes = list((await session.exec(d_stmt)).all())
     for dish in dishes:
-        if dish.kind == DishKind.READY and dish.remaining_g is not None:
+        if dish.remaining_g is not None:
             portion = dish_portions.get(dish.id, 0)
             if portion <= 0:
                 continue
@@ -218,65 +212,7 @@ async def adjust_meal_ready_dish_stock(
             session.add(dish)
 
 
-async def adjust_meal_constant_dish_stock(
-    session: AsyncSession,
-    user_id: UUID,
-    menu_id: UUID,
-    *,
-    mark_eaten: bool,
-) -> None:
-    """Adjust product stock when marking constant dish meal eaten or unmarking."""
-    items_stmt = select(MenuItem).where(MenuItem.menu_id == menu_id)
-    items = list((await session.exec(items_stmt)).all())
-
-    constant_dish_ids = [it.dish_id for it in items if it.dish_id is not None]
-    if not constant_dish_ids:
-        return
-
-    d_stmt = select(Dish).where(
-        col(Dish.id).in_(constant_dish_ids),
-        Dish.user_id == user_id,
-        Dish.kind == DishKind.CONSTANT,
-    )
-    constant_dishes = list((await session.exec(d_stmt)).all())
-    if not constant_dishes:
-        return
-
-    dish_counts: dict[UUID, int] = {}
-    for it in items:
-        if it.dish_id in {d.id for d in constant_dishes}:
-            dish_counts[it.dish_id] = dish_counts.get(it.dish_id, 0) + 1
-
-    from nutrition.models import DishComponent
-
-    c_stmt = select(DishComponent).where(
-        col(DishComponent.dish_id).in_([d.id for d in constant_dishes])
-    )
-    components = list((await session.exec(c_stmt)).all())
-
-    prod_weights: dict[UUID, int] = {}
-    for comp in components:
-        count = dish_counts.get(comp.dish_id, 1)
-        prod_weights[comp.product_id] = (
-            prod_weights.get(comp.product_id, 0) + comp.weight_g * count
-        )
-
-    if not prod_weights:
-        return
-
-    p_stmt = select(Product).where(
-        col(Product.id).in_(list(prod_weights.keys())), Product.user_id == user_id
-    )
-    products = list((await session.exec(p_stmt)).all())
-
-    for p in products:
-        if p.stock_g is not None:
-            w = prod_weights[p.id]
-            if mark_eaten:
-                p.stock_g -= w
-            else:
-                p.stock_g += w
-            session.add(p)
+adjust_meal_ready_dish_stock = adjust_meal_dish_stock
 
 
 async def snapshot_meal_nutrition(
@@ -303,15 +239,7 @@ async def snapshot_meal_nutrition(
             if it.dish_id is not None:
                 dish = dishes_map.get(it.dish_id)
                 if dish:
-                    if dish.kind == DishKind.READY:
-                        ratio = (it.portion_g / 100.0) if it.portion_g is not None else 1.0
-                    else:
-                        tot_w = sum(c.weight_g for c in dish.components) if dish.components else 0
-                        ratio = (
-                            (it.portion_g / tot_w)
-                            if (it.portion_g is not None and tot_w > 0)
-                            else 1.0
-                        )
+                    ratio = (it.portion_g / 100.0) if it.portion_g is not None else 1.0
 
                     it.kcal = round(dish.kcal * ratio, 1) if dish.kcal is not None else None
                     it.protein_g = (
@@ -395,8 +323,6 @@ async def evaluate_day_menu_reads(
             if d.id in dish_ids:
                 dishes_map[d.id] = d
 
-    reserves_map = await get_product_reserves_map(session, user_id, now=now)
-
     # Later-time meal eaten check for today or other dates
     eaten_times = [
         m.time for m in menus
@@ -433,20 +359,13 @@ async def evaluate_day_menu_reads(
                 if item.dish_id is not None:
                     if dish is None:
                         incomplete = True
-                    elif dish.kind == DishKind.READY:
+                    else:
                         portion = item.portion_g or 0
                         if dish.remaining_g is not None:
                             current_reserved = reserved_portions.get(dish.id, 0)
                             if current_reserved + portion > dish.remaining_g:
                                 incomplete = True
                             reserved_portions[dish.id] = current_reserved + portion
-                    elif dish.kind == DishKind.CONSTANT:
-                        for comp in dish.components:
-                            prod = await get_product_entity(session, comp.product_id, user_id)
-                            if prod and prod.stock_g is not None:
-                                reserved = reserves_map.get(prod.id, 0)
-                                if comp.weight_g > (prod.stock_g - reserved):
-                                    incomplete = True
 
             item_reads.append(
                 compute_menu_item_read(
@@ -673,12 +592,10 @@ async def update_menu(
         will_be_eaten = data.eaten_at is not None
 
         if not was_eaten and will_be_eaten:
-            await adjust_meal_ready_dish_stock(session, user_id, menu.id, mark_eaten=True)
-            await adjust_meal_constant_dish_stock(session, user_id, menu.id, mark_eaten=True)
+            await adjust_meal_dish_stock(session, user_id, menu.id, mark_eaten=True)
             await snapshot_meal_nutrition(session, user_id, menu.id, mark_eaten=True)
         elif was_eaten and not will_be_eaten:
-            await adjust_meal_ready_dish_stock(session, user_id, menu.id, mark_eaten=False)
-            await adjust_meal_constant_dish_stock(session, user_id, menu.id, mark_eaten=False)
+            await adjust_meal_dish_stock(session, user_id, menu.id, mark_eaten=False)
             await snapshot_meal_nutrition(session, user_id, menu.id, mark_eaten=False)
 
         menu.eaten_at = data.eaten_at
@@ -810,7 +727,7 @@ async def add_menu_item(
     meal_type: MealType,
     data: MenuItemCreate,
 ) -> MenuItemRead:
-    """Add a new item to a meal slot, validating available stock for constant dishes."""
+    """Add a new item to a meal slot."""
     title = data.title
     if data.dish_id is not None:
         dish = await get_dish(session, data.dish_id, user_id)
@@ -818,19 +735,6 @@ async def add_menu_item(
             raise KeyError("Dish not found")
         if not title:
             title = dish.name
-
-        if dish.kind == DishKind.CONSTANT and dish.components:
-            reserves_map = await get_product_reserves_map(session, user_id)
-            for comp in dish.components:
-                p = await get_product_entity(session, comp.product_id, user_id)
-                if p and p.stock_g is not None:
-                    reserved = reserves_map.get(p.id, 0)
-                    available = p.stock_g - reserved
-                    if comp.weight_g > available:
-                        raise HTTPException(
-                            status_code=status.HTTP_409_CONFLICT,
-                            detail=f"Not enough available stock for product '{p.name}'",
-                        )
 
     menu = await get_or_create_menu(session, user_id, menu_date, meal_type)
     if menu.eaten_at is not None:
@@ -893,7 +797,7 @@ async def update_menu_item(
     user_id: UUID,
     data: MenuItemUpdate,
 ) -> MenuItemRead | None:
-    """Update a menu item, checking available stock when replacing with a constant dish."""
+    """Update a menu item."""
     row = await get_menu_item_with_menu(session, item_id, user_id)
     if row is None:
         return None
@@ -902,34 +806,10 @@ async def update_menu_item(
     if menu.eaten_at is not None:
         raise EatenMealImmutableError("Cannot modify items of an eaten meal")
 
-    # Handle constant dish stock check on replacement
     if data.dish_id is not None:
         new_dish = await get_dish(session, data.dish_id, user_id)
         if new_dish is None:
             raise KeyError("Dish not found")
-
-        if new_dish.kind == DishKind.CONSTANT and new_dish.components:
-            reserves_map = await get_product_reserves_map(session, user_id)
-            old_reserved_by_item: dict[UUID, int] = {}
-            if menu.eaten_at is None and not menu.removed and menu.date >= dt_date.today():
-                if item.dish_id is not None:
-                    old_dish = await get_dish(session, item.dish_id, user_id)
-                    if old_dish and old_dish.kind == DishKind.CONSTANT:
-                        for c in old_dish.components:
-                            old_reserved_by_item[c.product_id] = (
-                                old_reserved_by_item.get(c.product_id, 0) + c.weight_g
-                            )
-
-            for comp in new_dish.components:
-                p = await get_product_entity(session, comp.product_id, user_id)
-                if p and p.stock_g is not None:
-                    curr_reserved = reserves_map.get(p.id, 0) - old_reserved_by_item.get(p.id, 0)
-                    available = p.stock_g - curr_reserved
-                    if comp.weight_g > available:
-                        raise HTTPException(
-                            status_code=status.HTTP_409_CONFLICT,
-                            detail=f"Not enough available stock for product '{p.name}'",
-                        )
 
         item.dish_id = data.dish_id
         if data.title is None:

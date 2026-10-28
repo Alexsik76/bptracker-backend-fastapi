@@ -31,8 +31,6 @@ async def test_product_crud_flow(client: AsyncClient):
     assert created["preference"] == "preferred"
     assert created["eat_raw"] is True
     assert created["stock_g"] == 500
-    assert created["reserved_g"] == 0
-    assert created["available_g"] == 500
     assert created["kcal"] is None
     assert "created_at" in created
     assert "updated_at" in created
@@ -61,7 +59,6 @@ async def test_product_crud_flow(client: AsyncClient):
     assert patched["availability"] == "low"
     assert patched["preference"] == "neutral"
     assert patched["stock_g"] == 400
-    assert patched["available_g"] == 400
     assert patched["name"] == "Волоські горіхи"
 
     # 6. Delete product
@@ -253,5 +250,3 @@ async def test_product_untracked_stock(client: AsyncClient):
     assert resp.status_code == 201
     data = resp.json()
     assert data["stock_g"] is None
-    assert data["reserved_g"] is None
-    assert data["available_g"] is None

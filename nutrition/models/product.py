@@ -75,8 +75,6 @@ class ProductRead(ProductBase):
     user_id: UUID
     created_at: datetime
     updated_at: datetime
-    reserved_g: int | None = None
-    available_g: int | None = None
 
 
 class ProductUpdate(SQLModel):

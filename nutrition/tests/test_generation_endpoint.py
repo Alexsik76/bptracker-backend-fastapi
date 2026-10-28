@@ -10,6 +10,19 @@ from gemini_infra import GeminiInvalidResponse, GeminiResult, GeminiUnavailable
 from nutrition.models import GenerationLog
 
 
+@pytest.fixture(autouse=True)
+def _mock_gemini_default():
+    with patch("gemini_infra.generate_json", new_callable=AsyncMock) as m:
+        m.return_value = GeminiResult(
+            data={},
+            raw_text="{}",
+            model="gemini-2.0-flash",
+            input_tokens=10,
+            output_tokens=10,
+        )
+        yield m
+
+
 async def setup_nutrition_data(client: AsyncClient):
     # 1. Setup profile
     await client.put(
@@ -29,19 +42,18 @@ async def setup_nutrition_data(client: AsyncClient):
         },
     )
 
-    # 2. Setup ready dish
+    # 2. Setup dish 1
     dish_resp = await client.post(
         "/nutrition/dishes",
         json={
             "name": "Індичка запечена",
-            "kind": "ready",
             "cooked_weight_g": 600,
             "cooked_on": "2026-10-23",
         },
     )
     dish_id = dish_resp.json()["id"]
 
-    # 3. Setup product and constant dish
+    # 3. Setup product and dish 2
     prod_resp = await client.post(
         "/nutrition/products",
         json={
@@ -55,7 +67,7 @@ async def setup_nutrition_data(client: AsyncClient):
         "/nutrition/dishes",
         json={
             "name": "Вівсянка",
-            "kind": "constant",
+            "cooked_weight_g": 300,
             "components": [{"product_id": prod_id, "weight_g": 50}],
         },
     )

@@ -3,7 +3,7 @@ import json
 from nutrition.models import MEAL_TYPE_LABELS, MealType, MenuStatus, NutritionSource
 from nutrition.service.context import GenerationContext
 
-PROMPT_VERSION = "2026-10-28.1"
+PROMPT_VERSION = "2026-10-28.2"
 
 
 def build_generation_prompt(context: GenerationContext) -> str:
@@ -58,7 +58,7 @@ def build_generation_prompt(context: GenerationContext) -> str:
         name = products_map.get(c.product_id)
         return f"{name} ({c.weight_g} г)" if name else f"{c.weight_g} г"
 
-    ready_dishes_data = [
+    dishes_data = [
         {
             "id": str(d.id),
             "name": d.name,
@@ -67,18 +67,7 @@ def build_generation_prompt(context: GenerationContext) -> str:
             "cooked_weight_g": d.cooked_weight_g,
             "components": [_comp_str(c) for c in d.components],
         }
-        for d in context.ready_dishes
-    ]
-
-    constant_dishes_data = [
-        {
-            "id": str(d.id),
-            "name": d.name,
-            "fixed_meal_type": d.fixed_meal_type.value if d.fixed_meal_type else None,
-            "notes": d.notes,
-            "components": [_comp_str(c) for c in d.components],
-        }
-        for d in context.constant_dishes
+        for d in context.dishes
     ]
 
     products_data = [
@@ -87,13 +76,11 @@ def build_generation_prompt(context: GenerationContext) -> str:
             "name": p.name,
             "preference": p.preference.value,
             "stock_g": p.stock_g,
-            "available_g": p.available_g,
-            "eat_raw": p.eat_raw,
         }
         for p in context.products
     ]
 
-    # Present existing meals for today
+    # Present existing meals for today (pinned meals passed as facts)
     existing_meals_data = []
     for menu in context.existing_day_menus:
         existing_meals_data.append(
@@ -185,7 +172,6 @@ def build_generation_prompt(context: GenerationContext) -> str:
             "Якщо решта дня не вміщує добову ціль, у rationale можна порадити додати прийом їжі."
         )
     elif context.scope in ("day", "unmarked"):
-        # 'unmarked' is an alias for 'day': targets non-eaten, non-pinned, non-missed meals
         scope_instructions += (
             " Скласти меню на день для всіх доступних прийомів їжі на канвасі. "
             "Позиції незакріплених, не з'їдених та не пропущених прийомів замінюються повністю. "
@@ -200,32 +186,29 @@ def build_generation_prompt(context: GenerationContext) -> str:
         for m in (profile.meals if profile else [])
     )
     if has_evening_snack:
-        rule_6 = (
-            "6. Обід і вечеря мають бути ситними та білковими. Запланувати вечірній перекус\n"
+        rule_4 = (
+            "4. Обід і вечеря мають бути ситними та білковими. Запланувати вечірній перекус\n"
             "   (вікно, коли тягне на солодке), оскільки такий прийом є в розкладі профілю.\n"
         )
     else:
-        rule_6 = (
-            "6. Обід і вечеря мають бути ситними та білковими. Запланувати вечірній перекус\n"
+        rule_4 = (
+            "4. Обід і вечеря мають бути ситними та білковими. Запланувати вечірній перекус\n"
             "   лише якщо такий прийом їжі є в розкладі профілю (наразі відсутній).\n"
         )
 
     rules = (
-        "1. Постійні страви із закріпленим прийомом (fixed_meal_type) не змінюються:\n"
-        "   вони обов'язково включаються у свій прийом, калорійність враховується.\n"
-        "2. Готові страви використовуються ПЕРШИМИ, у порядку свіжості (cooked_on),\n"
+        "1. Страви використовуються ПЕРШИМИ, у порядку свіжості (cooked_on),\n"
         "   з розподілом на кілька днів з урахуванням строку зберігання "
         "(риба 1–2 дні, м'ясо до 3 днів).\n"
-        "   Сумарна порція готової страви НЕ повинна перевищувати її наявний залишок remaining_g.\n"
-        "3. Постійні страви розподіляються в межах наявного залишку їхніх продуктів.\n"
-        "4. Модель розподіляє тільки наявні страви і ніколи не пропонує нових страв чи продуктів.\n"
-        f"5. Помірна кількість жиру за один прийом.{restrictions_note}\n"
-        f"{rule_6}"
-        "7. Добова ціль — з дефіцитом відносно підтримання для темпу 0,5–1 кг на тиждень.\n"
-        "8. Кожна згенерована позиція містить посилання на наявну страву (dish_id).\n"
+        "   Сумарна порція страви НЕ повинна перевищувати її наявний залишок remaining_g.\n"
+        "2. Модель розподіляє тільки наявні страви і ніколи не пропонує нових страв чи продуктів.\n"
+        f"3. Помірна кількість жиру за один прийом.{restrictions_note}\n"
+        f"{rule_4}"
+        "5. Добова ціль — з дефіцитом відносно підтримання для темпу 0,5–1 кг на тиждень.\n"
+        "6. Кожна згенерована позиція містить посилання на наявну страву (dish_id).\n"
         "   Назва (title) має відповідати назві обраної страви.\n"
-        "9. Якщо виникає дисбаланс раціону, додай це у shopping_list (рекомендації докупити).\n"
-        "10. Пропущені прийоми (missed) не з'їдені; для них страви не плануються.\n"
+        "7. Якщо виникає дисбаланс раціону, додай це у shopping_list (рекомендації докупити).\n"
+        "8. Пропущені прийоми (missed) не з'їдені; для них страви не плануються.\n"
         "    Якщо решта дня не вміщує добову ціль, у rationale можна порадити додати прийом їжі."
     )
 
@@ -264,14 +247,11 @@ def build_generation_prompt(context: GenerationContext) -> str:
 ПРИЙОМИ ЇЖІ ЗА РОЗКЛАДОМ:
 {", ".join(meals_info)}
 
-НАЯВНІ ГОТОВІ СТРАВИ (використати в першу чергу; remaining_g — поточний залишок
-з урахуванням уже з'їденого, сума порцій у НЕз'їдених прийомах не має перевищувати remaining_g):
-{json.dumps(ready_dishes_data, ensure_ascii=False, indent=2)}
+НАЯВНІ СТРАВИ (використати в першу чергу; remaining_g — поточний залишок
+з урахуванням уже запланованого, сума порцій не має перевищувати remaining_g):
+{json.dumps(dishes_data, ensure_ascii=False, indent=2)}
 
-ПОСТІЙНІ СТРАВИ:
-{json.dumps(constant_dishes_data, ensure_ascii=False, indent=2)}
-
-НАЯВНІ ПРОДУКТИ:
+НАЯВНІ ПРОДУКТИ (для shopping_list):
 {json.dumps(products_data, ensure_ascii=False, indent=2)}
 
 МЕНЮ ПОТОЧНОГО ДНЯ:
@@ -290,7 +270,7 @@ def build_generation_prompt(context: GenerationContext) -> str:
 - items: масив позицій меню (meal_type — тип прийому їжі:
   breakfast, lunch, dinner, morning_snack, afternoon_snack, evening_snack;
   dish_id, title, portion_g, portion_text, position).
-  Модель розподіляє лише наявні готові та постійні страви;
+  Модель розподіляє лише наявні страви;
   не пропонує нових страв чи продуктів.
   Generating items for meals already marked 'eaten', pinned, or missed is not required.
 """

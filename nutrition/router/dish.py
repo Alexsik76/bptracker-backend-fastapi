@@ -7,7 +7,7 @@ from auth.deps import CurrentUserId
 from config import Settings, get_settings
 from db import SessionDep
 from nutrition import crud
-from nutrition.models import DishCreate, DishKind, DishRead, DishUpdate
+from nutrition.models import DishCreate, DishRead, DishUpdate
 
 router = APIRouter(prefix="/dishes")
 
@@ -26,10 +26,9 @@ async def create_dish(
 async def list_dishes(
     session: SessionDep,
     user_id: CurrentUserId,
-    kind: DishKind | None = None,
     available: bool | None = None,
 ) -> list[DishRead]:
-    return await crud.get_dishes(session, user_id, kind=kind, available=available)
+    return await crud.get_dishes(session, user_id, available=available)
 
 
 @router.get("/{dish_id}", response_model=DishRead)

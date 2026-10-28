@@ -2,7 +2,6 @@ from datetime import date, datetime
 from typing import ClassVar
 from uuid import UUID
 
-import sqlalchemy as sa
 from pydantic import model_validator
 from sqlalchemy import (
     CheckConstraint,
@@ -18,8 +17,13 @@ from sqlalchemy import (
 )
 from sqlmodel import Field, SQLModel
 
-from nutrition.models.enums import DishKind, MealType
 from nutrition.models.nutrition import NutritionSet
+
+
+class StockWarning(SQLModel):
+    product_id: UUID
+    product_name: str
+    missing_g: int
 
 
 class DishComponentBase(SQLModel):
@@ -75,36 +79,19 @@ class DishComponentRead(DishComponentBase):
     dish_id: UUID
 
 
+class NewRecipeInput(SQLModel):
+    name: str
+
+
 class DishBase(SQLModel):
     name: str = Field(sa_column=Column(String, nullable=False))
-    kind: DishKind = Field(
-        sa_column=Column(
-            sa.Enum(
-                DishKind,
-                name="dishkind",
-                values_callable=lambda x: [e.value for e in x],
-            ),
-            nullable=False,
-        )
-    )
-    cooked_weight_g: int | None = Field(default=None, sa_column=Column(Integer, nullable=True))
-    remaining_g: int | None = Field(default=None, sa_column=Column(Integer, nullable=True))
+    cooked_weight_g: int = Field(sa_column=Column(Integer, nullable=False))
+    remaining_g: int = Field(sa_column=Column(Integer, nullable=False))
     cooked_on: date | None = Field(default=None, sa_column=Column(Date, nullable=True))
-    fixed_meal_type: MealType | None = Field(
-        default=None,
-        sa_column=Column(
-            sa.Enum(
-                MealType,
-                name="mealtype",
-                values_callable=lambda x: [e.value for e in x],
-            ),
-            nullable=True,
-        ),
-    )
     notes: str | None = Field(default=None, sa_column=Column(String, nullable=True))
 
 
-class Dish(DishBase, table=True):
+class Dish(DishBase, NutritionSet, table=True):
     __tablename__: ClassVar[str] = "dishes"
 
     id: UUID | None = Field(
@@ -114,6 +101,11 @@ class Dish(DishBase, table=True):
     user_id: UUID = Field(
         sa_column=Column(
             Uuid, ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False
+        )
+    )
+    recipe_id: UUID = Field(
+        sa_column=Column(
+            Uuid, ForeignKey("recipes.id", ondelete="RESTRICT"), index=True, nullable=False
         )
     )
     created_at: datetime | None = Field(
@@ -132,44 +124,62 @@ class Dish(DishBase, table=True):
 
     __table_args__ = (
         CheckConstraint(
-            "(remaining_g IS NULL) OR (remaining_g >= 0)",
+            "cooked_weight_g > 0",
+            name="chk_dishes_cooked_weight_g_positive",
+        ),
+        CheckConstraint(
+            "remaining_g >= 0",
             name="chk_dishes_remaining_g_non_negative",
         ),
     )
 
 
-class DishCreate(DishBase):
+class DishCreate(NutritionSet):
+    name: str | None = None
+    recipe_id: UUID | None = None
+    new_recipe: NewRecipeInput | None = None
     components: list[DishComponentCreate] = []
+    cooked_weight_g: int
+    remaining_g: int | None = None
+    cooked_on: date | None = None
+    notes: str | None = None
 
     @model_validator(mode="after")
-    def validate_kind_fields(self) -> "DishCreate":
-        if self.kind == DishKind.READY:
-            if self.cooked_weight_g is not None and self.cooked_weight_g <= 0:
-                raise ValueError("cooked_weight_g must be > 0 when provided")
-            if self.remaining_g is None and self.cooked_weight_g is not None:
-                self.remaining_g = self.cooked_weight_g
-            if self.remaining_g is not None and self.remaining_g < 0:
-                raise ValueError("remaining_g cannot be negative")
-        elif self.kind == DishKind.CONSTANT:
-            if not self.components:
-                raise ValueError("components are required for constant dishes")
+    def validate_fields(self) -> "DishCreate":
+        if self.recipe_id is None and self.new_recipe is None:
+            if self.name and self.name.strip():
+                self.new_recipe = NewRecipeInput(name=self.name.strip())
+            else:
+                raise ValueError("Either recipe_id or new_recipe must be provided")
+        elif self.recipe_id is not None and self.new_recipe is not None:
+            raise ValueError("Cannot provide both recipe_id and new_recipe")
+
+        if self.cooked_weight_g <= 0:
+            raise ValueError("cooked_weight_g must be > 0")
+
+        if self.remaining_g is None:
+            self.remaining_g = self.cooked_weight_g
+        elif self.remaining_g < 0:
+            raise ValueError("remaining_g cannot be negative")
+
         return self
 
 
 class DishRead(DishBase, NutritionSet):
     id: UUID
     user_id: UUID
+    recipe_id: UUID
     created_at: datetime
     updated_at: datetime
     components: list[DishComponentRead] = []
+    stock_warnings: list[StockWarning] = []
 
 
-class DishUpdate(SQLModel):
+class DishUpdate(NutritionSet):
     name: str | None = None
     cooked_weight_g: int | None = None
     remaining_g: int | None = None
     cooked_on: date | None = None
-    fixed_meal_type: MealType | None = None
     notes: str | None = None
     components: list[DishComponentCreate] | None = None
 

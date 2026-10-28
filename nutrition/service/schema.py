@@ -6,7 +6,6 @@ from uuid import UUID
 from pydantic import BaseModel, Field, model_validator
 
 from nutrition.models import (
-    DishKind,
     DishRead,
     MealType,
     MenuRead,
@@ -146,7 +145,6 @@ def validate_generation_response(
                 )
 
     dish_portions_used: dict[UUID, int] = {}
-    product_portions_used: dict[UUID, int] = {}
     locked_meal_types: set[MealType] = set()
 
     for menu in existing_menus:
@@ -183,30 +181,12 @@ def validate_generation_response(
         if dish is None:
             raise ValueError(f"Referenced dish {item.dish_id} does not exist or not available")
 
-        if dish.kind == DishKind.READY:
-            portion = item.portion_g or 0
-            new_total = dish_portions_used.get(dish.id, 0) + portion
-            if dish.remaining_g is not None and new_total > dish.remaining_g:
-                err = (
-                    f"Cumulative portion {new_total}g for ready dish '{dish.name}' "
-                    f"exceeds available remaining {dish.remaining_g}g"
-                )
-                raise ValueError(err)
-            dish_portions_used[dish.id] = new_total
-
-        elif dish.kind == DishKind.CONSTANT:
-            tot_w = sum(c.weight_g for c in dish.components) if dish.components else 0
-            ratio = (item.portion_g / tot_w) if (item.portion_g and tot_w > 0) else 1.0
-            for comp in dish.components:
-                prod = products_map.get(comp.product_id)
-                if prod is not None and prod.stock_g is not None:
-                    available = prod.available_g if prod.available_g is not None else prod.stock_g
-                    needed = int(round(comp.weight_g * ratio))
-                    total_needed = product_portions_used.get(prod.id, 0) + needed
-                    if total_needed > available:
-                        err = (
-                            f"Portion for constant dish '{dish.name}' "
-                            f"exceeds available stock for product '{prod.name}'"
-                        )
-                        raise ValueError(err)
-                    product_portions_used[prod.id] = total_needed
+        portion = item.portion_g or 0
+        new_total = dish_portions_used.get(dish.id, 0) + portion
+        if dish.remaining_g is not None and new_total > dish.remaining_g:
+            err = (
+                f"Cumulative portion {new_total}g for dish '{dish.name}' "
+                f"exceeds available remaining {dish.remaining_g}g"
+            )
+            raise ValueError(err)
+        dish_portions_used[dish.id] = new_total

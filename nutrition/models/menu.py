@@ -21,6 +21,7 @@ from sqlalchemy import (
 )
 from sqlmodel import Field, SQLModel
 
+from nutrition.models.dish import StockWarning
 from nutrition.models.enums import (
     GenerationScope,
     MealType,
@@ -308,6 +309,7 @@ class DayMenuRead(SQLModel):
     kcal_incomplete: bool = False
     can_generate_day: bool = False
     day_generation_replaces_manual: bool = False
+    stock_warnings: list[StockWarning] = []
 
     @model_validator(mode="after")
     def compute_canvas_flags(self) -> "DayMenuRead":

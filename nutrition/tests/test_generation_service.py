@@ -4,8 +4,6 @@ from uuid import uuid4
 import pytest
 
 from nutrition.models import (
-    DishComponentRead,
-    DishKind,
     DishRead,
     MealSchedule,
     MealType,
@@ -65,15 +63,16 @@ def test_schema_item_validation_dish():
 def test_validate_generation_response_limits():
     user_id = uuid4()
     dish_id = uuid4()
-    const_dish_id = uuid4()
+    dish2_id = uuid4()
+    recipe_id = uuid4()
     prod_id = uuid4()
     now = datetime.now(UTC)
 
     ready_dish = DishRead(
         id=dish_id,
         user_id=user_id,
+        recipe_id=recipe_id,
         name="Тушковане м'ясо",
-        kind=DishKind.READY,
         cooked_weight_g=500,
         remaining_g=200,
         created_at=now,
@@ -86,29 +85,21 @@ def test_validate_generation_response_limits():
         availability=ProductAvailability.IN_STOCK,
         preference=ProductPreference.PREFERRED,
         stock_g=100,
-        reserved_g=20,
-        available_g=80,
         created_at=now,
         updated_at=now,
     )
-    const_dish = DishRead(
-        id=const_dish_id,
+    dish2 = DishRead(
+        id=dish2_id,
         user_id=user_id,
+        recipe_id=recipe_id,
         name="Вівсянка",
-        kind=DishKind.CONSTANT,
-        components=[
-            DishComponentRead(
-                id=uuid4(),
-                dish_id=const_dish_id,
-                product_id=prod_id,
-                weight_g=50,
-            )
-        ],
+        cooked_weight_g=300,
+        remaining_g=150,
         created_at=now,
         updated_at=now,
     )
 
-    dishes_map = {dish_id: ready_dish, const_dish_id: const_dish}
+    dishes_map = {dish_id: ready_dish, dish2_id: dish2}
     products_map = {prod_id: product}
 
     # 1. Successful validation
@@ -124,7 +115,7 @@ def test_validate_generation_response_limits():
             ),
             GeneratedMenuItem(
                 meal_type=MealType.BREAKFAST,
-                dish_id=const_dish_id,
+                dish_id=dish2_id,
                 title="Вівсянка",
                 portion_g=50,
             ),
@@ -156,33 +147,12 @@ def test_validate_generation_response_limits():
         ],
     )
     match_msg = (
-        "Cumulative portion 240g for ready dish 'Тушковане м'ясо' "
+        "Cumulative portion 240g for dish 'Тушковане м'ясо' "
         "exceeds available remaining 200g"
     )
     with pytest.raises(ValueError, match=match_msg):
         validate_generation_response(
             response=dish_exceed_resp,
-            dishes_map=dishes_map,
-            products_map=products_map,
-            existing_menus=[],
-        )
-
-    # 3. Exceeds product available stock for constant dish
-    # Constant dish has 50g oats. portion_g=100g -> ratio 2.0 -> needs 100g oats > available 80g
-    prod_exceed_resp = GenerationResponse(
-        rationale="Забагато вівсянки",
-        items=[
-            GeneratedMenuItem(
-                meal_type=MealType.BREAKFAST,
-                dish_id=const_dish_id,
-                title="Вівсянка",
-                portion_g=100,
-            )
-        ],
-    )
-    with pytest.raises(ValueError, match="exceeds available stock for product 'Вівсяні пластівці'"):
-        validate_generation_response(
-            response=prod_exceed_resp,
             dishes_map=dishes_map,
             products_map=products_map,
             existing_menus=[],
@@ -218,14 +188,13 @@ def test_build_generation_prompt():
         scope="day",
         target_meal_type=None,
         profile=profile,
-        ready_dishes=[],
-        constant_dishes=[],
+        dishes=[],
         products=[],
         existing_day_menus=[],
         history_menus=[],
     )
 
-    assert PROMPT_VERSION == "2026-10-28.1"
+    assert PROMPT_VERSION == "2026-10-28.2"
     prompt = build_generation_prompt(context)
     assert "2026-10-23" in prompt
     assert "Видалений жовчний міхур" in prompt
@@ -285,8 +254,7 @@ def test_build_generation_prompt_with_free_text_item():
         scope="day",
         target_meal_type=None,
         profile=profile,
-        ready_dishes=[],
-        constant_dishes=[],
+        dishes=[],
         products=[],
         existing_day_menus=[day_menu],
         history_menus=[],
@@ -331,12 +299,12 @@ def test_validate_generation_response_eaten_dish_not_double_counted():
     menu_id = uuid4()
     now = datetime.now(UTC)
 
-    # Ready dish had 500g cooked, 250g already eaten at Lunch -> remaining_g in DB is 250g
+    # Dish had 500g cooked, 250g already eaten at Lunch -> remaining_g in DB is 250g
     couscous = DishRead(
         id=dish_id,
         user_id=user_id,
+        recipe_id=uuid4(),
         name="каша кускус",
-        kind=DishKind.READY,
         cooked_weight_g=500,
         remaining_g=250,
         created_at=now,
@@ -397,3 +365,60 @@ def test_validate_generation_response_eaten_dish_not_double_counted():
         products_map={},
         existing_menus=[eaten_lunch],
     )
+
+
+def test_generator_context_without_recipes():
+    user_id = uuid4()
+    now = datetime.now(UTC)
+
+    # GenerationContext should have dishes and products, but NO recipes
+    context = GenerationContext(
+        user_id=user_id,
+        date=date(2026, 10, 28),
+        scope="day",
+        target_meal_type=None,
+        profile=None,
+        dishes=[
+            DishRead(
+                id=uuid4(),
+                user_id=user_id,
+                recipe_id=uuid4(),
+                name="Гречана каша",
+                cooked_weight_g=400,
+                remaining_g=200,
+                created_at=now,
+                updated_at=now,
+            )
+        ],
+        products=[
+            ProductRead(
+                id=uuid4(),
+                user_id=user_id,
+                name="Яблуко",
+                availability=ProductAvailability.IN_STOCK,
+                preference=ProductPreference.NEUTRAL,
+                stock_g=500,
+                created_at=now,
+                updated_at=now,
+            )
+        ],
+        existing_day_menus=[],
+        history_menus=[],
+    )
+
+    # GenerationContext has no recipes attribute
+    assert not hasattr(context, "recipes")
+    assert not hasattr(context, "constant_dishes")
+
+    prompt = build_generation_prompt(context)
+    # Prompt contains dishes section
+    assert "Гречана каша" in prompt
+    assert "200" in prompt  # remaining_g
+    # Products are passed for shopping list
+    assert "Яблуко" in prompt
+    # No recipes section or constant dishes or eat_raw
+    assert "constant_dish" not in prompt.lower()
+    assert "постійні страви" not in prompt.lower()
+    assert "рецепт" not in prompt.lower()
+    assert "eat_raw" not in prompt.lower()
+

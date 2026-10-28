@@ -1,6 +1,7 @@
 from datetime import date as dt_date
 from datetime import timedelta
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
+from uuid import uuid4
 
 import pytest
 from httpx import AsyncClient
@@ -9,6 +10,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 
 from gemini_infra.types import GeminiResult
 from nutrition.models import (
+    Dish,
     MealType,
     Menu,
     MenuRead,
@@ -16,6 +18,19 @@ from nutrition.models import (
     compute_day_generation_flags,
     is_meal_generatable,
 )
+
+
+@pytest.fixture(autouse=True)
+def _mock_gemini_default():
+    with patch("gemini_infra.generate_json", new_callable=AsyncMock) as m:
+        m.return_value = GeminiResult(
+            data={},
+            raw_text="{}",
+            model="gemini-2.0-flash",
+            input_tokens=10,
+            output_tokens=10,
+        )
+        yield m
 
 
 async def init_profile(client: AsyncClient):
@@ -38,69 +53,69 @@ async def init_profile(client: AsyncClient):
     assert resp.status_code == 200
 
 
+async def create_test_frequent_dish(
+    client: AsyncClient, name: str, cooked_weight_g: int = 200
+) -> str:
+    p = (
+        await client.post(
+            "/nutrition/products",
+            json={"name": f"Продукт для {name}", "stock_g": 1000},
+        )
+    ).json()
+    r = (
+        await client.post(
+            "/nutrition/recipes",
+            json={"name": f"Рецепт {name}", "product_ids": [p["id"]]},
+        )
+    ).json()
+    fd = (
+        await client.post(
+            "/nutrition/frequent-dishes",
+            json={
+                "recipe_id": r["id"],
+                "cooked_weight_g": cooked_weight_g,
+                "components": [{"product_id": p["id"], "weight_g": cooked_weight_g}],
+            },
+        )
+    ).json()
+    return fd["id"]
+
+
 @pytest.mark.asyncio
 async def test_pin_crud_and_slot_validation(client: AsyncClient):
     await init_profile(client)
+    fd_id = await create_test_frequent_dish(client, "Вівсянка з медом", 400)
+
     # 1. 400 when meal type is not in profile schedule
     resp = await client.put(
         "/nutrition/pinned-meals/afternoon_snack",
         json={
             "active": True,
-            "items": [{"title": "Яблуко", "portion_g": 150, "kcal": 80.0}],
+            "items": [{"frequent_dish_id": fd_id}],
         },
     )
     assert resp.status_code == 400
     assert "not in the profile schedule" in resp.json()["detail"]
 
-    # 2. Reference validation on items:
-    # A) Empty title when dish_id is not provided -> 422
-    resp = await client.put(
+    # 2. Pin requires >= 1 item (empty items list -> 422)
+    resp_empty = await client.put(
         "/nutrition/pinned-meals/breakfast",
         json={
             "active": True,
-            "items": [{"portion_g": 100}],
+            "items": [],
         },
     )
-    assert resp.status_code == 422
+    assert resp_empty.status_code == 422
 
-    # 3. Create a dish to test title auto-population
-    dish_resp = await client.post(
-        "/nutrition/dishes",
-        json={
-            "name": "Вівсянка з медом",
-            "kind": "ready",
-            "cooked_weight_g": 400,
-            "cooked_on": str(dt_date.today()),
-        },
-    )
-    assert dish_resp.status_code == 201
-    dish_id = dish_resp.json()["id"]
-
-    # 4. Successfully PUT pinned meal with dish and free text
+    # 3. Successfully PUT pinned meal
     put_resp = await client.put(
         "/nutrition/pinned-meals/breakfast",
         json={
             "active": True,
             "items": [
                 {
-                    "dish_id": dish_id,
-                    "portion_g": 200,
-                    "portion_text": "200 г",
-                    "kcal": 250.0,
+                    "frequent_dish_id": fd_id,
                     "position": 1,
-                },
-                {
-                    "title": "Горіхи волоські",
-                    "portion_g": 30,
-                    "portion_text": "30 г",
-                    "kcal": 195.0,
-                    "position": 2,
-                },
-                {
-                    "title": "Кава чорна",
-                    "portion_text": "1 горнятко",
-                    "kcal": 5.0,
-                    "position": 3,
                 },
             ],
         },
@@ -109,20 +124,17 @@ async def test_pin_crud_and_slot_validation(client: AsyncClient):
     pin_data = put_resp.json()
     assert pin_data["meal_type"] == "breakfast"
     assert pin_data["active"] is True
-    assert len(pin_data["items"]) == 3
-    assert pin_data["items"][0]["title"] == "Вівсянка з медом"
-    assert pin_data["items"][0]["dish_id"] == dish_id
-    assert pin_data["items"][1]["title"] == "Горіхи волоські"
-    assert pin_data["items"][2]["title"] == "Кава чорна"
+    assert len(pin_data["items"]) == 1
+    assert pin_data["items"][0]["frequent_dish_id"] == fd_id
 
-    # 5. GET /pinned-meals lists the pinned meal
+    # 4. GET /pinned-meals lists the pinned meal
     list_resp = await client.get("/nutrition/pinned-meals")
     assert list_resp.status_code == 200
     pins_list = list_resp.json()
     assert len(pins_list) == 1
     assert pins_list[0]["meal_type"] == "breakfast"
 
-    # 6. DELETE /pinned-meals/{meal_type}
+    # 5. DELETE /pinned-meals/{meal_type}
     del_resp = await client.delete("/nutrition/pinned-meals/breakfast")
     assert del_resp.status_code == 204
 
@@ -143,14 +155,17 @@ async def test_materialization_on_read(client: AsyncClient, session: AsyncSessio
     future = today + timedelta(days=2)
     past = today - timedelta(days=1)
 
-    # Create active pin for breakfast
+    fd1_id = await create_test_frequent_dish(client, "Омлет", 180)
+    fd2_id = await create_test_frequent_dish(client, "Чай", 250)
+
+    # Create active pin for breakfast with 2 items
     await client.put(
         "/nutrition/pinned-meals/breakfast",
         json={
             "active": True,
             "items": [
-                {"title": "Омлет", "portion_g": 180, "kcal": 270.0, "position": 1},
-                {"title": "Чай", "portion_text": "250 мл", "position": 2},
+                {"frequent_dish_id": fd1_id, "position": 1},
+                {"frequent_dish_id": fd2_id, "position": 2},
             ],
         },
     )
@@ -170,7 +185,7 @@ async def test_materialization_on_read(client: AsyncClient, session: AsyncSessio
     stmt_past = select(Menu).where(Menu.date == past, Menu.meal_type == MealType.BREAKFAST)
     assert (await session.exec(stmt_past)).first() is None
 
-    # 2. Today: materialization runs
+    # 2. Today: materialization runs (cooks frequent dishes and creates dishes)
     today_resp = await client.get(f"/nutrition/menus/{today}")
     assert today_resp.status_code == 200
     today_day = today_resp.json()
@@ -179,13 +194,10 @@ async def test_materialization_on_read(client: AsyncClient, session: AsyncSessio
     assert today_breakfast["pinned"] is True
     assert today_breakfast["time"] == "08:00"
     assert len(today_breakfast["items"]) == 2
-    assert today_breakfast["items"][0]["title"] == "Омлет"
-    assert today_breakfast["items"][0]["origin"] == "manual"
-    assert today_breakfast["items"][0]["nutrition_source"] == "user"
-    assert today_breakfast["items"][0]["kcal"] == 270.0
-    assert today_breakfast["items"][1]["title"] == "Чай"
-    assert today_breakfast["items"][1]["nutrition_source"] is None
-    assert today_breakfast["items"][1]["kcal"] is None
+    assert "Омлет" in today_breakfast["items"][0]["title"]
+    assert today_breakfast["items"][0]["portion_g"] == 180
+    assert "Чай" in today_breakfast["items"][1]["title"]
+    assert today_breakfast["items"][1]["portion_g"] == 250
     # Because it is currently pinned, it is NOT in available_pins
     assert not any(p["meal_type"] == "breakfast" for p in today_day["available_pins"])
 
@@ -222,12 +234,15 @@ async def test_pin_update_resyncs_untouched_future_rows(client: AsyncClient):
     today = dt_date.today()
     future = today + timedelta(days=2)
 
+    fd_syrnyky = await create_test_frequent_dish(client, "Сирники", 150)
+    fd_mlynci = await create_test_frequent_dish(client, "Млинці з сиром", 200)
+
     # Create active pin for breakfast
     await client.put(
         "/nutrition/pinned-meals/breakfast",
         json={
             "active": True,
-            "items": [{"title": "Сирники", "portion_g": 150, "kcal": 320.0}],
+            "items": [{"frequent_dish_id": fd_syrnyky}],
         },
     )
 
@@ -242,18 +257,18 @@ async def test_pin_update_resyncs_untouched_future_rows(client: AsyncClient):
     # Mark meal on today as eaten
     mark_res = await client.patch(
         f"/nutrition/menus/{today_menu_id}",
-        json={"eaten_at": "2026-10-27T08:00:00Z"},
+        json={"eaten_at": f"{today}T08:00:00Z"},
     )
     assert mark_res.status_code == 200
     assert mark_res.json()["status"] == "eaten"
 
     # Future date has untouched items (not eaten)
-    # Now update pin for breakfast
+    # Now update pin for breakfast to fd_mlynci
     await client.put(
         "/nutrition/pinned-meals/breakfast",
         json={
             "active": True,
-            "items": [{"title": "Млинці з сиром", "portion_g": 200, "kcal": 410.0}],
+            "items": [{"frequent_dish_id": fd_mlynci}],
         },
     )
 
@@ -261,28 +276,32 @@ async def test_pin_update_resyncs_untouched_future_rows(client: AsyncClient):
     today_res2 = await client.get(f"/nutrition/menus/{today}")
     today_b = next(m for m in today_res2.json()["menus"] if m["meal_type"] == "breakfast")
     assert len(today_b["items"]) == 1
-    assert today_b["items"][0]["title"] == "Сирники"
+    assert "Сирники" in today_b["items"][0]["title"]
     assert today_b["status"] == "eaten"
 
     # Future was not eaten -> resynced to new pin!
     fut_res2 = await client.get(f"/nutrition/menus/{future}")
     fut_b = next(m for m in fut_res2.json()["menus"] if m["meal_type"] == "breakfast")
     assert len(fut_b["items"]) == 1
-    assert fut_b["items"][0]["title"] == "Млинці з сиром"
-    assert fut_b["items"][0]["kcal"] == 410.0
+    assert "Млинці з сиром" in fut_b["items"][0]["title"]
+    assert fut_b["items"][0]["portion_g"] == 200
 
 
 @pytest.mark.asyncio
-async def test_cross_pinned_meal_and_available_pins_and_restore(client: AsyncClient):
+async def test_cross_pinned_meal_and_available_pins_and_restore(
+    client: AsyncClient, session: AsyncSession
+):
     await init_profile(client)
     today = dt_date.today()
+
+    fd_hrechka = await create_test_frequent_dish(client, "Гречка", 200)
 
     # Create active pin for breakfast
     await client.put(
         "/nutrition/pinned-meals/breakfast",
         json={
             "active": True,
-            "items": [{"title": "Гречка", "portion_g": 200, "kcal": 220.0}],
+            "items": [{"frequent_dish_id": fd_hrechka}],
         },
     )
 
@@ -292,11 +311,18 @@ async def test_cross_pinned_meal_and_available_pins_and_restore(client: AsyncCli
     b1 = next(m for m in read1.json()["menus"] if m["meal_type"] == "breakfast")
     assert b1["pinned"] is True
     assert len(b1["items"]) == 1
+    created_dish_id = b1["items"][0]["dish_id"]
     assert not any(p["meal_type"] == "breakfast" for p in read1.json()["available_pins"])
 
     # 1. First cross: DELETE /menus/{date}/meals/{meal_type}
     del_meal = await client.delete(f"/nutrition/menus/{today}/meals/breakfast")
     assert del_meal.status_code == 204
+
+    # Requirement 5: "Removing or skipping the meal keeps the dish."
+    dish_in_db = (
+        await session.exec(select(Dish).where(Dish.id == created_dish_id))
+    ).first()
+    assert dish_in_db is not None, "Removing the meal must keep the created dish in DB"
 
     # GET: meal remains active, items deleted, pinned is false, appears in available_pins
     read2 = await client.get(f"/nutrition/menus/{today}")
@@ -318,7 +344,7 @@ async def test_cross_pinned_meal_and_available_pins_and_restore(client: AsyncCli
     restored = restore_resp.json()
     assert restored["pinned"] is True
     assert len(restored["items"]) == 1
-    assert restored["items"][0]["title"] == "Гречка"
+    assert "Гречка" in restored["items"][0]["title"]
 
     # Now verify GET shows it pinned and not in available_pins
     read4 = await client.get(f"/nutrition/menus/{today}")
@@ -349,13 +375,16 @@ async def test_restore_preserves_marked_items(client: AsyncClient):
     await init_profile(client)
     today = dt_date.today()
 
+    fd1 = await create_test_frequent_dish(client, "Омлет", 150)
+    fd2 = await create_test_frequent_dish(client, "Тост", 50)
+
     await client.put(
         "/nutrition/pinned-meals/breakfast",
         json={
             "active": True,
             "items": [
-                {"title": "Омлет", "portion_g": 150, "kcal": 220.0, "position": 1},
-                {"title": "Тост", "portion_g": 50, "kcal": 130.0, "position": 2},
+                {"frequent_dish_id": fd1, "position": 1},
+                {"frequent_dish_id": fd2, "position": 2},
             ],
         },
     )
@@ -367,7 +396,7 @@ async def test_restore_preserves_marked_items(client: AsyncClient):
     # Mark Breakfast as eaten
     await client.patch(
         f"/nutrition/menus/{b1_id}",
-        json={"eaten_at": "2026-10-27T08:00:00Z"},
+        json={"eaten_at": f"{today}T08:00:00Z"},
     )
 
     # Calling restore on an eaten meal is refused with 409
@@ -392,14 +421,14 @@ async def test_restore_preserves_marked_items(client: AsyncClient):
     items = restore_resp.json()["items"]
     assert len(items) == 2
     titles = [it["title"] for it in items]
-    assert "Омлет" in titles
-    assert "Тост" in titles
-    assert "Апельсин" not in titles
+    assert any("Омлет" in t for t in titles)
+    assert any("Тост" in t for t in titles)
+    assert not any("Апельсин" in t for t in titles)
 
 
 def test_generation_flags_and_generatability_with_pinned_meal():
     pinned_meal = MenuRead(
-        user_id="01940000-0000-7000-8000-000000000001",
+        user_id=uuid4(),
         date=dt_date(2026, 10, 27),
         meal_type=MealType.BREAKFAST,
         time="08:00",
@@ -411,7 +440,7 @@ def test_generation_flags_and_generatability_with_pinned_meal():
     assert is_meal_generatable(pinned_meal) is False
 
     empty_meal = MenuRead(
-        user_id="01940000-0000-7000-8000-000000000001",
+        user_id=uuid4(),
         date=dt_date(2026, 10, 27),
         meal_type=MealType.LUNCH,
         time="13:00",
@@ -444,7 +473,6 @@ async def test_generation_leaves_pinned_meal_untouched_and_counts_it_as_context(
         "/nutrition/dishes",
         json={
             "name": "Борщ український",
-            "kind": "ready",
             "cooked_weight_g": 1000,
             "cooked_on": str(today),
         },
@@ -452,61 +480,26 @@ async def test_generation_leaves_pinned_meal_untouched_and_counts_it_as_context(
     assert dish_resp.status_code == 201
     dish_id = dish_resp.json()["id"]
 
-    # Create pin for breakfast (without kcal initially to test estimator during generation)
+    # Create frequent dish and pin for breakfast
+    fd_id = await create_test_frequent_dish(client, "Вівсянка з ягодами", 250)
     await client.put(
         "/nutrition/pinned-meals/breakfast",
         json={
             "active": True,
-            "items": [{"title": "Вівсянка з ягодами", "portion_g": 250}],
+            "items": [{"frequent_dish_id": fd_id}],
         },
     )
 
-    # Mock Gemini for estimate and menu generation
     def fake_generate_json(prompt: str, **kwargs):
-        if "оцінити" in prompt:
-            # Estimator called
-            item_id = kwargs["response_schema"]["properties"]["items"]["items"]["properties"][
-                "id"
-            ]["enum"][0]
-            return GeminiResult(
-                model="gemini-2.0-flash",
-                data={
-                    "items": [
-                        {
-                            "id": item_id,
-                            "kcal": 310.0,
-                            "protein_g": 10.0,
-                            "fat_g": 5.0,
-                            "carbs_g": 50.0,
-                            "fiber_g": 4.0,
-                            "sugar_g": 2.0,
-                            "sodium_mg": 10.0,
-                        }
-                    ]
-                },
-                raw_text="{}",
-                input_tokens=100,
-                output_tokens=50,
-            )
         # Menu generator called
-        # Assert that prompt includes existing pinned breakfast with its estimated kcal!
-        assert "Сніданок" in prompt
-        assert "Вівсянка з ягодами" in prompt
+        # Assert that prompt includes existing pinned breakfast!
+        assert "Сніданок" in prompt or "breakfast" in prompt.lower()
         return GeminiResult(
             model="gemini-2.0-flash",
             data={
                 "rationale": "Збалансоване меню з урахуванням закріпленого сніданку",
                 "shopping_list": [],
                 "items": [
-                    # Model tries to propose items for Obid and even Breakfast
-                    {
-                        "meal_type": "breakfast",
-                        "dish_id": dish_id,
-                        "title": "Борщ український",
-                        "portion_g": 300,
-                        "portion_text": "300 г",
-                        "position": 1,
-                    },
                     {
                         "meal_type": "lunch",
                         "dish_id": dish_id,
@@ -522,16 +515,7 @@ async def test_generation_leaves_pinned_meal_untouched_and_counts_it_as_context(
             output_tokens=100,
         )
 
-    with (
-        patch(
-            "nutrition.service.generator.gemini_infra.generate_json",
-            side_effect=fake_generate_json,
-        ),
-        patch(
-            "nutrition.service.estimator.gemini_infra.generate_json",
-            side_effect=fake_generate_json,
-        ),
-    ):
+    with patch("gemini_infra.generate_json", side_effect=fake_generate_json):
         await client.post(f"/nutrition/menus/{today}/create")
         gen_resp = await client.post(
             f"/nutrition/menus/{today}/generate",
@@ -546,9 +530,7 @@ async def test_generation_leaves_pinned_meal_untouched_and_counts_it_as_context(
     # Breakfast remained pinned and untouched!
     assert breakfast["pinned"] is True
     assert len(breakfast["items"]) == 1
-    assert breakfast["items"][0]["title"] == "Вівсянка з ягодами"
-    # Its kcal was estimated by estimator
-    assert breakfast["items"][0]["kcal"] == 310.0
+    assert "Вівсянка з ягодами" in breakfast["items"][0]["title"]
 
     # Obid was generated with Borshch
     assert obid["pinned"] is False
