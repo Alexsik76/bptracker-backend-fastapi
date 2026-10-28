@@ -61,6 +61,7 @@ class MenuStatus(StrEnum):
     PLANNED = "planned"
     INCOMPLETE = "incomplete"
     EATEN = "eaten"
+    MISSED = "missed"
 
 
 class GenerationScope(StrEnum):

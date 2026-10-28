@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 from datetime import date as dt_date
 from uuid import UUID
 
-from sqlmodel import col, func, select
+from sqlmodel import col, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from config import Settings, get_settings
@@ -24,25 +24,65 @@ from nutrition.models import (
 logger = logging.getLogger(__name__)
 
 
-async def get_product_reserves_map(session: AsyncSession, user_id: UUID) -> dict[UUID, int]:
-    """Calculate reserved weights per product from constant dishes in future/today uneaten meals."""
-    today = dt_date.today()
+async def get_product_reserves_map(
+    session: AsyncSession,
+    user_id: UUID,
+    now: datetime | None = None,
+) -> dict[UUID, int]:
+    """Calculate reserved weights per product from constant dishes in
+    future/today uneaten, non-missed meals.
+    """
+    if now is None:
+        now = datetime.now(UTC)
+    elif now.tzinfo is None:
+        now = now.replace(tzinfo=UTC)
+
+    now_date = now.date()
+    now_time = now.strftime("%H:%M")
+
+    eaten_stmt = (
+        select(Menu.date, Menu.time)
+        .where(
+            Menu.user_id == user_id,
+            Menu.removed.is_(False),
+            Menu.eaten_at.is_not(None),
+            Menu.date >= now_date,
+            Menu.time.is_not(None),
+        )
+    )
+    eaten_rows = (await session.exec(eaten_stmt)).all()
+    max_eaten_time_by_date: dict[dt_date, str] = {}
+    for d, t in eaten_rows:
+        if d not in max_eaten_time_by_date or t > max_eaten_time_by_date[d]:
+            max_eaten_time_by_date[d] = t
+
     stmt = (
-        select(DishComponent.product_id, func.sum(DishComponent.weight_g))
-        .join(Dish, col(DishComponent.dish_id) == col(Dish.id))
-        .join(MenuItem, col(MenuItem.dish_id) == col(Dish.id))
-        .join(Menu, col(MenuItem.menu_id) == col(Menu.id))
+        select(Menu, DishComponent.product_id, DishComponent.weight_g)
+        .join(MenuItem, col(MenuItem.menu_id) == col(Menu.id))
+        .join(Dish, col(MenuItem.dish_id) == col(Dish.id))
+        .join(DishComponent, col(DishComponent.dish_id) == col(Dish.id))
         .where(
             Menu.user_id == user_id,
             Menu.removed.is_(False),
             Menu.eaten_at.is_(None),
-            Menu.date >= today,
+            Menu.date >= now_date,
             Dish.kind == DishKind.CONSTANT,
         )
-        .group_by(DishComponent.product_id)
     )
-    result = await session.exec(stmt)
-    return {p_id: int(total_g) for p_id, total_g in result.all()}
+    results = (await session.exec(stmt)).all()
+
+    reserves: dict[UUID, int] = {}
+    for menu, product_id, weight_g in results:
+        max_eaten = max_eaten_time_by_date.get(menu.date)
+        is_missed = (
+            (menu.date < now_date)
+            or (menu.date == now_date and menu.time is not None and menu.time < now_time)
+            or (menu.time is not None and max_eaten is not None and menu.time < max_eaten)
+        )
+        if not is_missed:
+            reserves[product_id] = reserves.get(product_id, 0) + int(weight_g)
+
+    return reserves
 
 
 def to_product_read(product: Product, reserve_g: int = 0) -> ProductRead:

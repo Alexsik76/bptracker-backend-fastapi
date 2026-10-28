@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from uuid import UUID
 
 from sqlmodel.ext.asyncio.session import AsyncSession
@@ -53,6 +53,7 @@ async def build_generation_context(
     scope: str,
     target_meal_type: MealType | None = None,
     history_days: int = 3,
+    now: datetime | None = None,
 ) -> GenerationContext:
     """Collect all relevant context required for menu generation using CRUD layer."""
     profile = await crud.get_nutrition_profile(session, user_id)
@@ -65,7 +66,7 @@ async def build_generation_context(
     products = [ProductRead.model_validate(p) for p in prod_rows]
 
     # Current day menus
-    existing_day_menus = await crud.get_day_menus(session, user_id, menu_date)
+    existing_day_menus = await crud.get_day_menus(session, user_id, menu_date, now=now)
 
     # History menus
     history_menus: list[MenuRead] = []

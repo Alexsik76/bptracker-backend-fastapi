@@ -195,14 +195,25 @@ async def test_materialization_on_read(client: AsyncClient, session: AsyncSessio
     today_breakfast2 = next(m for m in today_day2["menus"] if m["meal_type"] == "breakfast")
     assert len(today_breakfast2["items"]) == 2
 
-    # 4. Future date: materializes as well
+    # 4. Future date: read does NOT materialize pinned meals (day_created=False)
     fut_resp = await client.get(f"/nutrition/menus/{future}")
     assert fut_resp.status_code == 200
     fut_day = fut_resp.json()
+    assert fut_day["day_created"] is False
     fut_breakfast = next(m for m in fut_day["menus"] if m["meal_type"] == "breakfast")
-    assert fut_breakfast["id"] is not None
-    assert fut_breakfast["pinned"] is True
-    assert len(fut_breakfast["items"]) == 2
+    assert fut_breakfast["id"] is None
+    assert fut_breakfast["pinned"] is False
+    assert fut_breakfast["items"] == []
+
+    # Explicit day creation materializes pinned meals
+    create_resp = await client.post(f"/nutrition/menus/{future}/create")
+    assert create_resp.status_code == 201
+    created_day = create_resp.json()
+    assert created_day["day_created"] is True
+    fut_b_created = next(m for m in created_day["menus"] if m["meal_type"] == "breakfast")
+    assert fut_b_created["id"] is not None
+    assert fut_b_created["pinned"] is True
+    assert len(fut_b_created["items"]) == 2
 
 
 @pytest.mark.asyncio
@@ -220,11 +231,11 @@ async def test_pin_update_resyncs_untouched_future_rows(client: AsyncClient):
         },
     )
 
-    # Materialize on today and future
+    # Materialize on today and future (create future explicitly)
     today_res = await client.get(f"/nutrition/menus/{today}")
-    fut_res = await client.get(f"/nutrition/menus/{future}")
+    fut_res = await client.post(f"/nutrition/menus/{future}/create")
     assert today_res.status_code == 200
-    assert fut_res.status_code == 200
+    assert fut_res.status_code == 201
 
     today_menu_id = today_res.json()["menus"][0]["id"]
 
@@ -521,6 +532,7 @@ async def test_generation_leaves_pinned_meal_untouched_and_counts_it_as_context(
             side_effect=fake_generate_json,
         ),
     ):
+        await client.post(f"/nutrition/menus/{today}/create")
         gen_resp = await client.post(
             f"/nutrition/menus/{today}/generate",
             json={"scope": "day"},
