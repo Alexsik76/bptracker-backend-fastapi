@@ -8,6 +8,7 @@ from uuid import UUID
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 import gemini_infra
+from app_settings import ai_config
 from config import Settings
 from gemini_infra.types import GeminiInvalidResponse, GeminiUnavailable
 from nutrition import crud
@@ -152,7 +153,7 @@ async def answer_info_note(
     try:
         gemini_result = await gemini_infra.generate_json(
             prompt=prompt,
-            model=settings.gemini_menu_model,
+            model=ai_config.menu_model(),
             settings=settings,
             response_schema=INFO_NOTE_RESPONSE_SCHEMA,
         )
@@ -162,7 +163,7 @@ async def answer_info_note(
             user_id=user_id,
             menu_date=menu_date,
             scope="info",
-            model=settings.gemini_menu_model,
+            model=ai_config.menu_model(),
             prompt_version=INFO_NOTE_PROMPT_VERSION,
             duration_ms=duration_ms,
             input_tokens=gemini_result.input_tokens,
@@ -178,7 +179,7 @@ async def answer_info_note(
             user_id=user_id,
             menu_date=menu_date,
             scope="info",
-            model=settings.gemini_menu_model,
+            model=ai_config.menu_model(),
             prompt_version=INFO_NOTE_PROMPT_VERSION,
             duration_ms=duration_ms,
             input_tokens=None,
@@ -191,7 +192,7 @@ async def answer_info_note(
             user_id=user_id,
             menu_date=menu_date,
             scope="info",
-            model=settings.gemini_menu_model,
+            model=ai_config.menu_model(),
             prompt_version=INFO_NOTE_PROMPT_VERSION,
             prompt=prompt,
             duration_ms=duration_ms,
@@ -208,7 +209,7 @@ async def answer_info_note(
             user_id=user_id,
             menu_date=menu_date,
             scope="info",
-            model=settings.gemini_menu_model,
+            model=ai_config.menu_model(),
             prompt_version=INFO_NOTE_PROMPT_VERSION,
             duration_ms=duration_ms,
             input_tokens=None,
@@ -221,7 +222,7 @@ async def answer_info_note(
             user_id=user_id,
             menu_date=menu_date,
             scope="info",
-            model=settings.gemini_menu_model,
+            model=ai_config.menu_model(),
             prompt_version=INFO_NOTE_PROMPT_VERSION,
             prompt=prompt,
             duration_ms=duration_ms,
@@ -244,7 +245,7 @@ async def answer_info_note(
             user_id=user_id,
             menu_date=menu_date,
             scope="info",
-            model=settings.gemini_menu_model,
+            model=ai_config.menu_model(),
             prompt_version=INFO_NOTE_PROMPT_VERSION,
             prompt=prompt,
             duration_ms=duration_ms,
@@ -263,7 +264,7 @@ async def answer_info_note(
         user_id=user_id,
         menu_date=menu_date,
         scope="info",
-        model=settings.gemini_menu_model,
+        model=ai_config.menu_model(),
         prompt_version=INFO_NOTE_PROMPT_VERSION,
         prompt=prompt,
         duration_ms=duration_ms,

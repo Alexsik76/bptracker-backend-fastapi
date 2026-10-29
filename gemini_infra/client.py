@@ -6,6 +6,7 @@ from typing import Any
 
 import httpx
 
+from app_settings import ai_config
 from config import Settings
 from gemini_infra.types import (
     GeminiAttachment,
@@ -73,7 +74,7 @@ async def generate_json(
     }
 
     try:
-        async with httpx.AsyncClient(timeout=settings.gemini_timeout_seconds) as client:
+        async with httpx.AsyncClient(timeout=ai_config.timeout_seconds()) as client:
             response = await client.post(url, json=payload, headers=headers)
     except httpx.HTTPError as exc:
         logger.error("Gemini connection error or timeout: %s", exc)

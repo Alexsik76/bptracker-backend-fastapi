@@ -9,7 +9,6 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 
 from config import get_settings
 from gemini_infra.types import GeminiInvalidResponse, GeminiResult, GeminiUnavailable
-from main import app
 from nutrition.models import GenerationLog, MenuNote, MenuNoteKind
 
 TEST_DATE = datetime.now(UTC).date() + timedelta(days=2)
@@ -619,9 +618,9 @@ async def test_llm_exchange_log_disabled_switches_stdout_off(
         output_tokens=20,
     )
 
-    current_settings = get_settings().model_copy()
-    current_settings.llm_exchange_log = False
-    app.dependency_overrides[get_settings] = lambda: current_settings
+    env_settings = get_settings()
+    original_flag = env_settings.llm_exchange_log
+    env_settings.llm_exchange_log = False
 
     try:
         caplog.clear()
@@ -634,7 +633,7 @@ async def test_llm_exchange_log_disabled_switches_stdout_off(
                 )
                 assert resp.status_code == 201
     finally:
-        app.dependency_overrides.pop(get_settings, None)
+        env_settings.llm_exchange_log = original_flag
 
     # Stdout record was switched off
     llm_records = [r for r in caplog.records if r.name == "nutrition.llm"]

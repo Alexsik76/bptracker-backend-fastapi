@@ -10,6 +10,7 @@ from sqlmodel import SQLModel
 # allowed to import every module. Add a line per table-owning module.
 from activity import models as _activity_models  # noqa: F401
 from alembic import context
+from app_settings import models as _app_settings_models  # noqa: F401
 from auth import models as _auth_models  # noqa: F401
 from auth.webauthn import models as _webauthn_models  # noqa: F401
 from config import get_settings

@@ -11,6 +11,7 @@ from sqlmodel import col, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 import gemini_infra
+from app_settings import ai_config
 from config import Settings
 from gemini_infra.types import GeminiInvalidResponse, GeminiUnavailable
 from nutrition import crud
@@ -147,7 +148,7 @@ async def estimate_product_nutrition(
     try:
         gemini_result = await gemini_infra.generate_json(
             prompt=prompt,
-            model=settings.gemini_menu_model,
+            model=ai_config.menu_model(),
             settings=settings,
             response_schema=PRODUCT_ESTIMATE_RESPONSE_SCHEMA,
         )
@@ -160,7 +161,7 @@ async def estimate_product_nutrition(
             user_id=user_id,
             menu_date=date.today(),
             scope="product_estimate",
-            model=settings.gemini_menu_model,
+            model=ai_config.menu_model(),
             prompt_version=PRODUCT_ESTIMATE_PROMPT_VERSION,
             duration_ms=duration_ms,
             input_tokens=input_tokens,
@@ -173,7 +174,7 @@ async def estimate_product_nutrition(
             user_id=user_id,
             menu_date=date.today(),
             scope="product_estimate",
-            model=settings.gemini_menu_model,
+            model=ai_config.menu_model(),
             prompt_version=PRODUCT_ESTIMATE_PROMPT_VERSION,
             prompt=prompt,
             duration_ms=duration_ms,
@@ -190,7 +191,7 @@ async def estimate_product_nutrition(
             user_id=user_id,
             menu_date=date.today(),
             scope="product_estimate",
-            model=settings.gemini_menu_model,
+            model=ai_config.menu_model(),
             prompt_version=PRODUCT_ESTIMATE_PROMPT_VERSION,
             duration_ms=duration_ms,
             input_tokens=None,
@@ -344,7 +345,7 @@ async def estimate_day_kcal(
     try:
         gemini_result = await gemini_infra.generate_json(
             prompt=prompt,
-            model=settings.gemini_menu_model,
+            model=ai_config.menu_model(),
             settings=settings,
             response_schema=build_estimate_response_schema([it.id for it in items_to_estimate]),
         )
@@ -357,7 +358,7 @@ async def estimate_day_kcal(
             user_id=user_id,
             menu_date=menu_date,
             scope="estimate",
-            model=settings.gemini_menu_model,
+            model=ai_config.menu_model(),
             prompt_version=ESTIMATE_PROMPT_VERSION,
             duration_ms=duration_ms,
             input_tokens=input_tokens,
@@ -373,7 +374,7 @@ async def estimate_day_kcal(
             user_id=user_id,
             menu_date=menu_date,
             scope="estimate",
-            model=settings.gemini_menu_model,
+            model=ai_config.menu_model(),
             prompt_version=ESTIMATE_PROMPT_VERSION,
             duration_ms=duration_ms,
             input_tokens=None,
@@ -386,7 +387,7 @@ async def estimate_day_kcal(
             user_id=user_id,
             menu_date=menu_date,
             scope="estimate",
-            model=settings.gemini_menu_model,
+            model=ai_config.menu_model(),
             prompt_version=ESTIMATE_PROMPT_VERSION,
             prompt=prompt,
             duration_ms=duration_ms,
@@ -404,7 +405,7 @@ async def estimate_day_kcal(
             user_id=user_id,
             menu_date=menu_date,
             scope="estimate",
-            model=settings.gemini_menu_model,
+            model=ai_config.menu_model(),
             prompt_version=ESTIMATE_PROMPT_VERSION,
             duration_ms=duration_ms,
             input_tokens=input_tokens,
@@ -417,7 +418,7 @@ async def estimate_day_kcal(
             user_id=user_id,
             menu_date=menu_date,
             scope="estimate",
-            model=settings.gemini_menu_model,
+            model=ai_config.menu_model(),
             prompt_version=ESTIMATE_PROMPT_VERSION,
             prompt=prompt,
             duration_ms=duration_ms,
@@ -450,7 +451,7 @@ async def estimate_day_kcal(
             user_id=user_id,
             menu_date=menu_date,
             scope="estimate",
-            model=settings.gemini_menu_model,
+            model=ai_config.menu_model(),
             prompt_version=ESTIMATE_PROMPT_VERSION,
             prompt=prompt,
             duration_ms=duration_ms,
@@ -482,7 +483,7 @@ async def estimate_day_kcal(
         user_id=user_id,
         menu_date=menu_date,
         scope="estimate",
-        model=settings.gemini_menu_model,
+        model=ai_config.menu_model(),
         prompt_version=ESTIMATE_PROMPT_VERSION,
         prompt=prompt,
         duration_ms=duration_ms,

@@ -10,6 +10,8 @@ from activity.middleware import ActivityMiddleware
 from activity.writer import run_activity_writer
 from admin.activity_router import router as admin_activity_router
 from admin.router import router as admin_router
+from admin.settings_router import router as admin_settings_router
+from app_settings import cache as settings_cache
 from auth.router import router as auth_router
 from auth.webauthn import router as webauthn_router
 from cleanup.worker import run_cleanup_worker
@@ -70,8 +72,21 @@ async def lifespan(app: FastAPI):
         logger.info("Activity writer background task started.")
 
     try:
+        async with async_session_factory() as session:
+            await settings_cache.load(session)
+    except Exception:
+        logger.exception("Failed to load app settings at startup; using env values")
+    settings_refresh_task = asyncio.create_task(settings_cache.run_refresher(async_session_factory))
+
+    try:
         yield
     finally:
+        settings_refresh_task.cancel()
+        try:
+            await settings_refresh_task
+        except asyncio.CancelledError:
+            pass
+
         if worker_task is not None:
             logger.info("Cancelling email outbox worker background task...")
             worker_task.cancel()
@@ -122,6 +137,7 @@ app.include_router(users_router)
 app.include_router(nutrition_router)
 app.include_router(admin_router)
 app.include_router(admin_activity_router)
+app.include_router(admin_settings_router)
 
 
 @app.get("/health", include_in_schema=False)
