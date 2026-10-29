@@ -1,5 +1,5 @@
 import logging
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -12,7 +12,7 @@ from gemini_infra.types import GeminiInvalidResponse, GeminiResult, GeminiUnavai
 from main import app
 from nutrition.models import GenerationLog, MenuNote, MenuNoteKind
 
-TEST_DATE = date.today() + timedelta(days=2)
+TEST_DATE = datetime.now(UTC).date() + timedelta(days=2)
 TEST_DATE_STR = TEST_DATE.isoformat()
 
 

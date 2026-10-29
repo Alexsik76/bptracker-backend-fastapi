@@ -1,3 +1,5 @@
+from datetime import UTC, datetime, timedelta
+
 import pytest
 
 
@@ -17,8 +19,9 @@ def item_payload():
 
 
 async def _create_prescription(client) -> str:
+    test_day = datetime.now(UTC).date() + timedelta(days=2)
     created = await client.post(
-        "/prescriptions", json={"doctor": "Dr. House", "prescribed_on": "2026-01-15"}
+        "/prescriptions", json={"doctor": "Dr. House", "prescribed_on": str(test_day)}
     )
     return created.json()["id"]
 
@@ -158,9 +161,10 @@ async def test_delete_prescription_cascades_to_medication_items(client, item_pay
 
 @pytest.mark.asyncio
 async def test_create_ongoing_medication_item_clears_course_fields(client, item_payload):
+    test_day = datetime.now(UTC).date() + timedelta(days=2)
     pid = await _create_prescription(client)
     item_payload["course_type"] = "ongoing"
-    item_payload["course_start"] = "2026-01-15T08:00:00+00:00"
+    item_payload["course_start"] = f"{test_day}T08:00:00+00:00"
     item_payload["course_intakes"] = 10
 
     response = await client.post(f"/prescriptions/{pid}/items", json=item_payload)
@@ -173,9 +177,10 @@ async def test_create_ongoing_medication_item_clears_course_fields(client, item_
 
 @pytest.mark.asyncio
 async def test_patch_medication_item_to_ongoing_clears_course_fields(client, item_payload):
+    test_day = datetime.now(UTC).date() + timedelta(days=2)
     pid = await _create_prescription(client)
     item_payload["course_type"] = "course"
-    item_payload["course_start"] = "2026-01-15T08:00:00+00:00"
+    item_payload["course_start"] = f"{test_day}T08:00:00+00:00"
     item_payload["course_intakes"] = 10
 
     created = await client.post(f"/prescriptions/{pid}/items", json=item_payload)

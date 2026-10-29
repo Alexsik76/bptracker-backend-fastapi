@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
@@ -23,6 +23,7 @@ def _mock_gemini_default():
 
 @pytest.mark.asyncio
 async def test_create_dish_with_new_recipe_shorthand(client: AsyncClient):
+    test_day = datetime.now(UTC).date() + timedelta(days=2)
     p1 = (
         await client.post(
             "/nutrition/products", json={"name": "Вівсяні пластівці", "stock_g": 500}
@@ -37,7 +38,7 @@ async def test_create_dish_with_new_recipe_shorthand(client: AsyncClient):
     payload = {
         "new_recipe": {"name": "Ранкова вівсянка"},
         "cooked_weight_g": 300,
-        "cooked_on": "2026-10-25",
+        "cooked_on": str(test_day),
         "notes": "Базова страва",
         "components": [
             {"product_id": p1["id"], "weight_g": 45},
@@ -68,6 +69,7 @@ async def test_create_dish_with_new_recipe_shorthand(client: AsyncClient):
 @pytest.mark.asyncio
 async def test_create_dish_with_existing_recipe(client: AsyncClient):
     # Create product and recipe first
+    test_day = datetime.now(UTC).date() + timedelta(days=2)
     p1 = (
         await client.post(
             "/nutrition/products", json={"name": "Індичка", "stock_g": 1000}
@@ -83,7 +85,7 @@ async def test_create_dish_with_existing_recipe(client: AsyncClient):
     payload = {
         "recipe_id": recipe_id,
         "cooked_weight_g": 600,
-        "cooked_on": "2026-10-20",
+        "cooked_on": str(test_day),
         "components": [
             {"product_id": p1["id"], "weight_g": 400},
         ],
@@ -95,7 +97,7 @@ async def test_create_dish_with_existing_recipe(client: AsyncClient):
     assert data["recipe_id"] == recipe_id
     assert data["cooked_weight_g"] == 600
     assert data["remaining_g"] == 600
-    assert data["cooked_on"] == "2026-10-20"
+    assert data["cooked_on"] == str(test_day)
     assert len(data["components"]) == 1
     assert data["stock_warnings"] == []
 
@@ -316,7 +318,7 @@ async def test_dish_filtering_availability(client: AsyncClient):
             "name": "Борщ",
             "cooked_weight_g": 800,
             "remaining_g": 400,
-            "cooked_on": str(date.today()),
+            "cooked_on": str(datetime.now(UTC).date()),
             "components": [{"product_id": p["id"], "weight_g": 50}],
         },
     )
@@ -327,7 +329,7 @@ async def test_dish_filtering_availability(client: AsyncClient):
             "name": "Плов",
             "cooked_weight_g": 500,
             "remaining_g": 0,
-            "cooked_on": str(date.today()),
+            "cooked_on": str(datetime.now(UTC).date()),
             "components": [{"product_id": p["id"], "weight_g": 50}],
         },
     )
@@ -341,6 +343,7 @@ async def test_dish_filtering_availability(client: AsyncClient):
 
 @pytest.mark.asyncio
 async def test_update_and_delete_dish(client: AsyncClient):
+    test_day = datetime.now(UTC).date() + timedelta(days=2)
     p1 = (
         await client.post(
             "/nutrition/products", json={"name": "Курка", "stock_g": 2000}
@@ -357,7 +360,7 @@ async def test_update_and_delete_dish(client: AsyncClient):
         json={
             "name": "Курка запечена",
             "cooked_weight_g": 800,
-            "cooked_on": "2026-10-23",
+            "cooked_on": str(test_day),
             "components": [{"product_id": p1["id"], "weight_g": 1000}],
         },
     )

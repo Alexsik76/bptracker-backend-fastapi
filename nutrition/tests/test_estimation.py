@@ -1,5 +1,5 @@
 import json
-from datetime import UTC, date, datetime
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, patch
 from uuid import UUID, uuid4
 
@@ -33,7 +33,7 @@ async def test_estimate_stores_model_values(
     session: AsyncSession, test_user_id: UUID
 ):
     settings = get_settings()
-    test_date = date(2026, 10, 27)
+    test_date = datetime.now(UTC).date() + timedelta(days=2)
     user_id = test_user_id
 
     # 1. Add free-text item without kcal
@@ -189,7 +189,7 @@ async def test_nothing_to_estimate_makes_no_gemini_call(
     session: AsyncSession, test_user_id: UUID
 ):
     settings = get_settings()
-    test_date = date(2026, 10, 28)
+    test_date = datetime.now(UTC).date() + timedelta(days=2)
     user_id = test_user_id
 
     # Item with kcal already populated
@@ -241,7 +241,7 @@ async def test_nothing_to_estimate_makes_no_gemini_call(
 @pytest.mark.asyncio
 async def test_invalid_ids_rejected(session: AsyncSession, test_user_id: UUID):
     settings = get_settings()
-    test_date = date(2026, 10, 29)
+    test_date = datetime.now(UTC).date() + timedelta(days=2)
     user_id = test_user_id
 
     item = await crud.add_menu_item(
@@ -368,7 +368,7 @@ async def test_invalid_ids_rejected(session: AsyncSession, test_user_id: UUID):
 
 @pytest.mark.asyncio
 async def test_reset_after_manual_edit(session: AsyncSession, test_user_id: UUID):
-    test_date = date(2026, 10, 30)
+    test_date = datetime.now(UTC).date() + timedelta(days=2)
     user_id = test_user_id
 
     # Item with model estimate
@@ -472,7 +472,7 @@ async def test_reset_after_manual_edit(session: AsyncSession, test_user_id: UUID
 
 @pytest.mark.asyncio
 async def test_kcal_incomplete_flags(session: AsyncSession, test_user_id: UUID):
-    test_date = date(2026, 10, 31)
+    test_date = datetime.now(UTC).date() + timedelta(days=2)
     user_id = test_user_id
 
     # 1. Unmarked item without kcal -> both menu and day_menu are kcal_incomplete
@@ -508,7 +508,7 @@ async def test_kcal_incomplete_flags(session: AsyncSession, test_user_id: UUID):
 
 @pytest.mark.asyncio
 async def test_endpoint_happy_path_and_errors(client: AsyncClient):
-    date_str = "2026-11-01"
+    date_str = (datetime.now(UTC).date() + timedelta(days=2)).isoformat()
     await client.post(f"/nutrition/menus/{date_str}/create")
 
     # Create 2 items
@@ -605,7 +605,7 @@ async def test_endpoint_happy_path_and_errors(client: AsyncClient):
 
 @pytest.mark.asyncio
 async def test_unchanged_patch_keeps_model_estimate(client: AsyncClient):
-    date_str = "2026-11-02"
+    date_str = (datetime.now(UTC).date() + timedelta(days=2)).isoformat()
     await client.post(f"/nutrition/menus/{date_str}/create")
 
     # 1. Create item
@@ -658,7 +658,7 @@ async def test_unchanged_patch_keeps_model_estimate(client: AsyncClient):
     menu_id = resp.json()["menu_id"]
 
     # 4. Mark meal eaten -> changing portion_g on an eaten meal is refused with 409
-    await client.patch(f"/nutrition/menus/{menu_id}", json={"eaten_at": "2026-11-02T08:30:00Z"})
+    await client.patch(f"/nutrition/menus/{menu_id}", json={"eaten_at": f"{date_str}T08:30:00Z"})
     refused_resp = await client.patch(
         f"/nutrition/menu-items/{item_id}",
         json={

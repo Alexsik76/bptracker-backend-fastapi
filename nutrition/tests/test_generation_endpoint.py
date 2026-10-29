@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -25,6 +25,7 @@ def _mock_gemini_default():
 
 async def setup_nutrition_data(client: AsyncClient):
     # 1. Setup profile
+    test_day = datetime.now(UTC).date() + timedelta(days=2)
     await client.put(
         "/nutrition/profile",
         json={
@@ -48,7 +49,7 @@ async def setup_nutrition_data(client: AsyncClient):
         json={
             "name": "Індичка запечена",
             "cooked_weight_g": 600,
-            "cooked_on": "2026-10-23",
+            "cooked_on": str(test_day),
         },
     )
     dish_id = dish_resp.json()["id"]
@@ -73,12 +74,13 @@ async def setup_nutrition_data(client: AsyncClient):
     )
     const_dish_id = const_resp.json()["id"]
 
-    await client.post("/nutrition/menus/2026-10-23/create")
+    await client.post(f"/nutrition/menus/{test_day}/create")
     return {"dish_id": dish_id, "const_dish_id": const_dish_id, "prod_id": prod_id}
 
 
 @pytest.mark.asyncio
 async def test_generate_menu_success(client: AsyncClient, session: AsyncSession):
+    test_day = datetime.now(UTC).date() + timedelta(days=2)
     nutrition_data = await setup_nutrition_data(client)
     dish_id = nutrition_data["dish_id"]
     const_dish_id = nutrition_data["const_dish_id"]
@@ -118,8 +120,8 @@ async def test_generate_menu_success(client: AsyncClient, session: AsyncSession)
         mock_generate.return_value = mock_result
 
         resp = await client.post(
-            "/nutrition/menus/2026-10-23/generate",
-            json={"scope": "day", "now": "2026-10-23T06:00:00Z"},
+            f"/nutrition/menus/{test_day}/generate",
+            json={"scope": "day", "now": f"{test_day}T06:00:00Z"},
         )
         assert resp.status_code == 200
         data = resp.json()
@@ -145,7 +147,7 @@ async def test_generate_menu_success(client: AsyncClient, session: AsyncSession)
         assert dinner["items"] == []
 
         # Verify generation_log entry was created
-        stmt = select(GenerationLog).where(GenerationLog.date == date(2026, 10, 23))
+        stmt = select(GenerationLog).where(GenerationLog.date == test_day)
         logs = (await session.exec(stmt)).all()
         assert len(logs) == 1
         assert logs[0].scope == "day"
@@ -155,12 +157,13 @@ async def test_generate_menu_success(client: AsyncClient, session: AsyncSession)
 
 @pytest.mark.asyncio
 async def test_generate_keeps_eaten_and_skipped_meals(client: AsyncClient):
+    test_day = datetime.now(UTC).date() + timedelta(days=2)
     nutrition_data = await setup_nutrition_data(client)
     dish_id = nutrition_data["dish_id"]
 
     # Add Breakfast manual item and mark eaten
     item1_resp = await client.post(
-        "/nutrition/menus/2026-10-23/items?meal_type=breakfast",
+        f"/nutrition/menus/{test_day}/items?meal_type=breakfast",
         json={
             "title": "Яблуко",
             "portion_g": 100,
@@ -170,12 +173,12 @@ async def test_generate_keeps_eaten_and_skipped_meals(client: AsyncClient):
     menu_id = item1_resp.json()["menu_id"]
     await client.patch(
         f"/nutrition/menus/{menu_id}",
-        json={"eaten_at": "2026-10-23T08:00:00Z"},
+        json={"eaten_at": f"{test_day}T08:00:00Z"},
     )
 
     # Add Lunch manual item (planned)
     item2_resp = await client.post(
-        "/nutrition/menus/2026-10-23/items?meal_type=lunch",
+        f"/nutrition/menus/{test_day}/items?meal_type=lunch",
         json={
             "dish_id": dish_id,
             "portion_g": 200,
@@ -217,8 +220,8 @@ async def test_generate_keeps_eaten_and_skipped_meals(client: AsyncClient):
         mock_generate.return_value = mock_result
 
         resp = await client.post(
-            "/nutrition/menus/2026-10-23/generate",
-            json={"scope": "day", "now": "2026-10-23T06:00:00Z"},
+            f"/nutrition/menus/{test_day}/generate",
+            json={"scope": "day", "now": f"{test_day}T06:00:00Z"},
         )
         assert resp.status_code == 200
         menus = resp.json()["menus"]
@@ -238,6 +241,7 @@ async def test_generate_keeps_eaten_and_skipped_meals(client: AsyncClient):
 
 @pytest.mark.asyncio
 async def test_generate_slot_scope(client: AsyncClient):
+    test_day = datetime.now(UTC).date() + timedelta(days=2)
     nutrition_data = await setup_nutrition_data(client)
     dish_id = nutrition_data["dish_id"]
 
@@ -274,8 +278,8 @@ async def test_generate_slot_scope(client: AsyncClient):
         mock_generate.return_value = mock_result
 
         resp = await client.post(
-            "/nutrition/menus/2026-10-23/generate",
-            json={"scope": "slot", "meal_type": "lunch", "now": "2026-10-23T06:00:00Z"},
+            f"/nutrition/menus/{test_day}/generate",
+            json={"scope": "slot", "meal_type": "lunch", "now": f"{test_day}T06:00:00Z"},
         )
         assert resp.status_code == 200
         menus = resp.json()["menus"]
@@ -289,10 +293,11 @@ async def test_generate_slot_scope(client: AsyncClient):
 @pytest.mark.asyncio
 async def test_generate_missing_profile_returns_409(client: AsyncClient):
     # Without setting up profile
-    await client.post("/nutrition/menus/2026-10-23/create")
+    test_day = datetime.now(UTC).date() + timedelta(days=2)
+    await client.post(f"/nutrition/menus/{test_day}/create")
     resp = await client.post(
-        "/nutrition/menus/2026-10-23/generate",
-        json={"scope": "day", "now": "2026-10-23T06:00:00Z"},
+        f"/nutrition/menus/{test_day}/generate",
+        json={"scope": "day", "now": f"{test_day}T06:00:00Z"},
     )
     assert resp.status_code == 409
     assert "Nutrition profile not found" in resp.json()["detail"]
@@ -300,13 +305,14 @@ async def test_generate_missing_profile_returns_409(client: AsyncClient):
 
 @pytest.mark.asyncio
 async def test_generate_gemini_unavailable_502(client: AsyncClient):
+    test_day = datetime.now(UTC).date() + timedelta(days=2)
     await setup_nutrition_data(client)
     with patch("gemini_infra.generate_json", new_callable=AsyncMock) as mock_generate:
         mock_generate.side_effect = GeminiUnavailable()
 
         resp = await client.post(
-            "/nutrition/menus/2026-10-23/generate",
-            json={"scope": "day", "now": "2026-10-23T06:00:00Z"},
+            f"/nutrition/menus/{test_day}/generate",
+            json={"scope": "day", "now": f"{test_day}T06:00:00Z"},
         )
         assert resp.status_code == 502
         assert resp.json()["detail"] == "Gemini service is unavailable"
@@ -314,6 +320,7 @@ async def test_generate_gemini_unavailable_502(client: AsyncClient):
 
 @pytest.mark.asyncio
 async def test_generate_invalid_response_422_and_logged(client: AsyncClient, session: AsyncSession):
+    test_day = datetime.now(UTC).date() + timedelta(days=2)
     await setup_nutrition_data(client)
     with patch("gemini_infra.generate_json", new_callable=AsyncMock) as mock_generate:
         mock_generate.side_effect = GeminiInvalidResponse(
@@ -321,8 +328,8 @@ async def test_generate_invalid_response_422_and_logged(client: AsyncClient, ses
         )
 
         resp = await client.post(
-            "/nutrition/menus/2026-10-23/generate",
-            json={"scope": "day", "now": "2026-10-23T06:00:00Z"},
+            f"/nutrition/menus/{test_day}/generate",
+            json={"scope": "day", "now": f"{test_day}T06:00:00Z"},
         )
         assert resp.status_code == 422
         assert "Invalid Gemini response" in resp.json()["detail"]
@@ -335,19 +342,20 @@ async def test_generate_invalid_response_422_and_logged(client: AsyncClient, ses
 
 @pytest.mark.asyncio
 async def test_slot_generation_keeps_other_meals_untouched_and_passes_context(client: AsyncClient):
+    test_day = datetime.now(UTC).date() + timedelta(days=2)
     data = await setup_nutrition_data(client)
     dish_id = data["dish_id"]
 
     # Breakfast: manual item with 150 kcal
     b_resp = await client.post(
-        "/nutrition/menus/2026-10-23/items?meal_type=breakfast",
+        f"/nutrition/menus/{test_day}/items?meal_type=breakfast",
         json={"title": "Горіхи", "portion_g": 30, "kcal": 150.0},
     )
     b_id = b_resp.json()["id"]
 
     # Dinner: manual item with 200 kcal
     d_resp = await client.post(
-        "/nutrition/menus/2026-10-23/items?meal_type=dinner",
+        f"/nutrition/menus/{test_day}/items?meal_type=dinner",
         json={"title": "Салат", "portion_g": 150, "kcal": 200.0},
     )
     d_id = d_resp.json()["id"]
@@ -380,8 +388,8 @@ async def test_slot_generation_keeps_other_meals_untouched_and_passes_context(cl
 
     with patch("gemini_infra.generate_json", side_effect=mock_gen):
         resp = await client.post(
-            "/nutrition/menus/2026-10-23/generate",
-            json={"scope": "slot", "meal_type": "lunch", "now": "2026-10-23T06:00:00Z"},
+            f"/nutrition/menus/{test_day}/generate",
+            json={"scope": "slot", "meal_type": "lunch", "now": f"{test_day}T06:00:00Z"},
         )
         assert resp.status_code == 200
 
@@ -393,7 +401,7 @@ async def test_slot_generation_keeps_other_meals_untouched_and_passes_context(cl
     assert "фіксований контекст" in captured_prompt
 
     # Verify other meals in DB are completely untouched
-    day_resp = await client.get("/nutrition/menus/2026-10-23?now=2026-10-23T06:00:00Z")
+    day_resp = await client.get(f"/nutrition/menus/{test_day}?now={test_day}T06:00:00Z")
     menus = {m["meal_type"]: m for m in day_resp.json()["menus"]}
     assert len(menus["breakfast"]["items"]) == 1
     assert menus["breakfast"]["items"][0]["id"] == b_id
@@ -407,24 +415,25 @@ async def test_slot_generation_keeps_other_meals_untouched_and_passes_context(cl
 async def test_day_generation_replaces_unmarked_manual_items_not_eaten_or_skipped(
     client: AsyncClient,
 ):
+    test_day = datetime.now(UTC).date() + timedelta(days=2)
     data = await setup_nutrition_data(client)
     dish_id = data["dish_id"]
 
     # Breakfast: manual item, mark meal eaten
     b1_resp = await client.post(
-        "/nutrition/menus/2026-10-23/items?meal_type=breakfast",
+        f"/nutrition/menus/{test_day}/items?meal_type=breakfast",
         json={"title": "Яблуко", "portion_g": 100, "kcal": 50.0},
     )
     b1_id = b1_resp.json()["id"]
     b_menu_id = b1_resp.json()["menu_id"]
     await client.patch(
         f"/nutrition/menus/{b_menu_id}",
-        json={"eaten_at": "2026-10-23T08:00:00Z"},
+        json={"eaten_at": f"{test_day}T08:00:00Z"},
     )
 
     # Lunch: manual item (non-eaten meal)
     l1_resp = await client.post(
-        "/nutrition/menus/2026-10-23/items?meal_type=lunch",
+        f"/nutrition/menus/{test_day}/items?meal_type=lunch",
         json={"dish_id": dish_id, "portion_g": 150},
     )
     l1_id = l1_resp.json()["id"]
@@ -453,12 +462,12 @@ async def test_day_generation_replaces_unmarked_manual_items_not_eaten_or_skippe
     with patch("gemini_infra.generate_json", new_callable=AsyncMock) as mock_generate:
         mock_generate.return_value = mock_result
         resp = await client.post(
-            "/nutrition/menus/2026-10-23/generate",
-            json={"scope": "day", "now": "2026-10-23T06:00:00Z"},
+            f"/nutrition/menus/{test_day}/generate",
+            json={"scope": "day", "now": f"{test_day}T06:00:00Z"},
         )
         assert resp.status_code == 200
 
-    day_resp = await client.get("/nutrition/menus/2026-10-23?now=2026-10-23T06:00:00Z")
+    day_resp = await client.get(f"/nutrition/menus/{test_day}?now={test_day}T06:00:00Z")
     menus = {m["meal_type"]: m for m in day_resp.json()["menus"]}
 
     # Breakfast: eaten meal kept completely intact
@@ -479,11 +488,12 @@ async def test_day_generation_replaces_unmarked_manual_items_not_eaten_or_skippe
 async def test_removed_meals_never_recreated_by_generation(
     client: AsyncClient, session: AsyncSession
 ):
+    test_day = datetime.now(UTC).date() + timedelta(days=2)
     data = await setup_nutrition_data(client)
     dish_id = data["dish_id"]
 
     # Delete Lunch meal
-    del_resp = await client.delete("/nutrition/menus/2026-10-23/meals/lunch")
+    del_resp = await client.delete(f"/nutrition/menus/{test_day}/meals/lunch")
     assert del_resp.status_code == 204
 
     mock_result = GeminiResult(
@@ -518,38 +528,39 @@ async def test_removed_meals_never_recreated_by_generation(
     with patch("gemini_infra.generate_json", new_callable=AsyncMock) as mock_gen:
         mock_gen.return_value = mock_result
         resp = await client.post(
-            "/nutrition/menus/2026-10-23/generate",
-            json={"scope": "day", "now": "2026-10-23T06:00:00Z"},
+            f"/nutrition/menus/{test_day}/generate",
+            json={"scope": "day", "now": f"{test_day}T06:00:00Z"},
         )
         assert resp.status_code == 200
         menus = resp.json()["menus"]
         assert [m["meal_type"] for m in menus] == ["breakfast", "dinner"]
 
-    day_resp = await client.get("/nutrition/menus/2026-10-23?now=2026-10-23T06:00:00Z")
+    day_resp = await client.get(f"/nutrition/menus/{test_day}?now={test_day}T06:00:00Z")
     assert [m["meal_type"] for m in day_resp.json()["menus"]] == ["breakfast", "dinner"]
 
 
 @pytest.mark.asyncio
 async def test_409_when_nothing_to_generate_no_gemini_call(client: AsyncClient):
+    test_day = datetime.now(UTC).date() + timedelta(days=2)
     await setup_nutrition_data(client)
 
     # Mark Breakfast, Lunch, Dinner as eaten
     for meal_type in ["breakfast", "lunch", "dinner"]:
         resp = await client.post(
-            f"/nutrition/menus/2026-10-23/items?meal_type={meal_type}",
+            f"/nutrition/menus/{test_day}/items?meal_type={meal_type}",
             json={"title": "Яблуко", "portion_g": 100, "kcal": 50.0},
         )
         menu_id = resp.json()["menu_id"]
         await client.patch(
             f"/nutrition/menus/{menu_id}",
-            json={"eaten_at": "2026-10-23T12:00:00Z"},
+            json={"eaten_at": f"{test_day}T12:00:00Z"},
         )
 
     with patch("gemini_infra.generate_json", new_callable=AsyncMock) as mock_gen:
         # Day scope: 409
         resp_day = await client.post(
-            "/nutrition/menus/2026-10-23/generate",
-            json={"scope": "day", "now": "2026-10-23T06:00:00Z"},
+            f"/nutrition/menus/{test_day}/generate",
+            json={"scope": "day", "now": f"{test_day}T06:00:00Z"},
         )
         assert resp_day.status_code == 409
         assert "No generatable meals" in resp_day.json()["detail"]
@@ -557,7 +568,7 @@ async def test_409_when_nothing_to_generate_no_gemini_call(client: AsyncClient):
 
         # Slot scope: 409
         resp_slot = await client.post(
-            "/nutrition/menus/2026-10-23/generate",
+            f"/nutrition/menus/{test_day}/generate",
             json={"scope": "slot", "meal_type": "breakfast"},
         )
         assert resp_slot.status_code == 409
@@ -567,12 +578,13 @@ async def test_409_when_nothing_to_generate_no_gemini_call(client: AsyncClient):
 
 @pytest.mark.asyncio
 async def test_estimate_stage_runs_before_generation(client: AsyncClient):
+    test_day = datetime.now(UTC).date() + timedelta(days=2)
     data = await setup_nutrition_data(client)
     dish_id = data["dish_id"]
 
     # Add free-text item to Breakfast without kcal
     b_resp = await client.post(
-        "/nutrition/menus/2026-10-23/items?meal_type=breakfast",
+        f"/nutrition/menus/{test_day}/items?meal_type=breakfast",
         json={"title": "Яблуко", "portion_g": 120},
     )
     b_id = b_resp.json()["id"]
@@ -625,14 +637,14 @@ async def test_estimate_stage_runs_before_generation(client: AsyncClient):
 
     with patch("gemini_infra.generate_json", side_effect=mock_gemini):
         resp = await client.post(
-            "/nutrition/menus/2026-10-23/generate",
-            json={"scope": "slot", "meal_type": "lunch", "now": "2026-10-23T06:00:00Z"},
+            f"/nutrition/menus/{test_day}/generate",
+            json={"scope": "slot", "meal_type": "lunch", "now": f"{test_day}T06:00:00Z"},
         )
         assert resp.status_code == 200
         assert calls == ["estimate", "generate"]
 
     # Verify Breakfast item kcal was updated with model source
-    day_resp = await client.get("/nutrition/menus/2026-10-23?now=2026-10-23T06:00:00Z")
+    day_resp = await client.get(f"/nutrition/menus/{test_day}?now={test_day}T06:00:00Z")
     menus = {m["meal_type"]: m for m in day_resp.json()["menus"]}
     b_item = menus["breakfast"]["items"][0]
     assert b_item["kcal"] == 60.0
@@ -641,22 +653,23 @@ async def test_estimate_stage_runs_before_generation(client: AsyncClient):
 
 @pytest.mark.asyncio
 async def test_day_menu_read_flags(client: AsyncClient):
+    test_day = datetime.now(UTC).date() + timedelta(days=2)
     data = await setup_nutrition_data(client)
     dish_id = data["dish_id"]
 
     # 1. Fresh day with projected meals (no items)
-    r1 = (await client.get("/nutrition/menus/2026-10-23?now=2026-10-23T06:00:00Z")).json()
+    r1 = (await client.get(f"/nutrition/menus/{test_day}?now={test_day}T06:00:00Z")).json()
     assert r1["can_generate_day"] is True
     assert r1["day_generation_replaces_manual"] is False
 
     # 2. Add an unmarked manual item
     i1 = (
         await client.post(
-            "/nutrition/menus/2026-10-23/items?meal_type=breakfast",
+            f"/nutrition/menus/{test_day}/items?meal_type=breakfast",
             json={"title": "Яблуко", "portion_g": 100, "kcal": 50.0},
         )
     ).json()
-    r2 = (await client.get("/nutrition/menus/2026-10-23?now=2026-10-23T06:00:00Z")).json()
+    r2 = (await client.get(f"/nutrition/menus/{test_day}?now={test_day}T06:00:00Z")).json()
     assert r2["can_generate_day"] is True
     assert r2["day_generation_replaces_manual"] is True
 
@@ -664,53 +677,54 @@ async def test_day_menu_read_flags(client: AsyncClient):
     b_menu_id = i1["menu_id"]
     await client.patch(
         f"/nutrition/menus/{b_menu_id}",
-        json={"eaten_at": "2026-10-23T08:00:00Z"},
+        json={"eaten_at": f"{test_day}T08:00:00Z"},
     )
     i2 = (
         await client.post(
-            "/nutrition/menus/2026-10-23/items?meal_type=lunch",
+            f"/nutrition/menus/{test_day}/items?meal_type=lunch",
             json={"dish_id": dish_id, "portion_g": 200},
         )
     ).json()
     await client.patch(
         f"/nutrition/menus/{i2['menu_id']}",
-        json={"eaten_at": "2026-10-23T13:00:00Z"},
+        json={"eaten_at": f"{test_day}T13:00:00Z"},
     )
     i3 = (
         await client.post(
-            "/nutrition/menus/2026-10-23/items?meal_type=dinner",
+            f"/nutrition/menus/{test_day}/items?meal_type=dinner",
             json={"title": "Горіхи", "portion_g": 30, "kcal": 180.0},
         )
     ).json()
     await client.patch(
         f"/nutrition/menus/{i3['menu_id']}",
-        json={"eaten_at": "2026-10-23T19:00:00Z"},
+        json={"eaten_at": f"{test_day}T19:00:00Z"},
     )
 
-    r3 = (await client.get("/nutrition/menus/2026-10-23?now=2026-10-23T06:00:00Z")).json()
+    r3 = (await client.get(f"/nutrition/menus/{test_day}?now={test_day}T06:00:00Z")).json()
     assert r3["can_generate_day"] is False
     assert r3["day_generation_replaces_manual"] is False
 
 
 @pytest.mark.asyncio
 async def test_notes_flow_with_nothing_to_generate_does_not_fail(client: AsyncClient):
+    test_day = datetime.now(UTC).date() + timedelta(days=2)
     await setup_nutrition_data(client)
 
     # Mark all meals eaten
     for meal_type in ["breakfast", "lunch", "dinner"]:
         resp = await client.post(
-            f"/nutrition/menus/2026-10-23/items?meal_type={meal_type}",
+            f"/nutrition/menus/{test_day}/items?meal_type={meal_type}",
             json={"title": "Яблуко", "portion_g": 100, "kcal": 50.0},
         )
         menu_id = resp.json()["menu_id"]
         await client.patch(
             f"/nutrition/menus/{menu_id}",
-            json={"eaten_at": "2026-10-23T12:00:00Z"},
+            json={"eaten_at": f"{test_day}T12:00:00Z"},
         )
 
     with patch("gemini_infra.generate_json", new_callable=AsyncMock) as mock_gen:
         resp = await client.post(
-            "/nutrition/menus/2026-10-23/notes",
+            f"/nutrition/menus/{test_day}/notes",
             json={"kind": "correction", "text": "Більше нічого не потрібно"},
         )
         assert resp.status_code == 201

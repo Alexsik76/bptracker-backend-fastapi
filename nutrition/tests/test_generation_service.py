@@ -1,4 +1,4 @@
-from datetime import UTC, date, datetime
+from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 import pytest
@@ -160,6 +160,7 @@ def test_validate_generation_response_limits():
 
 
 def test_build_generation_prompt():
+    test_day = datetime.now(UTC).date() + timedelta(days=2)
     user_id = uuid4()
     now = datetime.now(UTC)
 
@@ -184,7 +185,7 @@ def test_build_generation_prompt():
 
     context = GenerationContext(
         user_id=user_id,
-        date=date(2026, 10, 23),
+        date=test_day,
         scope="day",
         target_meal_type=None,
         profile=profile,
@@ -196,13 +197,14 @@ def test_build_generation_prompt():
 
     assert PROMPT_VERSION == "2026-10-28.2"
     prompt = build_generation_prompt(context)
-    assert "2026-10-23" in prompt
+    assert str(test_day) in prompt
     assert "Видалений жовчний міхур" in prompt
     assert "0,5–1 кг на тиждень" in prompt
     assert "вечірній перекус" in prompt
 
 
 def test_build_generation_prompt_with_free_text_item():
+    test_day = datetime.now(UTC).date() + timedelta(days=2)
     user_id = uuid4()
     now = datetime.now(UTC)
     menu_id = uuid4()
@@ -239,7 +241,7 @@ def test_build_generation_prompt_with_free_text_item():
     day_menu = MenuRead(
         id=menu_id,
         user_id=user_id,
-        date=date(2026, 10, 27),
+        date=test_day,
         meal_type=MealType.BREAKFAST,
         status=MenuStatus.PLANNED,
         regenerations=0,
@@ -250,7 +252,7 @@ def test_build_generation_prompt_with_free_text_item():
 
     context = GenerationContext(
         user_id=user_id,
-        date=date(2026, 10, 27),
+        date=test_day,
         scope="day",
         target_meal_type=None,
         profile=profile,
@@ -294,6 +296,7 @@ def test_build_gemini_response_schema_empty_lists():
 
 
 def test_validate_generation_response_eaten_dish_not_double_counted():
+    test_day = datetime.now(UTC).date() + timedelta(days=2)
     user_id = uuid4()
     dish_id = uuid4()
     menu_id = uuid4()
@@ -313,7 +316,7 @@ def test_validate_generation_response_eaten_dish_not_double_counted():
     eaten_lunch = MenuRead(
         id=menu_id,
         user_id=user_id,
-        date=date(2026, 10, 24),
+        date=test_day,
         meal_type=MealType.LUNCH,
         status=MenuStatus.EATEN,
         eaten_at=now,
@@ -368,13 +371,14 @@ def test_validate_generation_response_eaten_dish_not_double_counted():
 
 
 def test_generator_context_without_recipes():
+    test_day = datetime.now(UTC).date() + timedelta(days=2)
     user_id = uuid4()
     now = datetime.now(UTC)
 
     # GenerationContext should have dishes and products, but NO recipes
     context = GenerationContext(
         user_id=user_id,
-        date=date(2026, 10, 28),
+        date=test_day,
         scope="day",
         target_meal_type=None,
         profile=None,

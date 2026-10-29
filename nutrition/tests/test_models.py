@@ -1,4 +1,4 @@
-from datetime import UTC, date, datetime
+from datetime import UTC, datetime
 from uuid import UUID
 
 import pydantic
@@ -114,7 +114,7 @@ async def test_dish_and_components_persistence(session: AsyncSession, test_user_
         name="Вівсянка з яблуком",
         cooked_weight_g=300,
         remaining_g=300,
-        cooked_on=date.today(),
+        cooked_on=datetime.now(UTC).date(),
         notes="Постійна ранкова страва",
     )
     session.add(dish)
@@ -145,7 +145,7 @@ async def test_dish_and_components_persistence(session: AsyncSession, test_user_
 
 @pytest.mark.asyncio
 async def test_menu_note_persistence(session: AsyncSession, test_user_id: UUID):
-    today = date.today()
+    today = datetime.now(UTC).date()
     note = MenuNote(
         user_id=test_user_id,
         date=today,
@@ -171,7 +171,7 @@ async def test_menu_note_persistence(session: AsyncSession, test_user_id: UUID):
 
 @pytest.mark.asyncio
 async def test_off_plan_entry_persistence(session: AsyncSession, test_user_id: UUID):
-    today = date.today()
+    today = datetime.now(UTC).date()
     now_dt = datetime.now(UTC)
     entry = OffPlanEntry(
         user_id=test_user_id,

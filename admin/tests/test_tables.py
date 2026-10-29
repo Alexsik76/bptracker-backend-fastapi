@@ -1,5 +1,5 @@
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -196,6 +196,7 @@ async def test_list_measurements_pagination_ordering_filter_search(client_factor
 
 @pytest.mark.asyncio
 async def test_create_update_delete_measurement(client_factory, make_user):
+    test_day = datetime.now(UTC).date() + timedelta(days=2)
     admin_id = await make_user("admin@example.com")
     user_id = await make_user("testuser@example.com")
     client = client_factory(admin_id)
@@ -218,7 +219,7 @@ async def test_create_update_delete_measurement(client_factory, make_user):
     assert "+" in created["recorded_at"] or created["recorded_at"].endswith("Z")
 
     # Partial update measurement (including editable recorded_at)
-    new_recorded_at = "2026-10-25T14:30:00+00:00"
+    new_recorded_at = f"{test_day}T14:30:00+00:00"
     update_resp = await client.patch(
         "/admin/tables/measurements/rows",
         json={
@@ -249,6 +250,7 @@ async def test_create_update_delete_measurement(client_factory, make_user):
 
 @pytest.mark.asyncio
 async def test_read_only_and_hidden_columns_rejected(client_factory, make_user):
+    test_day = datetime.now(UTC).date() + timedelta(days=2)
     admin_id = await make_user("admin@example.com")
     user_id = await make_user("testuser@example.com")
     client = client_factory(admin_id)
@@ -303,7 +305,7 @@ async def test_read_only_and_hidden_columns_rejected(client_factory, make_user):
                 "recorded_at": now_iso,
                 "user_id": str(user_id),
                 "period": "MORNING",
-                "date": "2026-10-29",
+                "date": str(test_day),
                 "taken_at": now_iso,
                 "snapshot": [],
             }
@@ -349,19 +351,20 @@ async def test_read_only_and_hidden_columns_rejected(client_factory, make_user):
 
 @pytest.mark.asyncio
 async def test_naive_datetime_rejected(client_factory, make_user):
+    test_day = datetime.now(UTC).date() + timedelta(days=2)
     admin_id = await make_user("admin@example.com")
     user_id = await make_user("testuser@example.com")
     client = client_factory(admin_id)
 
     # intake_reports has writable taken_at datetime column
-    naive_dt = "2026-10-29T10:00:00"  # No timezone offset
+    naive_dt = f"{test_day}T10:00:00"  # No timezone offset
     resp = await client.post(
         "/admin/tables/intake_reports/rows",
         json={
             "values": {
                 "user_id": str(user_id),
                 "period": "MORNING",
-                "date": "2026-10-29",
+                "date": str(test_day),
                 "taken_at": naive_dt,
                 "snapshot": [],
             }
@@ -373,14 +376,14 @@ async def test_naive_datetime_rejected(client_factory, make_user):
     assert "naive" in detail.lower() or "timezone" in detail.lower()
 
     # With timezone offset, it succeeds
-    aware_dt = "2026-10-29T10:00:00+00:00"
+    aware_dt = f"{test_day}T10:00:00+00:00"
     resp_ok = await client.post(
         "/admin/tables/intake_reports/rows",
         json={
             "values": {
                 "user_id": str(user_id),
                 "period": "MORNING",
-                "date": "2026-10-29",
+                "date": str(test_day),
                 "taken_at": aware_dt,
                 "snapshot": [],
             }

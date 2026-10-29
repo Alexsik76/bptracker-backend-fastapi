@@ -1,5 +1,4 @@
-from datetime import date as dt_date
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
@@ -151,7 +150,7 @@ async def test_pin_crud_and_slot_validation(client: AsyncClient):
 @pytest.mark.asyncio
 async def test_materialization_on_read(client: AsyncClient, session: AsyncSession):
     await init_profile(client)
-    today = dt_date.today()
+    today = datetime.now(UTC).date()
     future = today + timedelta(days=2)
     past = today - timedelta(days=1)
 
@@ -231,7 +230,7 @@ async def test_materialization_on_read(client: AsyncClient, session: AsyncSessio
 @pytest.mark.asyncio
 async def test_pin_update_resyncs_untouched_future_rows(client: AsyncClient):
     await init_profile(client)
-    today = dt_date.today()
+    today = datetime.now(UTC).date()
     future = today + timedelta(days=2)
 
     fd_syrnyky = await create_test_frequent_dish(client, "Сирники", 150)
@@ -292,7 +291,7 @@ async def test_cross_pinned_meal_and_available_pins_and_restore(
     client: AsyncClient, session: AsyncSession
 ):
     await init_profile(client)
-    today = dt_date.today()
+    today = datetime.now(UTC).date()
 
     fd_hrechka = await create_test_frequent_dish(client, "Гречка", 200)
 
@@ -373,7 +372,7 @@ async def test_cross_pinned_meal_and_available_pins_and_restore(
 @pytest.mark.asyncio
 async def test_restore_preserves_marked_items(client: AsyncClient):
     await init_profile(client)
-    today = dt_date.today()
+    today = datetime.now(UTC).date()
 
     fd1 = await create_test_frequent_dish(client, "Омлет", 150)
     fd2 = await create_test_frequent_dish(client, "Тост", 50)
@@ -427,9 +426,10 @@ async def test_restore_preserves_marked_items(client: AsyncClient):
 
 
 def test_generation_flags_and_generatability_with_pinned_meal():
+    test_day = datetime.now(UTC).date() + timedelta(days=2)
     pinned_meal = MenuRead(
         user_id=uuid4(),
-        date=dt_date(2026, 10, 27),
+        date=test_day,
         meal_type=MealType.BREAKFAST,
         time="08:00",
         status=MenuStatus.PLANNED,
@@ -441,7 +441,7 @@ def test_generation_flags_and_generatability_with_pinned_meal():
 
     empty_meal = MenuRead(
         user_id=uuid4(),
-        date=dt_date(2026, 10, 27),
+        date=test_day,
         meal_type=MealType.LUNCH,
         time="13:00",
         status=MenuStatus.PLANNED,
@@ -466,7 +466,7 @@ async def test_generation_leaves_pinned_meal_untouched_and_counts_it_as_context(
     client: AsyncClient,
 ):
     await init_profile(client)
-    today = dt_date.today()
+    menu_day = datetime.now(UTC).date() + timedelta(days=2)
 
     # Create dish for Obid
     dish_resp = await client.post(
@@ -474,7 +474,7 @@ async def test_generation_leaves_pinned_meal_untouched_and_counts_it_as_context(
         json={
             "name": "Борщ український",
             "cooked_weight_g": 1000,
-            "cooked_on": str(today),
+            "cooked_on": str(menu_day),
         },
     )
     assert dish_resp.status_code == 201
@@ -516,10 +516,10 @@ async def test_generation_leaves_pinned_meal_untouched_and_counts_it_as_context(
         )
 
     with patch("gemini_infra.generate_json", side_effect=fake_generate_json):
-        await client.post(f"/nutrition/menus/{today}/create")
+        await client.post(f"/nutrition/menus/{menu_day}/create")
         gen_resp = await client.post(
-            f"/nutrition/menus/{today}/generate",
-            json={"scope": "day"},
+            f"/nutrition/menus/{menu_day}/generate",
+            json={"scope": "day", "now": f"{menu_day}T06:00:00Z"},
         )
         assert gen_resp.status_code == 200
 

@@ -1,3 +1,4 @@
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -173,6 +174,7 @@ async def test_recompute_frequent_dishes_on_product_change(client: AsyncClient):
 
 @pytest.mark.asyncio
 async def test_cook_endpoint_creates_dish_with_stock_warnings(client: AsyncClient):
+    test_day = datetime.now(UTC).date() + timedelta(days=2)
     p = (
         await client.post(
             "/nutrition/products",
@@ -202,7 +204,7 @@ async def test_cook_endpoint_creates_dish_with_stock_warnings(client: AsyncClien
     # Cook with shortage (has 100g in stock, needs 150g)
     cook_resp = await client.post(
         f"/nutrition/frequent-dishes/{fd['id']}/cook",
-        json={"cooked_on": "2026-10-25"},
+        json={"cooked_on": str(test_day)},
     )
     assert cook_resp.status_code == 201
     dish_data = cook_resp.json()
@@ -212,7 +214,7 @@ async def test_cook_endpoint_creates_dish_with_stock_warnings(client: AsyncClien
     assert dish_data["recipe_id"] == r["id"]
     assert dish_data["cooked_weight_g"] == 150
     assert dish_data["remaining_g"] == 150
-    assert dish_data["cooked_on"] == "2026-10-25"
+    assert dish_data["cooked_on"] == str(test_day)
     assert len(dish_data["components"]) == 1
     assert dish_data["components"][0]["product_id"] == p["id"]
     assert dish_data["components"][0]["weight_g"] == 150

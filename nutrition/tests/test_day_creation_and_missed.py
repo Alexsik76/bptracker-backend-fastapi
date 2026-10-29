@@ -1,5 +1,4 @@
-from datetime import date as dt_date
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -71,7 +70,7 @@ async def test_today_auto_created_on_get(client: AsyncClient, session: AsyncSess
         },
     )
 
-    today = dt_date.today()
+    today = datetime.now(UTC).date()
     today_str = today.isoformat()
 
     # GET today auto-creates day
@@ -100,8 +99,8 @@ async def test_today_auto_created_on_get(client: AsyncClient, session: AsyncSess
 async def test_future_day_explicit_create_and_409_on_second_create(
     client: AsyncClient, session: AsyncSession
 ):
-    future_date = (dt_date.today() + timedelta(days=7)).isoformat()
-    future_d = dt_date.today() + timedelta(days=7)
+    future_date = (datetime.now(UTC).date() + timedelta(days=7)).isoformat()
+    future_d = datetime.now(UTC).date() + timedelta(days=7)
 
     await client.put(
         "/nutrition/profile",
@@ -148,8 +147,8 @@ async def test_future_day_explicit_create_and_409_on_second_create(
 
 @pytest.mark.asyncio
 async def test_read_of_uncreated_day_writes_nothing(client: AsyncClient, session: AsyncSession):
-    future_date = (dt_date.today() + timedelta(days=12)).isoformat()
-    future_d = dt_date.today() + timedelta(days=12)
+    future_date = (datetime.now(UTC).date() + timedelta(days=12)).isoformat()
+    future_d = datetime.now(UTC).date() + timedelta(days=12)
 
     await client.put(
         "/nutrition/profile",
@@ -194,7 +193,7 @@ async def test_read_of_uncreated_day_writes_nothing(client: AsyncClient, session
 
 @pytest.mark.asyncio
 async def test_operations_on_uncreated_day_return_409(client: AsyncClient):
-    uncreated_date = (dt_date.today() + timedelta(days=14)).isoformat()
+    uncreated_date = (datetime.now(UTC).date() + timedelta(days=14)).isoformat()
 
     await client.put(
         "/nutrition/profile",
@@ -239,7 +238,7 @@ async def test_operations_on_uncreated_day_return_409(client: AsyncClient):
 
 @pytest.mark.asyncio
 async def test_missed_derivation(client: AsyncClient):
-    d = (dt_date.today() + timedelta(days=2)).isoformat()
+    d = (datetime.now(UTC).date() + timedelta(days=2)).isoformat()
 
     await client.put(
         "/nutrition/profile",
@@ -261,7 +260,7 @@ async def test_missed_derivation(client: AsyncClient):
     assert create_resp.status_code == 201
 
     # Scenario A: Past day -> all uneaten meals are missed
-    past_day_now = f"{(dt_date.today() + timedelta(days=3)).isoformat()}T10:00:00Z"
+    past_day_now = f"{(datetime.now(UTC).date() + timedelta(days=3)).isoformat()}T10:00:00Z"
     resp_a = await client.get(f"/nutrition/menus/{d}?now={past_day_now}")
     menus_a = {m["meal_type"]: m for m in resp_a.json()["menus"]}
     assert menus_a["breakfast"]["status"] == "missed"
@@ -313,7 +312,7 @@ async def test_day_creation_stock_warnings(client: AsyncClient):
         )
     ).json()
 
-    d = (dt_date.today() + timedelta(days=2)).isoformat()
+    d = (datetime.now(UTC).date() + timedelta(days=2)).isoformat()
     await client.put(
         "/nutrition/profile",
         json={
@@ -351,7 +350,7 @@ async def test_day_creation_stock_warnings(client: AsyncClient):
 
 @pytest.mark.asyncio
 async def test_generation_skips_missed_and_pinned_meals(client: AsyncClient):
-    d = (dt_date.today() + timedelta(days=2)).isoformat()
+    d = (datetime.now(UTC).date() + timedelta(days=2)).isoformat()
     await client.put(
         "/nutrition/profile",
         json={

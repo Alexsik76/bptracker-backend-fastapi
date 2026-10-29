@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -20,8 +20,9 @@ async def _setup_reminder_config(client, config_payload):
 
 
 async def _create_prescription_with_item(client, when_slots):
+    test_day = datetime.now(UTC).date() + timedelta(days=2)
     prescription = await client.post(
-        "/prescriptions", json={"doctor": "Dr. House", "prescribed_on": "2026-01-15"}
+        "/prescriptions", json={"doctor": "Dr. House", "prescribed_on": str(test_day)}
     )
     pid = prescription.json()["id"]
     await client.post(
@@ -42,12 +43,13 @@ async def _create_prescription_with_item(client, when_slots):
 
 @pytest.mark.asyncio
 async def test_record_without_taken_at_sets_it_to_now(client, config_payload):
+    test_day = datetime.now(UTC).date() + timedelta(days=2)
     await _setup_reminder_config(client, config_payload)
     await _create_prescription_with_item(client, when_slots=["Morning"])
 
     before = datetime.now(UTC)
     response = await client.post(
-        "/reminders/intake-reports", json={"period": "Morning", "date": "2026-01-15"}
+        "/reminders/intake-reports", json={"period": "Morning", "date": str(test_day)}
     )
     after = datetime.now(UTC)
 
@@ -67,12 +69,13 @@ async def test_record_without_taken_at_sets_it_to_now(client, config_payload):
 
 @pytest.mark.asyncio
 async def test_record_with_explicit_taken_at_stores_it_unaltered(client, config_payload):
+    test_day = datetime.now(UTC).date() + timedelta(days=2)
     await _setup_reminder_config(client, config_payload)
-    explicit_taken_at = "2026-01-10T09:15:00+00:00"
+    explicit_taken_at = f"{test_day}T09:15:00+00:00"
 
     response = await client.post(
         "/reminders/intake-reports",
-        json={"period": "Morning", "date": "2026-01-10", "taken_at": explicit_taken_at},
+        json={"period": "Morning", "date": str(test_day), "taken_at": explicit_taken_at},
     )
     assert response.status_code == 201
     body = response.json()
@@ -83,25 +86,26 @@ async def test_record_with_explicit_taken_at_stores_it_unaltered(client, config_
 
 @pytest.mark.asyncio
 async def test_repeat_confirm_same_slot_overwrites_instead_of_conflicting(client, config_payload):
+    test_day = datetime.now(UTC).date() + timedelta(days=2)
     await _setup_reminder_config(client, config_payload)
     payload = {
         "period": "Morning",
-        "date": "2026-01-15",
-        "taken_at": "2026-01-15T08:05:00+00:00",
+        "date": str(test_day),
+        "taken_at": f"{test_day}T08:05:00+00:00",
     }
 
     first = await client.post("/reminders/intake-reports", json=payload)
     assert first.status_code == 201
     first_body = first.json()
 
-    second_payload = {**payload, "taken_at": "2026-01-15T09:30:00+00:00"}
+    second_payload = {**payload, "taken_at": f"{test_day}T09:30:00+00:00"}
     second = await client.post("/reminders/intake-reports", json=second_payload)
     assert second.status_code == 201
     second_body = second.json()
 
     assert second_body["id"] == first_body["id"]
     assert datetime.fromisoformat(second_body["taken_at"]) == datetime.fromisoformat(
-        "2026-01-15T09:30:00+00:00"
+        f"{test_day}T09:30:00+00:00"
     )
     assert datetime.fromisoformat(second_body["recorded_at"]) >= datetime.fromisoformat(
         first_body["recorded_at"]
@@ -114,19 +118,21 @@ async def test_repeat_confirm_same_slot_overwrites_instead_of_conflicting(client
 @pytest.mark.asyncio
 async def test_record_intake_succeeds_without_reminder_config(client):
     # Recording no longer depends on reminder_config existing (no "late" to compute here).
+    test_day = datetime.now(UTC).date() + timedelta(days=2)
     response = await client.post(
-        "/reminders/intake-reports", json={"period": "Morning", "date": "2026-01-15"}
+        "/reminders/intake-reports", json={"period": "Morning", "date": str(test_day)}
     )
     assert response.status_code == 201
 
 
 @pytest.mark.asyncio
 async def test_confirm_excludes_items_from_other_slots(client, config_payload):
+    test_day = datetime.now(UTC).date() + timedelta(days=2)
     await _setup_reminder_config(client, config_payload)
     await _create_prescription_with_item(client, when_slots=["Evening"])
 
     response = await client.post(
-        "/reminders/intake-reports", json={"period": "Morning", "date": "2026-01-15"}
+        "/reminders/intake-reports", json={"period": "Morning", "date": str(test_day)}
     )
     assert response.status_code == 201
     assert response.json()["snapshot"] == []
@@ -141,9 +147,10 @@ async def test_get_missing_intake_report_returns_404(client):
 
 @pytest.mark.asyncio
 async def test_list_and_get_intake_reports(client, config_payload):
+    test_day = datetime.now(UTC).date() + timedelta(days=2)
     await _setup_reminder_config(client, config_payload)
     created = await client.post(
-        "/reminders/intake-reports", json={"period": "Morning", "date": "2026-01-15"}
+        "/reminders/intake-reports", json={"period": "Morning", "date": str(test_day)}
     )
     rid = created.json()["id"]
 
@@ -160,13 +167,14 @@ async def test_list_and_get_intake_reports(client, config_payload):
 async def test_user_cannot_see_another_users_intake_reports(
     client_factory, make_user, config_payload
 ):
+    test_day = datetime.now(UTC).date() + timedelta(days=2)
     user_a = await make_user("a@example.com")
     user_b = await make_user("b@example.com")
 
     client_a = client_factory(user_a)
     await _setup_reminder_config(client_a, config_payload)
     await client_a.post(
-        "/reminders/intake-reports", json={"period": "Morning", "date": "2026-01-15"}
+        "/reminders/intake-reports", json={"period": "Morning", "date": str(test_day)}
     )
 
     client_b = client_factory(user_b)
@@ -177,8 +185,9 @@ async def test_user_cannot_see_another_users_intake_reports(
 
 @pytest.mark.asyncio
 async def test_delete_intake_report_removes_it(client):
+    test_day = datetime.now(UTC).date() + timedelta(days=2)
     created = await client.post(
-        "/reminders/intake-reports", json={"period": "Morning", "date": "2026-01-15"}
+        "/reminders/intake-reports", json={"period": "Morning", "date": str(test_day)}
     )
     assert created.status_code == 201
     rid = created.json()["id"]
@@ -201,12 +210,13 @@ async def test_delete_missing_intake_report_returns_404(client):
 async def test_delete_another_users_intake_report_returns_404(
     client_factory, make_user
 ):
+    test_day = datetime.now(UTC).date() + timedelta(days=2)
     user_a = await make_user("a@example.com")
     user_b = await make_user("b@example.com")
 
     client_a = client_factory(user_a)
     created = await client_a.post(
-        "/reminders/intake-reports", json={"period": "Morning", "date": "2026-01-15"}
+        "/reminders/intake-reports", json={"period": "Morning", "date": str(test_day)}
     )
     assert created.status_code == 201
     rid = created.json()["id"]

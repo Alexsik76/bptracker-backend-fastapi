@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
@@ -11,13 +11,14 @@ from gemini_infra.types import GeminiResult
 @pytest.mark.asyncio
 async def test_off_plan_crud(client: AsyncClient):
     # 1. Create two entries with different timestamps out of order
+    test_day = datetime.now(UTC).date() + timedelta(days=2)
     at_late = datetime(2026, 10, 24, 15, 30, tzinfo=UTC).isoformat()
     at_early = datetime(2026, 10, 24, 10, 0, tzinfo=UTC).isoformat()
 
     resp1 = await client.post(
         "/nutrition/off-plan",
         json={
-            "date": "2026-10-24",
+            "date": str(test_day),
             "at": at_late,
             "text": "Печиво вівсяне 2 шт.",
             "kcal_est": 180,
@@ -25,7 +26,7 @@ async def test_off_plan_crud(client: AsyncClient):
     )
     assert resp1.status_code == 201
     entry1 = resp1.json()
-    assert entry1["date"] == "2026-10-24"
+    assert entry1["date"] == str(test_day)
     assert entry1["text"] == "Печиво вівсяне 2 шт."
     assert entry1["kcal_est"] == 180
     assert "id" in entry1
@@ -34,7 +35,7 @@ async def test_off_plan_crud(client: AsyncClient):
     resp2 = await client.post(
         "/nutrition/off-plan",
         json={
-            "date": "2026-10-24",
+            "date": str(test_day),
             "at": at_early,
             "text": "  Горіхи волоські 30 г  ",
             "kcal_est": None,
@@ -46,7 +47,7 @@ async def test_off_plan_crud(client: AsyncClient):
     assert entry2["kcal_est"] is None
 
     # 2. GET /nutrition/off-plan?date=YYYY-MM-DD should return sorted by 'at'
-    list_resp = await client.get("/nutrition/off-plan?date=2026-10-24")
+    list_resp = await client.get(f"/nutrition/off-plan?date={test_day}")
     assert list_resp.status_code == 200
     items = list_resp.json()
     assert len(items) == 2
@@ -58,7 +59,7 @@ async def test_off_plan_crud(client: AsyncClient):
     assert del_resp.status_code == 204
 
     # Verify deleted
-    list_resp2 = await client.get("/nutrition/off-plan?date=2026-10-24")
+    list_resp2 = await client.get(f"/nutrition/off-plan?date={test_day}")
     assert list_resp2.status_code == 200
     items2 = list_resp2.json()
     assert len(items2) == 1
@@ -72,13 +73,14 @@ async def test_off_plan_crud(client: AsyncClient):
 
 @pytest.mark.asyncio
 async def test_off_plan_validation(client: AsyncClient):
+    test_day = datetime.now(UTC).date() + timedelta(days=2)
     at_str = datetime(2026, 10, 24, 12, 0, tzinfo=UTC).isoformat()
 
     # Empty text
     resp_empty = await client.post(
         "/nutrition/off-plan",
         json={
-            "date": "2026-10-24",
+            "date": str(test_day),
             "at": at_str,
             "text": "   ",
         },
@@ -99,6 +101,7 @@ async def test_off_plan_validation(client: AsyncClient):
 
 @pytest.mark.asyncio
 async def test_off_plan_user_isolation(client_factory, make_user):
+    test_day = datetime.now(UTC).date() + timedelta(days=2)
     user_a = await make_user("user_a@example.com")
     user_b = await make_user("user_b@example.com")
 
@@ -108,7 +111,7 @@ async def test_off_plan_user_isolation(client_factory, make_user):
     resp_a = await client_a.post(
         "/nutrition/off-plan",
         json={
-            "date": "2026-10-24",
+            "date": str(test_day),
             "at": at_str,
             "text": "Шоколад чорний 20 г",
             "kcal_est": 110,
@@ -120,12 +123,12 @@ async def test_off_plan_user_isolation(client_factory, make_user):
     client_b = client_factory(user_b)
 
     # User B cannot see User A's off-plan entries
-    resp_b_list = await client_b.get("/nutrition/off-plan?date=2026-10-24")
+    resp_b_list = await client_b.get(f"/nutrition/off-plan?date={test_day}")
     assert resp_b_list.status_code == 200
     assert resp_b_list.json() == []
 
     # User B cannot see User A's entry in DayMenu
-    resp_b_menu = await client_b.get("/nutrition/menus/2026-10-24")
+    resp_b_menu = await client_b.get(f"/nutrition/menus/{test_day}")
     assert resp_b_menu.status_code == 404
 
     # User B cannot delete User A's off-plan entry
@@ -136,6 +139,7 @@ async def test_off_plan_user_isolation(client_factory, make_user):
 @pytest.mark.asyncio
 async def test_day_menu_contains_notes_and_off_plan(client: AsyncClient):
     # Setup profile
+    test_day = datetime.now(UTC).date() + timedelta(days=2)
     await client.put(
         "/nutrition/profile",
         json={
@@ -161,9 +165,9 @@ async def test_day_menu_contains_notes_and_off_plan(client: AsyncClient):
     )
     prod_id = prod_resp.json()["id"]
 
-    await client.post("/nutrition/menus/2026-10-24/create")
+    await client.post(f"/nutrition/menus/{test_day}/create")
     await client.post(
-        "/nutrition/menus/2026-10-24/items?meal_type=breakfast",
+        f"/nutrition/menus/{test_day}/items?meal_type=breakfast",
         json={"product_id": prod_id, "portion_g": 150},
     )
 
@@ -178,7 +182,7 @@ async def test_day_menu_contains_notes_and_off_plan(client: AsyncClient):
     with patch("gemini_infra.generate_json", new_callable=AsyncMock) as mock_gen:
         mock_gen.return_value = mock_result
         note_resp = await client.post(
-            "/nutrition/menus/2026-10-24/notes",
+            f"/nutrition/menus/{test_day}/notes",
             json={"kind": "info", "text": "чи можна сир на сніданок?"},
         )
         assert note_resp.status_code == 201
@@ -188,7 +192,7 @@ async def test_day_menu_contains_notes_and_off_plan(client: AsyncClient):
     off_resp = await client.post(
         "/nutrition/off-plan",
         json={
-            "date": "2026-10-24",
+            "date": str(test_day),
             "at": at_str,
             "text": "Перекус яблуком",
             "kcal_est": 60,
@@ -197,10 +201,10 @@ async def test_day_menu_contains_notes_and_off_plan(client: AsyncClient):
     assert off_resp.status_code == 201
 
     # GET /nutrition/menus/{date}
-    day_resp = await client.get("/nutrition/menus/2026-10-24")
+    day_resp = await client.get(f"/nutrition/menus/{test_day}")
     assert day_resp.status_code == 200
     day_data = day_resp.json()
-    assert day_data["date"] == "2026-10-24"
+    assert day_data["date"] == str(test_day)
 
     assert len(day_data["menus"]) == 2
     assert [m["meal_type"] for m in day_data["menus"]] == ["breakfast", "lunch"]
@@ -218,7 +222,7 @@ async def test_day_menu_contains_notes_and_off_plan(client: AsyncClient):
 
 @pytest.mark.asyncio
 async def test_day_menu_404_rule(client: AsyncClient):
-    date_str = "2026-10-25"
+    date_str = (datetime.now(UTC).date() + timedelta(days=2)).isoformat()
 
     # 1. Day with nothing -> 404
     resp = await client.get(f"/nutrition/menus/{date_str}")
