@@ -14,6 +14,7 @@ from auth.models import (
     TokenResponse,
 )
 from auth.security import hash_token
+from config import get_settings
 from db import SessionDep
 from users import crud as users_crud
 
@@ -25,7 +26,15 @@ async def request_magic_link(
     data: MagicLinkRequest,
     session: SessionDep,
 ) -> dict[str, str]:
-    await service.request_magic_link(session, data.email)
+    settings = get_settings()
+    if data.login_url is not None and data.login_url not in settings.magic_link_allowed_base_urls:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="login_url is not allowed",
+        )
+    await service.request_magic_link(
+        session, data.email, base_url=data.login_url or settings.magic_link_base_url
+    )
     return {"detail": "If the address is registered, a link has been sent"}
 
 

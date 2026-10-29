@@ -6,6 +6,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from admin.router import router as admin_router
 from auth.router import router as auth_router
 from auth.webauthn import router as webauthn_router
 from cleanup.worker import run_cleanup_worker
@@ -84,7 +85,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
-    allow_headers=["Authorization", "Content-Type"],
+    allow_headers=["Authorization", "Content-Type", "X-Client"],
     allow_credentials=False,
 )
 
@@ -96,6 +97,7 @@ app.include_router(reminders_router)
 app.include_router(export_router)
 app.include_router(users_router)
 app.include_router(nutrition_router)
+app.include_router(admin_router)
 
 
 @app.get("/health", include_in_schema=False)
