@@ -56,10 +56,16 @@ async def test_metadata_lists_registered_tables_and_hides_secrets(client_factory
 
     tables_by_name = {t["name"]: t for t in tables}
 
-    # Ukrainian labels check
-    assert tables_by_name["users"]["label"] == "Користувачі"
-    assert tables_by_name["measurements"]["label"] == "Вимірювання"
-    assert tables_by_name["prescriptions"]["label"] == "Призначення"
+    # Module checks and no label
+    for t in tables:
+        assert "label" not in t
+
+    assert tables_by_name["users"]["module"] == "users"
+    assert tables_by_name["sessions"]["module"] == "auth"
+    assert tables_by_name["dishes"]["module"] == "nutrition"
+
+    # Sorted by (module, name)
+    assert tables == sorted(tables, key=lambda t: (t["module"], t["name"]))
 
     # Permission checks
     assert tables_by_name["users"]["can_create"] is True

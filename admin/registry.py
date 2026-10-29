@@ -33,7 +33,6 @@ from users.models import User
 @dataclass(frozen=True)
 class TableConfig:
     model: type[SQLModel]
-    label: str
     can_create: bool = False
     can_update: bool = False
     can_delete: bool = False
@@ -70,7 +69,6 @@ TABLE_REGISTRY: dict[str, TableConfig] = {
     # users: create/update/delete; id, created_at derived read-only
     User.__tablename__: TableConfig(
         model=User,
-        label="Користувачі",
         can_create=True,
         can_update=True,
         can_delete=True,
@@ -78,28 +76,24 @@ TABLE_REGISTRY: dict[str, TableConfig] = {
     # measurements: full CRUD; id derived read-only; recorded_at is editable (offline-first)
     Measurement.__tablename__: TableConfig(
         model=Measurement,
-        label="Вимірювання",
         can_create=True,
         can_update=True,
         can_delete=True,
     ),
     Prescription.__tablename__: TableConfig(
         model=Prescription,
-        label="Призначення",
         can_create=True,
         can_update=True,
         can_delete=True,
     ),
     MedicationItem.__tablename__: TableConfig(
         model=MedicationItem,
-        label="Медикаменти",
         can_create=True,
         can_update=True,
         can_delete=True,
     ),
     ReminderConfig.__tablename__: TableConfig(
         model=ReminderConfig,
-        label="Налаштування нагадувань",
         can_create=True,
         can_update=True,
         can_delete=True,
@@ -107,7 +101,6 @@ TABLE_REGISTRY: dict[str, TableConfig] = {
     # intake_reports: id derived; recorded_at is server timestamp (read-only)
     IntakeReport.__tablename__: TableConfig(
         model=IntakeReport,
-        label="Звіти про прийом",
         can_create=True,
         can_update=True,
         can_delete=True,
@@ -116,112 +109,96 @@ TABLE_REGISTRY: dict[str, TableConfig] = {
     # all nutrition tables (nutrition/models): full CRUD, except generation log: read + delete only
     Dish.__tablename__: TableConfig(
         model=Dish,
-        label="Страви",
         can_create=True,
         can_update=True,
         can_delete=True,
     ),
     DishComponent.__tablename__: TableConfig(
         model=DishComponent,
-        label="Компоненти страв",
         can_create=True,
         can_update=True,
         can_delete=True,
     ),
     FrequentDish.__tablename__: TableConfig(
         model=FrequentDish,
-        label="Часті страви",
         can_create=True,
         can_update=True,
         can_delete=True,
     ),
     FrequentDishComponent.__tablename__: TableConfig(
         model=FrequentDishComponent,
-        label="Компоненти частих страв",
         can_create=True,
         can_update=True,
         can_delete=True,
     ),
     GenerationLog.__tablename__: TableConfig(
         model=GenerationLog,
-        label="Журнал генерацій",
         can_create=False,
         can_update=False,
         can_delete=True,
     ),
     Menu.__tablename__: TableConfig(
         model=Menu,
-        label="Меню",
         can_create=True,
         can_update=True,
         can_delete=True,
     ),
     MenuDay.__tablename__: TableConfig(
         model=MenuDay,
-        label="Дні меню",
         can_create=True,
         can_update=True,
         can_delete=True,
     ),
     MenuItem.__tablename__: TableConfig(
         model=MenuItem,
-        label="Елементи меню",
         can_create=True,
         can_update=True,
         can_delete=True,
     ),
     MenuNote.__tablename__: TableConfig(
         model=MenuNote,
-        label="Нотатки до меню",
         can_create=True,
         can_update=True,
         can_delete=True,
     ),
     OffPlanEntry.__tablename__: TableConfig(
         model=OffPlanEntry,
-        label="Позапланові прийоми",
         can_create=True,
         can_update=True,
         can_delete=True,
     ),
     PinnedMeal.__tablename__: TableConfig(
         model=PinnedMeal,
-        label="Закріплені прийоми",
         can_create=True,
         can_update=True,
         can_delete=True,
     ),
     PinnedMealItem.__tablename__: TableConfig(
         model=PinnedMealItem,
-        label="Елементи закріплених прийомів",
         can_create=True,
         can_update=True,
         can_delete=True,
     ),
     Product.__tablename__: TableConfig(
         model=Product,
-        label="Продукти",
         can_create=True,
         can_update=True,
         can_delete=True,
     ),
     NutritionProfile.__tablename__: TableConfig(
         model=NutritionProfile,
-        label="Профілі харчування",
         can_create=True,
         can_update=True,
         can_delete=True,
     ),
     Recipe.__tablename__: TableConfig(
         model=Recipe,
-        label="Рецепти",
         can_create=True,
         can_update=True,
         can_delete=True,
     ),
     RecipeProduct.__tablename__: TableConfig(
         model=RecipeProduct,
-        label="Інгредієнти рецептів",
         can_create=True,
         can_update=True,
         can_delete=True,
@@ -230,7 +207,6 @@ TABLE_REGISTRY: dict[str, TableConfig] = {
     # token hashes and public keys hidden
     Session.__tablename__: TableConfig(
         model=Session,
-        label="Сесії",
         can_create=False,
         can_update=False,
         can_delete=True,
@@ -238,7 +214,6 @@ TABLE_REGISTRY: dict[str, TableConfig] = {
     ),
     WebAuthnCredential.__tablename__: TableConfig(
         model=WebAuthnCredential,
-        label="Облікові дані WebAuthn",
         can_create=False,
         can_update=False,
         can_delete=True,
@@ -247,14 +222,12 @@ TABLE_REGISTRY: dict[str, TableConfig] = {
     # email outbox and export state: read only
     EmailOutbox.__tablename__: TableConfig(
         model=EmailOutbox,
-        label="Вихідні листи",
         can_create=False,
         can_update=False,
         can_delete=False,
     ),
     ExportState.__tablename__: TableConfig(
         model=ExportState,
-        label="Стан експорту",
         can_create=False,
         can_update=False,
         can_delete=False,
