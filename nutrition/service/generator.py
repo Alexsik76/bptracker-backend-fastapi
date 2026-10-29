@@ -8,6 +8,7 @@ from pydantic import ValidationError
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 import gemini_infra
+from app_settings import ai_config, nutrition_config
 from config import Settings
 from gemini_infra.types import GeminiInvalidResponse, GeminiUnavailable
 from nutrition import crud
@@ -44,7 +45,7 @@ def log_llm_exchange(
     raw_response: str | None,
 ) -> None:
     """Emit full LLM prompt and response exchange record to nutrition.llm at INFO."""
-    if not settings.llm_exchange_log:
+    if not ai_config.llm_exchange_log():
         return
     llm_logger.info(
         "user_id=%s date=%s scope=%s model=%s prompt_version=%s duration_ms=%s "
@@ -158,7 +159,7 @@ async def generate_menu(
         menu_date=menu_date,
         scope=scope.value,
         target_meal_type=meal_type,
-        history_days=settings.menu_history_days,
+        history_days=nutrition_config.menu_history_days(),
         now=now,
     )
 
@@ -179,7 +180,7 @@ async def generate_menu(
     try:
         gemini_result = await gemini_infra.generate_json(
             prompt=prompt,
-            model=settings.gemini_menu_model,
+            model=ai_config.menu_model(),
             settings=settings,
             response_schema=build_gemini_response_schema(
                 context.dishes_map.keys(),
@@ -196,7 +197,7 @@ async def generate_menu(
             user_id=user_id,
             menu_date=menu_date,
             scope=scope.value,
-            model=settings.gemini_menu_model,
+            model=ai_config.menu_model(),
             prompt_version=PROMPT_VERSION,
             duration_ms=duration_ms,
             input_tokens=input_tokens,
@@ -212,7 +213,7 @@ async def generate_menu(
             user_id=user_id,
             menu_date=menu_date,
             scope=scope.value,
-            model=settings.gemini_menu_model,
+            model=ai_config.menu_model(),
             prompt_version=PROMPT_VERSION,
             duration_ms=duration_ms,
             input_tokens=None,
@@ -225,7 +226,7 @@ async def generate_menu(
             user_id=user_id,
             menu_date=menu_date,
             scope=scope.value,
-            model=settings.gemini_menu_model,
+            model=ai_config.menu_model(),
             prompt_version=PROMPT_VERSION,
             prompt=prompt,
             duration_ms=duration_ms,
@@ -243,7 +244,7 @@ async def generate_menu(
             user_id=user_id,
             menu_date=menu_date,
             scope=scope.value,
-            model=settings.gemini_menu_model,
+            model=ai_config.menu_model(),
             prompt_version=PROMPT_VERSION,
             duration_ms=duration_ms,
             input_tokens=input_tokens,
@@ -256,7 +257,7 @@ async def generate_menu(
             user_id=user_id,
             menu_date=menu_date,
             scope=scope.value,
-            model=settings.gemini_menu_model,
+            model=ai_config.menu_model(),
             prompt_version=PROMPT_VERSION,
             prompt=prompt,
             duration_ms=duration_ms,
@@ -287,7 +288,7 @@ async def generate_menu(
             user_id=user_id,
             menu_date=menu_date,
             scope=scope.value,
-            model=settings.gemini_menu_model,
+            model=ai_config.menu_model(),
             prompt_version=PROMPT_VERSION,
             prompt=prompt,
             duration_ms=duration_ms,
@@ -344,7 +345,7 @@ async def generate_menu(
         user_id=user_id,
         menu_date=menu_date,
         scope=scope.value,
-        model=settings.gemini_menu_model,
+        model=ai_config.menu_model(),
         prompt_version=PROMPT_VERSION,
         prompt=prompt,
         duration_ms=duration_ms,

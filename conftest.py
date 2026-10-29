@@ -55,6 +55,7 @@ os.environ["ALLOWED_EMAILS"] = ",".join(
 
 # Models must be imported so their tables register on SQLModel.metadata.
 from activity import models as _act  # noqa: F401
+from app_settings import models as _as  # noqa: F401
 from auth import models as _a  # noqa: F401
 from auth.deps import get_current_user_id
 from auth.webauthn import models as _w  # noqa: F401

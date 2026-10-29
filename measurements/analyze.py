@@ -6,6 +6,7 @@ import httpx
 from pydantic import ValidationError
 from sqlmodel import SQLModel
 
+from app_settings import ai_config
 from config import Settings
 from measurements.models import MeasurementBase
 
@@ -45,7 +46,7 @@ async def analyze_image(
 
     url = (
         "https://generativelanguage.googleapis.com/v1beta/models/"
-        f"{settings.gemini_model}:generateContent"
+        f"{ai_config.analyze_model()}:generateContent"
     )
     headers = {
         "x-goog-api-key": settings.gemini_api_key,
@@ -72,7 +73,7 @@ async def analyze_image(
     }
 
     try:
-        async with httpx.AsyncClient(timeout=settings.gemini_timeout_seconds) as client:
+        async with httpx.AsyncClient(timeout=ai_config.timeout_seconds()) as client:
             response = await client.post(url, json=payload, headers=headers)
     except httpx.HTTPError as exc:
         logger.error("Gemini connection error or timeout: %s", exc)
