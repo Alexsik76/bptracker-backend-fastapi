@@ -27,7 +27,7 @@ class ColumnMetadata(BaseModel):
 
 class TableMetadata(BaseModel):
     name: str
-    label: str
+    module: str
     primary_key: list[str]
     columns: list[ColumnMetadata]
     can_create: bool

@@ -284,10 +284,11 @@ def get_tables_metadata() -> list[dict[str, Any]]:
                 }
             )
 
+        module = cfg.model.__module__.split(".")[0]
         result.append(
             {
                 "name": table_name,
-                "label": cfg.label,
+                "module": module,
                 "primary_key": pk_cols,
                 "columns": columns_meta,
                 "can_create": cfg.can_create,
@@ -295,6 +296,7 @@ def get_tables_metadata() -> list[dict[str, Any]]:
                 "can_delete": cfg.can_delete,
             }
         )
+    result.sort(key=lambda t: (t["module"], t["name"]))
     return result
 
 
