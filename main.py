@@ -6,6 +6,9 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from activity.middleware import ActivityMiddleware
+from activity.writer import run_activity_writer
+from admin.activity_router import router as admin_activity_router
 from admin.router import router as admin_router
 from auth.router import router as auth_router
 from auth.webauthn import router as webauthn_router
@@ -56,6 +59,16 @@ async def lifespan(app: FastAPI):
         )
         logger.info("Cleanup worker background task started.")
 
+    activity_writer_task = None
+    if settings.activity_log_enabled and settings.activity_writer_enabled:
+        activity_writer_task = asyncio.create_task(
+            run_activity_writer(
+                session_factory=async_session_factory,
+                settings=settings,
+            )
+        )
+        logger.info("Activity writer background task started.")
+
     try:
         yield
     finally:
@@ -77,10 +90,20 @@ async def lifespan(app: FastAPI):
                 pass
             logger.info("Cleanup worker background task stopped.")
 
+        if activity_writer_task is not None:
+            logger.info("Cancelling activity writer background task...")
+            activity_writer_task.cancel()
+            try:
+                await activity_writer_task
+            except asyncio.CancelledError:
+                pass
+            logger.info("Activity writer background task stopped.")
+
 
 app = FastAPI(title="BP Tracker API", lifespan=lifespan)
 
 settings = get_settings()
+app.add_middleware(ActivityMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,
@@ -98,6 +121,7 @@ app.include_router(export_router)
 app.include_router(users_router)
 app.include_router(nutrition_router)
 app.include_router(admin_router)
+app.include_router(admin_activity_router)
 
 
 @app.get("/health", include_in_schema=False)

@@ -3,13 +3,13 @@ from logging.config import fileConfig
 from sqlalchemy import create_engine, pool
 from sqlmodel import SQLModel
 
-from alembic import context
-
 # Settings own the single source of truth for the DB URL (a SQLAlchemy URL object,
 # not a string — special chars in the password are escaped by URL.create).
 # Importing each module's models below registers their tables on SQLModel.metadata.
 # env.py is migration infrastructure, not a domain module — it is the one place
 # allowed to import every module. Add a line per table-owning module.
+from activity import models as _activity_models  # noqa: F401
+from alembic import context
 from auth import models as _auth_models  # noqa: F401
 from auth.webauthn import models as _webauthn_models  # noqa: F401
 from config import get_settings

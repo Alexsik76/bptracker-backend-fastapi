@@ -19,6 +19,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 
 os.environ["EMAIL_OUTBOX_WORKER_ENABLED"] = "False"
 os.environ["CLEANUP_WORKER_ENABLED"] = "False"
+os.environ["ACTIVITY_WRITER_ENABLED"] = "False"
 os.environ["GEMINI_API_KEY"] = "dummy-test-key-12345"
 os.environ["CORS_ORIGINS"] = "http://localhost:5173"
 os.environ["ADMIN_EMAILS"] = "admin@example.com"
@@ -53,6 +54,7 @@ os.environ["ALLOWED_EMAILS"] = ",".join(
 )
 
 # Models must be imported so their tables register on SQLModel.metadata.
+from activity import models as _act  # noqa: F401
 from auth import models as _a  # noqa: F401
 from auth.deps import get_current_user_id
 from auth.webauthn import models as _w  # noqa: F401
