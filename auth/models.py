@@ -18,6 +18,7 @@ NormalizedEmail = Annotated[EmailStr, AfterValidator(lowercase_email)]
 
 class MagicLinkRequest(SQLModel):
     email: NormalizedEmail
+    login_url: str | None = Field(default=None, max_length=500)
 
 
 class MagicLinkConfirm(SQLModel):

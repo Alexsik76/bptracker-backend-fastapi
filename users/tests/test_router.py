@@ -17,6 +17,7 @@ async def test_get_me_returns_caller_profile(client_factory, make_user):
     assert data["id"] == str(user_id)
     assert data["email"] == "profile_test@example.com"
     assert data["display_name"] is None
+    assert data["is_admin"] is False
     assert "last_export_at" not in data
 
 
@@ -144,3 +145,27 @@ async def test_delete_me_success(client_factory, make_user, session):
 
     has_l_after = (await session.exec(select(MagicLink).where(MagicLink.email == email))).first()
     assert has_l_after is None
+
+
+@pytest.mark.asyncio
+async def test_get_me_is_admin_true_for_admin_email(client_factory, make_user):
+    user_id = await make_user("admin@example.com")
+    client = client_factory(user_id)
+    response = await client.get("/users/me")
+    assert response.status_code == 200
+    assert response.json()["is_admin"] is True
+
+
+@pytest.mark.asyncio
+async def test_patch_me_is_admin_reflects_admin_status(client_factory, make_user):
+    admin_id = await make_user("admin@example.com")
+    admin_client = client_factory(admin_id)
+    patch_resp = await admin_client.patch("/users/me", json={"display_name": "Admin User"})
+    assert patch_resp.status_code == 200
+    assert patch_resp.json()["is_admin"] is True
+
+    user_id = await make_user("user_a@example.com")
+    user_client = client_factory(user_id)
+    patch_resp2 = await user_client.patch("/users/me", json={"display_name": "Regular User"})
+    assert patch_resp2.status_code == 200
+    assert patch_resp2.json()["is_admin"] is False

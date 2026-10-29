@@ -241,3 +241,46 @@ async def test_confirm_magic_link_invalid_token(client):
     # Assert
     assert response.status_code == 401
     assert response.json()["detail"] == "Incorrect or expired token"
+
+
+@pytest.mark.asyncio
+async def test_request_magic_link_allowed_login_url(client, session: AsyncSession):
+    email = "alice@example.com"
+    allowed_url = "https://client.example.com/login"
+
+    response = await client.post(
+        "/auth/magic-link/request",
+        json={"email": email, "login_url": allowed_url},
+    )
+    assert response.status_code == 202
+
+    statement_outbox = select(EmailOutbox).where(EmailOutbox.to == email)
+    outbox_item = (await session.exec(statement_outbox)).first()
+    assert outbox_item is not None
+    assert f"{allowed_url}?token=" in outbox_item.body
+
+
+@pytest.mark.asyncio
+async def test_request_magic_link_disallowed_login_url(client):
+    email = "alice@example.com"
+    response = await client.post(
+        "/auth/magic-link/request",
+        json={"email": email, "login_url": "https://evil.example.com/login"},
+    )
+    assert response.status_code == 422
+    assert response.json()["detail"] == "login_url is not allowed"
+
+
+@pytest.mark.asyncio
+async def test_request_magic_link_absent_login_url(client, session: AsyncSession):
+    email = "happy@example.com"
+    response = await client.post(
+        "/auth/magic-link/request",
+        json={"email": email},
+    )
+    assert response.status_code == 202
+
+    statement_outbox = select(EmailOutbox).where(EmailOutbox.to == email)
+    outbox_item = (await session.exec(statement_outbox)).first()
+    assert outbox_item is not None
+    assert "http://localhost:3000/auth/confirm?token=" in outbox_item.body

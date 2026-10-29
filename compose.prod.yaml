@@ -52,6 +52,8 @@ services:
       GEMINI_API_KEY: ${GEMINI_API_KEY:?GEMINI_API_KEY is required}
       ALLOWED_EMAILS: ${ALLOWED_EMAILS:?ALLOWED_EMAILS is required}
       CORS_ORIGINS: ${CORS_ORIGINS:?CORS_ORIGINS is required}
+      MAGIC_LINK_ALLOWED_BASE_URLS: ${MAGIC_LINK_ALLOWED_BASE_URLS:-}
+      ADMIN_EMAILS: ${ADMIN_EMAILS:-}
 
       # Other configurable values with sane defaults
       SMTP_PORT: ${SMTP_PORT:-587}

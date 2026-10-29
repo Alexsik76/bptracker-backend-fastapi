@@ -42,3 +42,19 @@ async def test_cors_plain_get_allowed_origin():
         )
         assert response.status_code == 200
         assert response.headers.get("access-control-allow-origin") == "http://localhost:5173"
+
+
+@pytest.mark.asyncio
+async def test_cors_preflight_allows_x_client_header():
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.options(
+            "/health",
+            headers={
+                "Origin": "http://localhost:5173",
+                "Access-Control-Request-Method": "GET",
+                "Access-Control-Request-Headers": "X-Client",
+            },
+        )
+        assert response.status_code == 200
+        allow_headers = response.headers.get("access-control-allow-headers", "").lower()
+        assert "x-client" in allow_headers

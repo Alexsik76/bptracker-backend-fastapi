@@ -33,6 +33,7 @@ class UserRead(SQLModel):
     email: EmailStr
     display_name: str | None = None
     created_at: datetime
+    is_admin: bool = False
 
 
 class UserUpdate(SQLModel):

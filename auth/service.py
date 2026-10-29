@@ -40,7 +40,9 @@ class TokenPair:
     expires_in: int
 
 
-async def request_magic_link(db_session: AsyncSession, email: str) -> None:
+async def request_magic_link(
+    db_session: AsyncSession, email: str, *, base_url: str | None = None
+) -> None:
     settings = get_settings()
     if email in settings.allowed_emails:
         await users_crud.get_or_create_user_by_email(db_session, email)
@@ -55,7 +57,8 @@ async def request_magic_link(db_session: AsyncSession, email: str) -> None:
             expires_at=expires_at,
         )
 
-        magic_link = f"{settings.magic_link_base_url}?token={raw_token}"
+        effective_base_url = base_url or settings.magic_link_base_url
+        magic_link = f"{effective_base_url}?token={raw_token}"
 
         subject = "Your Magic Login Link"
         text = (

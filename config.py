@@ -13,7 +13,13 @@ class Environment(StrEnum):
     PROD = "prod"
 
 
-def _parse_csv(value: Any, *, field_name: str, lowercase: bool = False) -> Any:
+def _parse_csv(
+    value: Any,
+    *,
+    field_name: str,
+    lowercase: bool = False,
+    allow_empty: bool = False,
+) -> Any:
     """Parse a comma-separated env var into a list of non-empty, stripped items.
 
     Values that are already lists are normalised the same way. Any other type is
@@ -21,6 +27,8 @@ def _parse_csv(value: Any, *, field_name: str, lowercase: bool = False) -> Any:
     """
     if isinstance(value, str):
         if not value.strip():
+            if allow_empty:
+                return []
             raise ValueError(f"{field_name} cannot be empty")
         # Split on commas and/or any whitespace. Both are safe separators here: none of
         # the list-valued settings (origins, emails) contain internal whitespace, and
@@ -29,6 +37,8 @@ def _parse_csv(value: Any, *, field_name: str, lowercase: bool = False) -> Any:
         if lowercase:
             parsed = [item.lower() for item in parsed]
         if not parsed:
+            if allow_empty:
+                return []
             raise ValueError(f"{field_name} cannot be empty")
         return parsed
 
@@ -38,6 +48,8 @@ def _parse_csv(value: Any, *, field_name: str, lowercase: bool = False) -> Any:
             parsed = [item.lower() for item in parsed]
         parsed = [item for item in parsed if item]
         if not parsed:
+            if allow_empty:
+                return []
             raise ValueError(f"{field_name} cannot be empty")
         return parsed
 
@@ -78,6 +90,7 @@ class Settings(BaseSettings):
     magic_link_base_url: str
     magic_link_ttl_minutes: int = 15
     magic_link_token_bytes: int = 32
+    magic_link_allowed_base_urls: Annotated[list[str], NoDecode] = []
 
     email_outbox_poll_seconds: int = 30
     email_outbox_batch_size: int = 50
@@ -108,8 +121,14 @@ class Settings(BaseSettings):
 
     # ALLOWED_EMAILS gates account creation. Only emails in this list can request a magic link.
     allowed_emails: Annotated[list[str], NoDecode]
+    admin_emails: Annotated[list[str], NoDecode] = []
 
     cors_origins: Annotated[list[str], NoDecode]
+
+    @field_validator("magic_link_allowed_base_urls", mode="before")
+    @classmethod
+    def parse_magic_link_allowed_base_urls(cls, v: Any) -> Any:
+        return _parse_csv(v, field_name="magic_link_allowed_base_urls", allow_empty=True)
 
     @field_validator("webauthn_origins", mode="before")
     @classmethod
@@ -120,6 +139,11 @@ class Settings(BaseSettings):
     @classmethod
     def parse_allowed_emails(cls, v: Any) -> Any:
         return _parse_csv(v, field_name="allowed_emails", lowercase=True)
+
+    @field_validator("admin_emails", mode="before")
+    @classmethod
+    def parse_admin_emails(cls, v: Any) -> Any:
+        return _parse_csv(v, field_name="admin_emails", lowercase=True, allow_empty=True)
 
     @field_validator("cors_origins", mode="before")
     @classmethod

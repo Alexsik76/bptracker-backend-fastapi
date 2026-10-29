@@ -21,6 +21,10 @@ os.environ["EMAIL_OUTBOX_WORKER_ENABLED"] = "False"
 os.environ["CLEANUP_WORKER_ENABLED"] = "False"
 os.environ["GEMINI_API_KEY"] = "dummy-test-key-12345"
 os.environ["CORS_ORIGINS"] = "http://localhost:5173"
+os.environ["ADMIN_EMAILS"] = "admin@example.com"
+os.environ["MAGIC_LINK_ALLOWED_BASE_URLS"] = (
+    "http://localhost:3000/auth/confirm https://client.example.com/login"
+)
 os.environ["ALLOWED_EMAILS"] = ",".join(
     [
         "testuser@example.com",
@@ -44,6 +48,7 @@ os.environ["ALLOWED_EMAILS"] = ",".join(
         "b@example.com",
         "foo@example.com",
         "test_session@example.com",
+        "admin@example.com",
     ]
 )
 
