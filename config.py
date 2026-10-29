@@ -101,6 +101,10 @@ class Settings(BaseSettings):
     cleanup_interval_minutes: int = 60
     cleanup_worker_enabled: bool = True
 
+    activity_log_enabled: bool = True
+    activity_writer_enabled: bool = True
+    activity_retention_days: int = 180
+
     gemini_api_key: str
     gemini_model: str = "gemini-2.0-flash"
     gemini_menu_model: str = "gemini-2.0-flash"
