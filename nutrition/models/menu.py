@@ -29,6 +29,7 @@ from nutrition.models.enums import (
     MenuStatus,
     NutritionSource,
 )
+from nutrition.models.evaluation import MenuEvaluationRead
 from nutrition.models.notes_and_offplan import MenuNoteRead, OffPlanEntryRead
 from nutrition.models.nutrition import NutritionSet
 
@@ -310,6 +311,7 @@ class DayMenuRead(SQLModel):
     can_generate_day: bool = False
     day_generation_replaces_manual: bool = False
     stock_warnings: list[StockWarning] = []
+    evaluations: list[MenuEvaluationRead] = []
 
     @model_validator(mode="after")
     def compute_canvas_flags(self) -> "DayMenuRead":

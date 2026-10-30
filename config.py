@@ -111,6 +111,12 @@ class Settings(BaseSettings):
     gemini_timeout_seconds: int = 30
     analyze_max_file_bytes: int = 10 * 1024 * 1024
 
+    typesafe_api_key: str | None = None
+    typesafe_base_url: str = "https://api.typesafe.ai"
+    jev_model: str = "jev-latest"
+    jev_timeout_seconds: int = 10
+    jev_min_confidence_percent: int = 50
+
     menu_history_days: int = 3
     llm_exchange_log: bool = True
 

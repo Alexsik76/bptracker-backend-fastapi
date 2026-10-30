@@ -76,6 +76,28 @@ _DEFINITIONS = (
         env_attr="llm_exchange_log",
     ),
     SettingDef(
+        key="ai.jev.model",
+        label="TypeSafe JEV model for menu evaluation",
+        type="str",
+        env_attr="jev_model",
+    ),
+    SettingDef(
+        key="ai.jev.timeout_seconds",
+        label="TypeSafe JEV request timeout (seconds)",
+        type="int",
+        env_attr="jev_timeout_seconds",
+        min=2,
+        max=60,
+    ),
+    SettingDef(
+        key="ai.jev.min_confidence_percent",
+        label="Minimum confidence percent for JEV evaluation",
+        type="int",
+        env_attr="jev_min_confidence_percent",
+        min=0,
+        max=100,
+    ),
+    SettingDef(
         key="nutrition.menu_history_days",
         label="Days of menu history passed to the generator",
         type="int",

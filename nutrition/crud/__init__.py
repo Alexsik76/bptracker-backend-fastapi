@@ -5,6 +5,11 @@ from nutrition.crud.dish import (
     get_dishes,
     update_dish,
 )
+from nutrition.crud.evaluation import (
+    get_active_evaluation_criteria,
+    get_day_evaluations,
+    save_menu_day_evaluations,
+)
 from nutrition.crud.frequent_dish import (
     cook_frequent_dish,
     create_frequent_dish,
@@ -150,4 +155,7 @@ __all__ = [
     "delete_pinned_meal",
     "get_available_pins",
     "restore_pinned_meal",
+    "get_active_evaluation_criteria",
+    "save_menu_day_evaluations",
+    "get_day_evaluations",
 ]
