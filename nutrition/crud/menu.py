@@ -848,6 +848,7 @@ async def update_menu_item(
         and (
             (data.title is not None and data.title != item.title)
             or (data.portion_g is not None and data.portion_g != item.portion_g)
+            or (data.portion_text is not None and data.portion_text != item.portion_text)
         )
     ):
         for f in nutrition_fields:

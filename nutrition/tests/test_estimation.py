@@ -687,3 +687,88 @@ async def test_unchanged_patch_keeps_model_estimate(client: AsyncClient):
     changed_item = change_resp.json()
     assert changed_item["kcal"] is None
     assert changed_item["nutrition_source"] is None
+
+
+@pytest.mark.asyncio
+async def test_portion_text_change_resets_model_estimate(client: AsyncClient):
+    date_str = (datetime.now(UTC).date() + timedelta(days=2)).isoformat()
+    await client.post(f"/nutrition/menus/{date_str}/create")
+
+    # 1. Create item
+    resp = await client.post(
+        f"/nutrition/menus/{date_str}/items?meal_type=breakfast",
+        json={"title": "Вівсянка", "portion_g": 200, "portion_text": "200 г"},
+    )
+    item_id = resp.json()["id"]
+
+    # 2. Estimate with Gemini
+    mock_gemini = GeminiResult(
+        data={
+            "items": [
+                {
+                    "id": item_id,
+                    "kcal": 210.0,
+                    "protein_g": 8.0,
+                    "fat_g": 5.0,
+                    "carbs_g": 35.0,
+                    "fiber_g": 4.0,
+                    "sugar_g": 1.0,
+                    "sodium_mg": 5.0,
+                }
+            ]
+        },
+        raw_text="{}",
+        model="gemini-2.0-flash",
+        input_tokens=100,
+        output_tokens=50,
+    )
+    with patch("gemini_infra.generate_json", new_callable=AsyncMock) as mock_gen:
+        mock_gen.return_value = mock_gemini
+        est_resp = await client.post(f"/nutrition/menus/{date_str}/estimate")
+        assert est_resp.status_code == 200
+        breakfast = [m for m in est_resp.json()["menus"] if m["meal_type"] == "breakfast"][0]
+        assert breakfast["items"][0]["kcal"] == 210.0
+        assert breakfast["items"][0]["nutrition_source"] == "model"
+
+    # 3. PATCH with unchanged portion_text keeps model estimate
+    patch_resp = await client.patch(
+        f"/nutrition/menu-items/{item_id}",
+        json={"portion_text": "200 г"},
+    )
+    assert patch_resp.status_code == 200
+    patched_item = patch_resp.json()
+    assert patched_item["kcal"] == 210.0
+    assert patched_item["nutrition_source"] == "model"
+
+    # 4. PATCH with changed portion_text alone resets model estimate
+    change_resp = await client.patch(
+        f"/nutrition/menu-items/{item_id}",
+        json={"portion_text": "1 тарілка"},
+    )
+    assert change_resp.status_code == 200
+    changed_item = change_resp.json()
+    assert changed_item["portion_text"] == "1 тарілка"
+    assert changed_item["kcal"] is None
+    assert changed_item["protein_g"] is None
+    assert changed_item["fat_g"] is None
+    assert changed_item["carbs_g"] is None
+    assert changed_item["fiber_g"] is None
+    assert changed_item["sugar_g"] is None
+    assert changed_item["sodium_mg"] is None
+    assert changed_item["nutrition_source"] is None
+
+    # 5. Explicit nutrition values in the same request still win
+    with patch("gemini_infra.generate_json", new_callable=AsyncMock) as mock_gen:
+        mock_gen.return_value = mock_gemini
+        await client.post(f"/nutrition/menus/{date_str}/estimate")
+
+    explicit_resp = await client.patch(
+        f"/nutrition/menu-items/{item_id}",
+        json={"portion_text": "2 тарілки", "kcal": 420.0},
+    )
+    assert explicit_resp.status_code == 200
+    explicit_item = explicit_resp.json()
+    assert explicit_item["portion_text"] == "2 тарілки"
+    assert explicit_item["kcal"] == 420.0
+    assert explicit_item["nutrition_source"] == "user"
+
