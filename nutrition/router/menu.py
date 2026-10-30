@@ -2,7 +2,7 @@ from datetime import UTC, date, datetime
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 
 from auth.deps import CurrentUserId
 from config import Settings, get_settings
@@ -25,6 +25,7 @@ from nutrition.models import (
     OffPlanEntryRead,
 )
 from nutrition.service.estimator import estimate_day_kcal
+from nutrition.service.evaluator import evaluate_menu_day_background
 from nutrition.service.generator import (
     InvalidGenerationRequest,
     NothingToGenerateError,
@@ -65,6 +66,7 @@ async def get_day_menus(
         notes = await crud.get_menu_notes(session, user_id, menu_date)
         off_plan = await crud.get_off_plan_entries(session, user_id, menu_date)
         available_pins = await crud.get_available_pins(session, user_id, menu_date)
+        evaluations = await crud.get_day_evaluations(session, user_id, menu_date)
         return DayMenuRead(
             date=menu_date,
             day_created=True,
@@ -73,6 +75,7 @@ async def get_day_menus(
             off_plan=[OffPlanEntryRead.model_validate(e) for e in off_plan],
             available_pins=available_pins,
             stock_warnings=warnings,
+            evaluations=evaluations,
         )
 
     profile = await crud.get_nutrition_profile(session, user_id)
@@ -157,6 +160,7 @@ async def create_day(
     notes = await crud.get_menu_notes(session, user_id, menu_date)
     off_plan = await crud.get_off_plan_entries(session, user_id, menu_date)
     available_pins = await crud.get_available_pins(session, user_id, menu_date)
+    evaluations = await crud.get_day_evaluations(session, user_id, menu_date)
     return DayMenuRead(
         date=menu_date,
         day_created=True,
@@ -165,6 +169,7 @@ async def create_day(
         off_plan=[OffPlanEntryRead.model_validate(e) for e in off_plan],
         available_pins=available_pins,
         stock_warnings=warnings,
+        evaluations=evaluations,
     )
 
 
@@ -270,6 +275,7 @@ async def generate_menu_items(
     session: SessionDep,
     user_id: CurrentUserId,
     settings: Annotated[Settings, Depends(get_settings)],
+    background_tasks: BackgroundTasks,
 ) -> GenerationResultRead:
     if not await crud.is_day_created(session, user_id, menu_date):
         raise HTTPException(
@@ -277,7 +283,7 @@ async def generate_menu_items(
             detail="Day not created",
         )
     try:
-        return await generate_menu(
+        result = await generate_menu(
             session=session,
             user_id=user_id,
             menu_date=menu_date,
@@ -286,6 +292,13 @@ async def generate_menu_items(
             settings=settings,
             now=data.now,
         )
+        background_tasks.add_task(
+            evaluate_menu_day_background,
+            user_id=user_id,
+            menu_date=menu_date,
+            settings=settings,
+        )
+        return result
     except crud.DayNotCreatedError as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,

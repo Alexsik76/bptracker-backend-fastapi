@@ -25,6 +25,13 @@ from nutrition.models.enums import (
     ProductPreference,
     Sex,
 )
+from nutrition.models.evaluation import (
+    MenuDayEvaluation,
+    MenuDayEvaluationBase,
+    MenuEvaluationCriterion,
+    MenuEvaluationCriterionBase,
+    MenuEvaluationRead,
+)
 from nutrition.models.frequent_dish import (
     FrequentDish,
     FrequentDishBase,
@@ -189,4 +196,9 @@ __all__ = [
     "PinnedMealUpsert",
     "PinnedMealCreate",
     "PinnedMealRead",
+    "MenuEvaluationCriterionBase",
+    "MenuEvaluationCriterion",
+    "MenuDayEvaluationBase",
+    "MenuDayEvaluation",
+    "MenuEvaluationRead",
 ]
