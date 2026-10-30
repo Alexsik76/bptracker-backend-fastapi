@@ -15,6 +15,7 @@ from app_settings import ai_config
 from config import Settings
 from gemini_infra.types import GeminiInvalidResponse, GeminiUnavailable
 from nutrition import crud
+from nutrition.clock import utc_today
 from nutrition.models import (
     DayMenuRead,
     MealType,
@@ -159,7 +160,7 @@ async def estimate_product_nutrition(
         log_llm_exchange(
             settings=settings,
             user_id=user_id,
-            menu_date=date.today(),
+            menu_date=utc_today(),
             scope="product_estimate",
             model=ai_config.menu_model(),
             prompt_version=PRODUCT_ESTIMATE_PROMPT_VERSION,
@@ -172,7 +173,7 @@ async def estimate_product_nutrition(
         await crud.add_generation_log(
             session=session,
             user_id=user_id,
-            menu_date=date.today(),
+            menu_date=utc_today(),
             scope="product_estimate",
             model=ai_config.menu_model(),
             prompt_version=PRODUCT_ESTIMATE_PROMPT_VERSION,
@@ -189,7 +190,7 @@ async def estimate_product_nutrition(
         log_llm_exchange(
             settings=settings,
             user_id=user_id,
-            menu_date=date.today(),
+            menu_date=utc_today(),
             scope="product_estimate",
             model=ai_config.menu_model(),
             prompt_version=PRODUCT_ESTIMATE_PROMPT_VERSION,

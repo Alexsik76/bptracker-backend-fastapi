@@ -485,6 +485,20 @@ async def has_menu_rows(
     return (await session.exec(stmt)).first() is not None
 
 
+async def get_removed_meal_types(
+    session: AsyncSession,
+    user_id: UUID,
+    menu_date: dt_date,
+) -> set[MealType]:
+    """Return the set of meal types with a removal tombstone for a user on a given date."""
+    stmt = select(Menu.meal_type).where(
+        Menu.user_id == user_id,
+        Menu.date == menu_date,
+        Menu.removed.is_(True),
+    )
+    return set((await session.exec(stmt)).all())
+
+
 async def get_menu(
     session: AsyncSession,
     user_id: UUID,

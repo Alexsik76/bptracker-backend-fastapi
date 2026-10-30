@@ -5,6 +5,7 @@ from uuid import UUID
 from sqlmodel import col, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
+from nutrition.clock import utc_today
 from nutrition.crud.menu import (
     EatenMealImmutableError,
     get_menu_read,
@@ -140,7 +141,7 @@ async def cleanup_unmarked_materialized_pinned_menus(
     """
     stmt = select(Menu).where(
         Menu.user_id == user_id,
-        Menu.date >= dt_date.today(),
+        Menu.date >= utc_today(),
         Menu.meal_type == meal_type,
         Menu.eaten_at.is_(None),
         Menu.pinned_meal_id.is_not(None),
@@ -212,7 +213,7 @@ async def upsert_pinned_meal(
         from nutrition.service.pinned import materialize_pinned_meals
 
         day_stmt = select(MenuDay.date).where(
-            MenuDay.user_id == user_id, MenuDay.date >= dt_date.today()
+            MenuDay.user_id == user_id, MenuDay.date >= utc_today()
         )
         created_dates = (await session.exec(day_stmt)).all()
         for d in created_dates:

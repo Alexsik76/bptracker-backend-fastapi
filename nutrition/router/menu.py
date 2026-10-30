@@ -85,10 +85,13 @@ async def get_day_menus(
             detail="Menu not found",
         )
 
+    removed_types = await crud.get_removed_meal_types(session, user_id, menu_date)
     now_time = eff_now.strftime("%H:%M")
     projected_menus: list[MenuRead] = []
     if profile and profile.meals:
         for p_meal in profile.meals:
+            if p_meal.type in removed_types:
+                continue
             is_missed = (
                 (menu_date < local_now_date)
                 or (
