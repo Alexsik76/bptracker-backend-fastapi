@@ -2166,3 +2166,42 @@ async def test_meal_nutrition_snapshot_on_eaten_and_clear_on_unmark(client: Asyn
     assert d_it_unmarked["nutrition_source"] is None
     assert f_it_unmarked["nutrition_source"] == "user"
     assert f_it_unmarked["kcal"] == 45.0
+
+
+def test_utc_today():
+    from nutrition.clock import utc_today
+
+    assert utc_today() == datetime.now(UTC).date()
+
+
+@pytest.mark.asyncio
+async def test_uncreated_future_day_delete_meal_then_get(client: AsyncClient):
+    future_date = (datetime.now(UTC).date() + timedelta(days=3)).isoformat()
+    await client.put(
+        "/nutrition/profile",
+        json={
+            "sex": "male",
+            "birth_year": 1985,
+            "height_cm": 175,
+            "weight_kg": 75.0,
+            "target_weight_kg": 70.0,
+            "pace_kg_per_week": 0.5,
+            "meals": [
+                {"type": "breakfast", "time": "08:00"},
+                {"type": "lunch", "time": "13:00"},
+                {"type": "dinner", "time": "19:00"},
+            ],
+        },
+    )
+
+    del_resp = await client.delete(f"/nutrition/menus/{future_date}/meals/lunch")
+    assert del_resp.status_code == 204
+
+    get_resp = await client.get(f"/nutrition/menus/{future_date}")
+    assert get_resp.status_code == 200
+    data = get_resp.json()
+    assert data["day_created"] is False
+    meal_types = [m["meal_type"] for m in data["menus"]]
+    assert "lunch" not in meal_types
+    assert meal_types == ["breakfast", "dinner"]
+
