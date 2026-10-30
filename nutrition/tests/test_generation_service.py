@@ -370,6 +370,83 @@ def test_validate_generation_response_eaten_dish_not_double_counted():
     )
 
 
+def test_validate_generation_response_planned_other_meal_not_double_counted():
+    test_day = datetime.now(UTC).date() + timedelta(days=2)
+    user_id = uuid4()
+    dish_id = uuid4()
+    menu_id = uuid4()
+    now = datetime.now(UTC)
+
+    # 500g cooked, nothing eaten; planned uneaten Lunch reserves 250g, so the
+    # generation context passes an effective remaining_g of 250g.
+    buckwheat = DishRead(
+        id=dish_id,
+        user_id=user_id,
+        recipe_id=uuid4(),
+        name="гречка варена",
+        cooked_weight_g=500,
+        remaining_g=250,
+        created_at=now,
+        updated_at=now,
+    )
+    planned_lunch = MenuRead(
+        id=menu_id,
+        user_id=user_id,
+        date=test_day,
+        meal_type=MealType.LUNCH,
+        status=MenuStatus.PLANNED,
+        eaten_at=None,
+        regenerations=0,
+        created_at=now,
+        updated_at=now,
+        items=[
+            MenuItemRead(
+                id=uuid4(),
+                menu_id=menu_id,
+                dish_id=dish_id,
+                title="гречка варена",
+                portion_g=250,
+                portion_text="250 г",
+                kcal=257.0,
+                nutrition_source=NutritionSource.COMPUTED,
+                origin=MenuItemOrigin.GENERATED,
+                position=1,
+                updated_at=now,
+            )
+        ],
+    )
+
+    def dinner(portion: int) -> GenerationResponse:
+        return GenerationResponse(
+            rationale="Гречка на вечерю",
+            items=[
+                GeneratedMenuItem(
+                    meal_type=MealType.DINNER,
+                    dish_id=dish_id,
+                    title="гречка варена",
+                    portion_g=portion,
+                )
+            ],
+        )
+
+    validate_generation_response(
+        response=dinner(250),
+        dishes_map={dish_id: buckwheat},
+        products_map={},
+        existing_menus=[planned_lunch],
+        target_meal_type=MealType.DINNER,
+    )
+
+    with pytest.raises(ValueError, match="exceeds available remaining 250g"):
+        validate_generation_response(
+            response=dinner(300),
+            dishes_map={dish_id: buckwheat},
+            products_map={},
+            existing_menus=[planned_lunch],
+            target_meal_type=MealType.DINNER,
+        )
+
+
 def test_generator_context_without_recipes():
     test_day = datetime.now(UTC).date() + timedelta(days=2)
     user_id = uuid4()

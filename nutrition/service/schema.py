@@ -147,18 +147,11 @@ def validate_generation_response(
     dish_portions_used: dict[UUID, int] = {}
     locked_meal_types: set[MealType] = set()
 
+    # dishes_map carries effective remaining_g: portions reserved by locked or
+    # other-type uneaten meals are already deducted in build_generation_context.
     for menu in existing_menus:
         if not is_meal_generatable(menu):
             locked_meal_types.add(menu.meal_type)
-
-        if target_meal_type and menu.meal_type != target_meal_type:
-            # In meal scope, non-eaten meals of other types keep reserving portions
-            if menu.eaten_at is None:
-                for item in menu.items:
-                    if item.dish_id and item.portion_g:
-                        dish_portions_used[item.dish_id] = (
-                            dish_portions_used.get(item.dish_id, 0) + item.portion_g
-                        )
 
     # Ignore items for locked meal types since generator never overwrites them
     if target_meal_type:
