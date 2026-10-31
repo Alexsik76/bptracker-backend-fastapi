@@ -20,6 +20,7 @@ from db import async_session_factory
 from email_infra import get_email_sender
 from email_infra.worker import run_email_outbox_worker
 from export.router import router as export_router
+from health_records.router import router as health_records_router
 from measurements.router import router as measurements_router
 from nutrition.router import router as nutrition_router
 from prescriptions.router import router as prescriptions_router
@@ -133,6 +134,7 @@ app.include_router(measurements_router)
 app.include_router(prescriptions_router)
 app.include_router(reminders_router)
 app.include_router(export_router)
+app.include_router(health_records_router)
 app.include_router(users_router)
 app.include_router(nutrition_router)
 app.include_router(admin_router)

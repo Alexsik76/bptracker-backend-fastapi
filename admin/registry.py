@@ -6,6 +6,7 @@ from auth.models import Session
 from auth.webauthn.models import WebAuthnCredential
 from email_infra.models import EmailOutbox
 from export.models import ExportState
+from health_records.models import HealthRecord
 from measurements.models import Measurement
 from nutrition.models import (
     Dish,
@@ -231,5 +232,11 @@ TABLE_REGISTRY: dict[str, TableConfig] = {
         can_create=False,
         can_update=False,
         can_delete=False,
+    ),
+    HealthRecord.__tablename__: TableConfig(
+        model=HealthRecord,
+        can_create=False,
+        can_update=False,
+        can_delete=True,
     ),
 }
