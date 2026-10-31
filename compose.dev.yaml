@@ -69,6 +69,9 @@ services:
       LLM_EXCHANGE_LOG: ${LLM_EXCHANGE_LOG:-True}
       ACTIVITY_LOG_ENABLED: ${ACTIVITY_LOG_ENABLED:-True}
       ACTIVITY_RETENTION_DAYS: ${ACTIVITY_RETENTION_DAYS:-180}
+      OCR_PHOTOS_DIR: ${OCR_PHOTOS_DIR:-/data/aivm_folder}
+      OCR_MODELS_DIR: ${OCR_MODELS_DIR:-/data/ocr_models}
+      OCR_TRAINER_TOKEN: ${OCR_TRAINER_TOKEN:-}
 
 volumes:
   bp_fa_pgdata:

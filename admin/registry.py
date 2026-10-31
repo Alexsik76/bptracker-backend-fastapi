@@ -26,6 +26,13 @@ from nutrition.models import (
     Recipe,
     RecipeProduct,
 )
+from ocr_training.models import (
+    OcrDataset,
+    OcrDatasetSample,
+    OcrModel,
+    OcrSample,
+    OcrTrainingJob,
+)
 from prescriptions.models import MedicationItem, Prescription
 from reminders.models import IntakeReport, ReminderConfig
 from users.models import User
@@ -106,6 +113,25 @@ TABLE_REGISTRY: dict[str, TableConfig] = {
         can_update=True,
         can_delete=True,
         read_only_columns=frozenset({"recorded_at"}),
+    ),
+    OcrSample.__tablename__: TableConfig(
+        model=OcrSample,
+        can_update=True,
+        can_delete=True,
+    ),
+    OcrDataset.__tablename__: TableConfig(
+        model=OcrDataset,
+        can_delete=True,
+    ),
+    OcrDatasetSample.__tablename__: TableConfig(
+        model=OcrDatasetSample,
+        can_delete=True,
+    ),
+    OcrTrainingJob.__tablename__: TableConfig(
+        model=OcrTrainingJob,
+    ),
+    OcrModel.__tablename__: TableConfig(
+        model=OcrModel,
     ),
     # all nutrition tables (nutrition/models): full CRUD, except generation log: read + delete only
     Dish.__tablename__: TableConfig(

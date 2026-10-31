@@ -1,6 +1,7 @@
 import re
 from enum import StrEnum
 from functools import lru_cache
+from pathlib import Path
 from typing import Annotated, Any
 
 from pydantic import field_validator
@@ -134,6 +135,10 @@ class Settings(BaseSettings):
     admin_emails: Annotated[list[str], NoDecode] = []
 
     cors_origins: Annotated[list[str], NoDecode]
+
+    ocr_photos_dir: Path = Path("/data/aivm_folder")
+    ocr_models_dir: Path = Path("/data/ocr_models")
+    ocr_trainer_token: str | None = None
 
     @field_validator("magic_link_allowed_base_urls", mode="before")
     @classmethod
