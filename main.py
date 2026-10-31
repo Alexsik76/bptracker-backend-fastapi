@@ -22,6 +22,8 @@ from email_infra.worker import run_email_outbox_worker
 from export.router import router as export_router
 from measurements.router import router as measurements_router
 from nutrition.router import router as nutrition_router
+from ocr_training.router import router as ocr_training_admin_router
+from ocr_training.trainer_router import router as ocr_training_trainer_router
 from prescriptions.router import router as prescriptions_router
 from reminders.router import router as reminders_router
 from users.router import router as users_router
@@ -135,6 +137,8 @@ app.include_router(reminders_router)
 app.include_router(export_router)
 app.include_router(users_router)
 app.include_router(nutrition_router)
+app.include_router(ocr_training_admin_router)
+app.include_router(ocr_training_trainer_router)
 app.include_router(admin_router)
 app.include_router(admin_activity_router)
 app.include_router(admin_settings_router)

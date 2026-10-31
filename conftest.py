@@ -65,6 +65,7 @@ from email_infra import models as _e  # noqa: F401
 from main import app
 from measurements import models as _m  # noqa: F401
 from nutrition import models as _n  # noqa: F401
+from ocr_training import models as _ocr  # noqa: F401
 from prescriptions import models as _p  # noqa: F401
 from reminders import models as _r  # noqa: F401
 from users.models import User
