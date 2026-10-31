@@ -62,6 +62,7 @@ from auth.webauthn import models as _w  # noqa: F401
 from config import get_settings
 from db import get_session
 from email_infra import models as _e  # noqa: F401
+from health_records import models as _hr  # noqa: F401
 from main import app
 from measurements import models as _m  # noqa: F401
 from nutrition import models as _n  # noqa: F401
