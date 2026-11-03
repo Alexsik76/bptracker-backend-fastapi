@@ -9,6 +9,7 @@ from nutrition.crud.dish import (
 from nutrition.crud.evaluation import (
     get_active_evaluation_criteria,
     get_day_evaluations,
+    get_meal_evaluations_for_menus,
     save_menu_day_evaluations,
 )
 from nutrition.crud.menu import (
@@ -71,4 +72,5 @@ __all__ = [
     "get_active_evaluation_criteria",
     "save_menu_day_evaluations",
     "get_day_evaluations",
+    "get_meal_evaluations_for_menus",
 ]

@@ -11,6 +11,7 @@ from db import SessionDep
 from nutrition import crud
 from nutrition.models import (
     MenuCreate,
+    MenuEvaluationRead,
     MenuItemCreate,
     MenuItemRead,
     MenuItemUpdate,
@@ -63,6 +64,7 @@ class JournalResponse(BaseModel):
     suggestion: MenuRead | None = None
     totals: JournalTotals
     norms: JournalNorms | None = None
+    day_evaluations: list[MenuEvaluationRead] = []
 
 
 @menus_router.get("", response_model=list[MenuRead])
@@ -347,6 +349,7 @@ async def get_journal(
     meals, suggestion, total_kcal, total_protein = await crud.get_journal_data(
         session, user_id, date
     )
+    day_evaluations = await crud.get_day_evaluations(session, user_id, date)
 
     profile = await crud.get_nutrition_profile(session, user_id)
     if profile:
@@ -361,4 +364,5 @@ async def get_journal(
         suggestion=suggestion,
         totals=JournalTotals(kcal=total_kcal, protein_g=total_protein),
         norms=norms,
+        day_evaluations=day_evaluations,
     )

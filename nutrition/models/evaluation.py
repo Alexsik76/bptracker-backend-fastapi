@@ -1,6 +1,6 @@
 from datetime import date as dt_date
 from datetime import datetime
-from typing import ClassVar
+from typing import Any, ClassVar
 from uuid import UUID
 
 from sqlalchemy import (
@@ -108,7 +108,9 @@ class MenuDayEvaluation(MenuDayEvaluationBase, table=True):
             "user_id",
             "date",
             "criterion_key",
-            name="uq_menu_day_evaluations_user_date_criterion_key",
+            "menu_id",
+            postgresql_nulls_not_distinct=True,
+            name="uq_menu_day_evaluations_user_date_criterion_key_menu_id",
         ),
     )
 
@@ -121,3 +123,17 @@ class MenuEvaluationRead(SQLModel):
     criteria_version: int
     evaluated_at: datetime
     menu_id: UUID | None = None
+
+
+class MealEvaluationRead(SQLModel):
+    criterion_key: str
+    choice: str
+    level: str
+    key: str = ""
+
+    def __init__(self, **data: Any):
+        if "criterion_key" in data and not data.get("key"):
+            data["key"] = data["criterion_key"]
+        elif "key" in data and not data.get("criterion_key"):
+            data["criterion_key"] = data["key"]
+        super().__init__(**data)

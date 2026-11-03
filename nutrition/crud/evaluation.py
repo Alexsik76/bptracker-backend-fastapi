@@ -7,6 +7,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app_settings import ai_config
 from nutrition.models.evaluation import (
+    MealEvaluationRead,
     MenuDayEvaluation,
     MenuEvaluationCriterion,
     MenuEvaluationRead,
@@ -39,11 +40,17 @@ async def save_menu_day_evaluations(
     model: str,
     menu_id: UUID | None = None,
 ) -> list[MenuDayEvaluation]:
-    """Save or replace evaluations for user and date per criterion_key."""
-    stmt = select(MenuDayEvaluation).where(
+    """Save or replace evaluations for user, date and menu_id per criterion_key."""
+    where_clause = [
         MenuDayEvaluation.user_id == user_id,
         MenuDayEvaluation.date == menu_date,
-    )
+    ]
+    if menu_id is None:
+        where_clause.append(MenuDayEvaluation.menu_id.is_(None))
+    else:
+        where_clause.append(MenuDayEvaluation.menu_id == menu_id)
+
+    stmt = select(MenuDayEvaluation).where(*where_clause)
     existing_rows = list((await session.exec(stmt)).all())
     existing_by_key = {row.criterion_key: row for row in existing_rows}
 
@@ -86,7 +93,10 @@ async def get_day_evaluations(
     user_id: UUID,
     menu_date: dt_date,
 ) -> list[MenuEvaluationRead]:
-    """Fetch evaluations for user and date with read-time projected level, ordered by position."""
+    """Fetch day summary evaluations for user and date with read-time projected level.
+
+    Ordered by position.
+    """
     stmt = (
         select(MenuDayEvaluation, MenuEvaluationCriterion)
         .outerjoin(
@@ -97,6 +107,7 @@ async def get_day_evaluations(
         .where(
             MenuDayEvaluation.user_id == user_id,
             MenuDayEvaluation.date == menu_date,
+            MenuDayEvaluation.menu_id.is_(None),
         )
         .order_by(MenuEvaluationCriterion.position, MenuDayEvaluation.criterion_key)
     )
@@ -122,6 +133,49 @@ async def get_day_evaluations(
                 criteria_version=eval_row.criteria_version,
                 evaluated_at=eval_row.created_at or datetime.now(UTC),
                 menu_id=eval_row.menu_id,
+            )
+        )
+    return result
+
+
+async def get_meal_evaluations_for_menus(
+    session: AsyncSession,
+    user_id: UUID,
+    menu_ids: list[UUID],
+) -> dict[UUID, list[MealEvaluationRead]]:
+    """Fetch per-meal evaluations for given menus, ordered by position."""
+    if not menu_ids:
+        return {}
+
+    stmt = (
+        select(MenuDayEvaluation, MenuEvaluationCriterion)
+        .outerjoin(
+            MenuEvaluationCriterion,
+            (MenuDayEvaluation.criterion_key == MenuEvaluationCriterion.key)
+            & (MenuDayEvaluation.criteria_version == MenuEvaluationCriterion.version),
+        )
+        .where(
+            MenuDayEvaluation.user_id == user_id,
+            MenuDayEvaluation.menu_id.in_(menu_ids),
+        )
+        .order_by(MenuEvaluationCriterion.position, MenuDayEvaluation.criterion_key)
+    )
+    rows = (await session.exec(stmt)).all()
+    min_confidence = ai_config.jev_min_confidence_percent()
+    result: dict[UUID, list[MealEvaluationRead]] = {mid: [] for mid in menu_ids}
+    for eval_row, _criterion in rows:
+        if eval_row.menu_id is None:
+            continue
+        if (eval_row.confidence * 100.0) < min_confidence:
+            level = "uncertain"
+        else:
+            level = eval_row.choice
+
+        result[eval_row.menu_id].append(
+            MealEvaluationRead(
+                criterion_key=eval_row.criterion_key,
+                choice=eval_row.choice,
+                level=level,
             )
         )
     return result
