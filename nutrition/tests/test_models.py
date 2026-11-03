@@ -199,7 +199,7 @@ async def test_menu_day_evaluation_with_menu_id(session: AsyncSession, test_user
     await session.commit()
     await session.refresh(menu)
 
-    ev = MenuDayEvaluation(
+    ev_meal = MenuDayEvaluation(
         user_id=test_user_id,
         date=utc_today(),
         criterion_key="balance",
@@ -210,12 +210,26 @@ async def test_menu_day_evaluation_with_menu_id(session: AsyncSession, test_user
         model="jev",
         menu_id=menu.id,
     )
-    session.add(ev)
+    ev_day = MenuDayEvaluation(
+        user_id=test_user_id,
+        date=utc_today(),
+        criterion_key="balance",
+        criteria_version=1,
+        choice="good",
+        confidence=0.9,
+        probabilities={"good": 0.9, "bad": 0.1},
+        model="jev",
+        menu_id=None,
+    )
+    session.add_all([ev_meal, ev_day])
     await session.commit()
-    await session.refresh(ev)
+    await session.refresh(ev_meal)
+    await session.refresh(ev_day)
 
-    assert ev.id is not None
-    assert ev.menu_id == menu.id
+    assert ev_meal.id is not None
+    assert ev_meal.menu_id == menu.id
+    assert ev_day.id is not None
+    assert ev_day.menu_id is None
 
 
 @pytest.mark.asyncio

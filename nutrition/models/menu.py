@@ -27,6 +27,7 @@ from nutrition.models.enums import (
     MenuState,
     NutritionSource,
 )
+from nutrition.models.evaluation import MealEvaluationRead
 from nutrition.models.nutrition import NutritionSet
 
 
@@ -220,6 +221,7 @@ class MenuRead(MenuBase):
     created_at: datetime
     updated_at: datetime
     items: list[MenuItemRead] = []
+    evaluations: list[MealEvaluationRead] = []
 
 
 class MenuCreate(SQLModel):

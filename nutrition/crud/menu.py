@@ -6,9 +6,11 @@ from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from nutrition.crud.dish import get_dish, get_dish_components
+from nutrition.crud.evaluation import get_meal_evaluations_for_menus
 from nutrition.models import (
     Dish,
     GenerationLog,
+    MealEvaluationRead,
     Menu,
     MenuCreate,
     MenuItem,
@@ -48,7 +50,11 @@ def to_menu_item_read(item: MenuItem) -> MenuItemRead:
     )
 
 
-def to_menu_read(menu: Menu, items: list[MenuItemRead] | None = None) -> MenuRead:
+def to_menu_read(
+    menu: Menu,
+    items: list[MenuItemRead] | None = None,
+    evaluations: list[MealEvaluationRead] | None = None,
+) -> MenuRead:
     return MenuRead(
         id=menu.id,
         user_id=menu.user_id,
@@ -61,6 +67,7 @@ def to_menu_read(menu: Menu, items: list[MenuItemRead] | None = None) -> MenuRea
         created_at=menu.created_at,
         updated_at=menu.updated_at,
         items=items or [],
+        evaluations=evaluations or [],
     )
 
 
@@ -95,7 +102,8 @@ async def get_menu(
     if menu is None:
         return None
     items = await get_menu_items_for_menu(session, menu.id)
-    return to_menu_read(menu, items)
+    evals_by_menu = await get_meal_evaluations_for_menus(session, user_id, [menu.id])
+    return to_menu_read(menu, items, evaluations=evals_by_menu.get(menu.id, []))
 
 
 async def list_meals(
@@ -119,11 +127,13 @@ async def list_meals(
         .order_by(Menu.eaten_at.asc().nulls_last(), Menu.created_at.asc())
     )
     menus = list((await session.exec(stmt)).all())
+    meal_ids = [m.id for m in menus if m.id is not None]
+    evals_by_menu = await get_meal_evaluations_for_menus(session, user_id, meal_ids)
 
     result: list[MenuRead] = []
     for m in menus:
         items = await get_menu_items_for_menu(session, m.id)
-        result.append(to_menu_read(m, items))
+        result.append(to_menu_read(m, items, evaluations=evals_by_menu.get(m.id, [])))
     return result
 
 
@@ -299,12 +309,16 @@ async def get_journal_data(
         .order_by(Menu.eaten_at.asc().nulls_last(), Menu.created_at.asc())
     )
     eaten_menus = list((await session.exec(stmt_eaten)).all())
+    meal_ids = [m.id for m in eaten_menus if m.id is not None]
+    evals_by_menu = await get_meal_evaluations_for_menus(session, user_id, meal_ids)
+
     meals_read: list[MenuRead] = []
     total_kcal = 0.0
     total_protein_g = 0.0
     for m in eaten_menus:
         items = await get_menu_items_for_menu(session, m.id)
-        meals_read.append(to_menu_read(m, items))
+        evals = evals_by_menu.get(m.id, [])
+        meals_read.append(to_menu_read(m, items, evaluations=evals))
         for it in items:
             if it.kcal is not None:
                 total_kcal += it.kcal

@@ -13,7 +13,8 @@ from config import Settings
 from db import async_session_factory
 from nutrition import crud
 from nutrition.clock import utc_today
-from nutrition.models.enums import Sex
+from nutrition.models.enums import MenuState, Sex
+from nutrition.models.evaluation import MenuEvaluationCriterion
 from nutrition.models.menu import MenuRead
 from nutrition.models.profile import NutritionProfile
 from typesafe_infra import (
@@ -121,30 +122,15 @@ def build_jev_state(
     }
 
 
-async def evaluate_menu_day(
+async def _run_jev_evaluation(
     session: AsyncSession,
     user_id: UUID,
     menu_date: date,
     settings: Settings,
-    menu_id: UUID | None = None,
+    criteria: list[MenuEvaluationCriterion],
+    state: dict[str, Any],
+    menu_id: UUID | None,
 ) -> None:
-    """Evaluate day menu against active criteria using TypeSafe JEV."""
-    if not settings.typesafe_api_key:
-        logger.info("Evaluation skipped: typesafe_api_key is not configured")
-        return
-
-    criteria = await crud.get_active_evaluation_criteria(session)
-    if not criteria:
-        logger.info("Evaluation skipped: no active criteria in DB")
-        return
-
-    profile = await crud.get_nutrition_profile(session, user_id)
-    if not profile:
-        logger.info("Evaluation skipped: user %s has no nutrition profile", user_id)
-        return
-
-    day_menus = await crud.list_meals(session, user_id, menu_date)
-    state = build_jev_state(profile, day_menus, menu_date)
     questions = {
         c.key: {
             "type": "choice",
@@ -260,6 +246,58 @@ async def evaluate_menu_day(
         answers=result.answers,
         model=result.model,
         menu_id=menu_id,
+    )
+
+
+async def evaluate_menu_day(
+    session: AsyncSession,
+    user_id: UUID,
+    menu_date: date,
+    settings: Settings,
+    menu_id: UUID | None = None,
+) -> None:
+    """Evaluate meal and day menu against active criteria using TypeSafe JEV."""
+    if not settings.typesafe_api_key:
+        logger.info("Evaluation skipped: typesafe_api_key is not configured")
+        return
+
+    criteria = await crud.get_active_evaluation_criteria(session)
+    if not criteria:
+        logger.info("Evaluation skipped: no active criteria in DB")
+        return
+
+    profile = await crud.get_nutrition_profile(session, user_id)
+    if not profile:
+        logger.info("Evaluation skipped: user %s has no nutrition profile", user_id)
+        return
+
+    if menu_id is not None:
+        meal = await crud.get_menu(session, menu_id, user_id)
+        if meal is not None and meal.state == MenuState.EATEN:
+            meal_state = build_jev_state(profile, [meal], menu_date)
+            await _run_jev_evaluation(
+                session=session,
+                user_id=user_id,
+                menu_date=menu_date,
+                settings=settings,
+                criteria=criteria,
+                state=meal_state,
+                menu_id=meal.id,
+            )
+
+    day_menus = [
+        m for m in await crud.list_meals(session, user_id, menu_date)
+        if m.state == MenuState.EATEN
+    ]
+    day_state = build_jev_state(profile, day_menus, menu_date)
+    await _run_jev_evaluation(
+        session=session,
+        user_id=user_id,
+        menu_date=menu_date,
+        settings=settings,
+        criteria=criteria,
+        state=day_state,
+        menu_id=None,
     )
 
 

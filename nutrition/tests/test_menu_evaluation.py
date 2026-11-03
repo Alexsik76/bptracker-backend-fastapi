@@ -255,7 +255,7 @@ async def test_evaluation_stores_rows_and_generation_log(
             menu_id=meal.id,
         )
 
-    # Check rows stored in DB
+    # Check rows stored in DB: 3 for the meal + 3 for the day summary
     eval_rows = (
         await session.exec(
             select(MenuDayEvaluation)
@@ -266,31 +266,44 @@ async def test_evaluation_stores_rows_and_generation_log(
             .order_by(MenuDayEvaluation.criterion_key)
         )
     ).all()
-    assert len(eval_rows) == 3
-    by_key = {r.criterion_key: r for r in eval_rows}
-    assert by_key["goal"].choice == "green"
-    assert by_key["goal"].confidence == 0.8
-    assert by_key["goal"].menu_id == meal.id
-    assert by_key["balance"].choice == "yellow"
-    assert by_key["salt"].choice == "green"
+    assert len(eval_rows) == 6
+    meal_rows = {r.criterion_key: r for r in eval_rows if r.menu_id == meal.id}
+    assert len(meal_rows) == 3
+    assert meal_rows["goal"].choice == "green"
+    assert meal_rows["goal"].confidence == 0.8
+    assert meal_rows["goal"].menu_id == meal.id
+    assert meal_rows["balance"].choice == "yellow"
+    assert meal_rows["salt"].choice == "green"
 
-    # Check generation_log
+    day_rows = {r.criterion_key: r for r in eval_rows if r.menu_id is None}
+    assert len(day_rows) == 3
+    assert day_rows["goal"].choice == "green"
+    assert day_rows["balance"].choice == "yellow"
+    assert day_rows["salt"].choice == "green"
+
+    # Check generation_log: one for meal, one for day
     log_rows = (
         await session.exec(
-            select(GenerationLog).where(
+            select(GenerationLog)
+            .where(
                 GenerationLog.user_id == test_user_id,
                 GenerationLog.date == test_day,
                 GenerationLog.scope == "menu_evaluation",
             )
+            .order_by(GenerationLog.created_at)
         )
     ).all()
-    assert len(log_rows) == 1
-    log = log_rows[0]
-    assert log.model == "jev-latest"
-    assert log.menu_id == meal.id
-    assert log.input_tokens == 150
-    assert log.output_tokens == 25
-    assert log.raw_response == '{"mock": "response"}'
+    assert len(log_rows) == 2
+    meal_log = next(log for log in log_rows if log.menu_id == meal.id)
+    assert meal_log.model == "jev-latest"
+    assert meal_log.input_tokens == 150
+    assert meal_log.output_tokens == 25
+    assert meal_log.raw_response == '{"mock": "response"}'
+
+    day_log = next(log for log in log_rows if log.menu_id is None)
+    assert day_log.model == "jev-latest"
+    assert day_log.input_tokens == 150
+    assert day_log.output_tokens == 25
 
 
 @pytest.mark.asyncio
@@ -392,3 +405,229 @@ async def test_get_day_evaluations_projects_uncertain_below_threshold(
     assert by_key["goal"].level == "uncertain"
     assert by_key["balance"].level == "yellow"
     assert by_key["salt"].level == "green"
+
+
+@pytest.mark.asyncio
+async def test_two_meals_keep_own_labels_plus_one_day_summary(
+    client: AsyncClient, session: AsyncSession, test_user_id: UUID, seed_criteria
+):
+    """Two meals on one date each keep their own labels plus one day summary."""
+    test_day = utc_today()
+    data = await setup_test_user_profile(client)
+    dish_id = data["dish_id"]
+
+    # 1. Create two eaten meals
+    meal1 = await crud.create_menu(
+        session,
+        test_user_id,
+        MenuCreate(
+            date=test_day,
+            meal_type=MealType.BREAKFAST,
+            items=[MenuItemCreate(dish_id=dish_id, portion_g=200)],
+        ),
+    )
+    meal2 = await crud.create_menu(
+        session,
+        test_user_id,
+        MenuCreate(
+            date=test_day,
+            meal_type=MealType.LUNCH,
+            items=[MenuItemCreate(dish_id=dish_id, portion_g=300)],
+        ),
+    )
+
+    mock_res_meal1 = JevResult(
+        model="jev-latest",
+        answers={
+            "goal": JevChoiceAnswer(choice="green", confidence=0.8, probabilities={}),
+            "balance": JevChoiceAnswer(choice="yellow", confidence=0.7, probabilities={}),
+            "salt": JevChoiceAnswer(choice="green", confidence=0.9, probabilities={}),
+        },
+        usage=JevUsage(100, 20),
+        raw_response="{}",
+    )
+    mock_res_meal2 = JevResult(
+        model="jev-latest",
+        answers={
+            "goal": JevChoiceAnswer(choice="red", confidence=0.85, probabilities={}),
+            "balance": JevChoiceAnswer(choice="green", confidence=0.9, probabilities={}),
+            "salt": JevChoiceAnswer(choice="yellow", confidence=0.75, probabilities={}),
+        },
+        usage=JevUsage(100, 20),
+        raw_response="{}",
+    )
+    mock_res_day = JevResult(
+        model="jev-latest",
+        answers={
+            "goal": JevChoiceAnswer(choice="yellow", confidence=0.75, probabilities={}),
+            "balance": JevChoiceAnswer(choice="green", confidence=0.85, probabilities={}),
+            "salt": JevChoiceAnswer(choice="green", confidence=0.8, probabilities={}),
+        },
+        usage=JevUsage(120, 25),
+        raw_response="{}",
+    )
+
+    configured_settings = get_settings().model_copy(
+        update={"typesafe_api_key": "valid-api-key"}
+    )
+
+    with (
+        patch("nutrition.service.evaluator.async_session_factory", db_session_factory),
+        patch(
+            "nutrition.service.evaluator.evaluate_systemone", new_callable=AsyncMock
+        ) as mock_eval,
+    ):
+        mock_eval.side_effect = [mock_res_meal1, mock_res_day, mock_res_meal2, mock_res_day]
+
+        await evaluate_menu_day_background(
+            user_id=test_user_id,
+            menu_date=test_day,
+            settings=configured_settings,
+            session_factory=db_session_factory,
+            menu_id=meal1.id,
+        )
+
+        await evaluate_menu_day_background(
+            user_id=test_user_id,
+            menu_date=test_day,
+            settings=configured_settings,
+            session_factory=db_session_factory,
+            menu_id=meal2.id,
+        )
+
+    # In DB: exactly 9 rows (3 for meal1, 3 for meal2, 3 for day summary)
+    eval_rows = (
+        await session.exec(
+            select(MenuDayEvaluation)
+            .where(
+                MenuDayEvaluation.user_id == test_user_id,
+                MenuDayEvaluation.date == test_day,
+            )
+        )
+    ).all()
+    assert len(eval_rows) == 9
+
+    meal1_rows = {r.criterion_key: r for r in eval_rows if r.menu_id == meal1.id}
+    assert len(meal1_rows) == 3
+    assert meal1_rows["goal"].choice == "green"
+    assert meal1_rows["balance"].choice == "yellow"
+
+    meal2_rows = {r.criterion_key: r for r in eval_rows if r.menu_id == meal2.id}
+    assert len(meal2_rows) == 3
+    assert meal2_rows["goal"].choice == "red"
+    assert meal2_rows["balance"].choice == "green"
+
+    day_rows = {r.criterion_key: r for r in eval_rows if r.menu_id is None}
+    assert len(day_rows) == 3
+    assert day_rows["goal"].choice == "yellow"
+
+    # get_day_evaluations returns only the 3 day rows
+    day_evals = await crud.get_day_evaluations(session, test_user_id, test_day)
+    assert len(day_evals) == 3
+    assert all(e.menu_id is None for e in day_evals)
+    day_map = {e.key: e for e in day_evals}
+    assert day_map["goal"].level == "yellow"
+
+    # Journal response includes per-meal evaluations and day_evaluations
+    journal_resp = await client.get(f"/nutrition/journal?date={test_day.isoformat()}")
+    assert journal_resp.status_code == 200
+    jdata = journal_resp.json()
+    assert len(jdata["meals"]) == 2
+    assert len(jdata["day_evaluations"]) == 3
+
+    m1_data = next(m for m in jdata["meals"] if m["id"] == str(meal1.id))
+    assert len(m1_data["evaluations"]) == 3
+    m1_eval_map = {e["criterion_key"]: e for e in m1_data["evaluations"]}
+    assert m1_eval_map["goal"]["choice"] == "green"
+    assert m1_eval_map["goal"]["level"] == "green"
+
+    m2_data = next(m for m in jdata["meals"] if m["id"] == str(meal2.id))
+    assert len(m2_data["evaluations"]) == 3
+    m2_eval_map = {e["criterion_key"]: e for e in m2_data["evaluations"]}
+    assert m2_eval_map["goal"]["choice"] == "red"
+    assert m2_eval_map["goal"]["level"] == "red"
+
+
+@pytest.mark.asyncio
+async def test_evaluation_of_deleted_menu_saves_day_summary_without_error(
+    client: AsyncClient, session: AsyncSession, test_user_id: UUID, seed_criteria
+):
+    """Evaluation of a deleted menu skips meal part and saves day summary without error."""
+    test_day = utc_today()
+    data = await setup_test_user_profile(client)
+    dish_id = data["dish_id"]
+
+    # 1. Create a meal
+    meal = await crud.create_menu(
+        session,
+        test_user_id,
+        MenuCreate(
+            date=test_day,
+            meal_type=MealType.BREAKFAST,
+            items=[MenuItemCreate(dish_id=dish_id, portion_g=200)],
+        ),
+    )
+    meal_id = meal.id
+
+    # 2. Delete the meal BEFORE background evaluation runs
+    deleted = await crud.delete_menu(session, meal_id, test_user_id)
+    assert deleted is True
+
+    mock_jev_day = JevResult(
+        model="jev-latest",
+        answers={
+            "goal": JevChoiceAnswer(choice="green", confidence=0.8, probabilities={}),
+            "balance": JevChoiceAnswer(choice="green", confidence=0.7, probabilities={}),
+            "salt": JevChoiceAnswer(choice="green", confidence=0.9, probabilities={}),
+        },
+        usage=JevUsage(input_tokens=100, output_tokens=20),
+        raw_response='{"mock": "day"}',
+    )
+
+    configured_settings = get_settings().model_copy(
+        update={"typesafe_api_key": "valid-api-key"}
+    )
+
+    # 3. Background evaluation runs with the deleted meal_id
+    with (
+        patch("nutrition.service.evaluator.async_session_factory", db_session_factory),
+        patch(
+            "nutrition.service.evaluator.evaluate_systemone", new_callable=AsyncMock
+        ) as mock_eval,
+    ):
+        mock_eval.return_value = mock_jev_day
+        await evaluate_menu_day_background(
+            user_id=test_user_id,
+            menu_date=test_day,
+            settings=configured_settings,
+            session_factory=db_session_factory,
+            menu_id=meal_id,
+        )
+
+        # evaluate_systemone was called only once (for the day summary, meal part skipped)
+        assert mock_eval.call_count == 1
+
+    # Check rows stored: only day rows (menu_id is None)
+    eval_rows = (
+        await session.exec(
+            select(MenuDayEvaluation).where(
+                MenuDayEvaluation.user_id == test_user_id,
+                MenuDayEvaluation.date == test_day,
+            )
+        )
+    ).all()
+    assert len(eval_rows) == 3
+    assert all(r.menu_id is None for r in eval_rows)
+
+    # Check generation_log: logged with menu_id is None
+    log_rows = (
+        await session.exec(
+            select(GenerationLog).where(
+                GenerationLog.user_id == test_user_id,
+                GenerationLog.date == test_day,
+                GenerationLog.scope == "menu_evaluation",
+            )
+        )
+    ).all()
+    assert len(log_rows) == 1
+    assert log_rows[0].menu_id is None

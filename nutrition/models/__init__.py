@@ -21,6 +21,7 @@ from nutrition.models.enums import (
     Sex,
 )
 from nutrition.models.evaluation import (
+    MealEvaluationRead,
     MenuDayEvaluation,
     MenuDayEvaluationBase,
     MenuEvaluationCriterion,
@@ -103,4 +104,5 @@ __all__ = [
     "MenuDayEvaluationBase",
     "MenuDayEvaluation",
     "MenuEvaluationRead",
+    "MealEvaluationRead",
 ]
