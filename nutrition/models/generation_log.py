@@ -26,6 +26,15 @@ class GenerationLog(SQLModel, table=True):
             index=True,
         )
     )
+    menu_id: UUID | None = Field(
+        default=None,
+        sa_column=Column(
+            Uuid,
+            ForeignKey("menus.id", ondelete="SET NULL"),
+            nullable=True,
+            index=True,
+        ),
+    )
     date: dt_date = Field(sa_column=Column(Date, nullable=False, index=True))
     scope: str = Field(sa_column=Column(String, nullable=False))
     model: str = Field(sa_column=Column(String, nullable=False))

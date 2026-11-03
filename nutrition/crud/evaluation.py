@@ -37,6 +37,7 @@ async def save_menu_day_evaluations(
     criteria_version: int,
     answers: dict[str, JevChoiceAnswer],
     model: str,
+    menu_id: UUID | None = None,
 ) -> list[MenuDayEvaluation]:
     """Save or replace evaluations for user and date per criterion_key."""
     stmt = select(MenuDayEvaluation).where(
@@ -56,6 +57,7 @@ async def save_menu_day_evaluations(
             row.confidence = ans.confidence
             row.probabilities = ans.probabilities
             row.model = model
+            row.menu_id = menu_id
             row.created_at = now
             session.add(row)
             saved.append(row)
@@ -69,6 +71,7 @@ async def save_menu_day_evaluations(
                 confidence=ans.confidence,
                 probabilities=ans.probabilities,
                 model=model,
+                menu_id=menu_id,
                 created_at=now,
             )
             session.add(new_row)
@@ -118,6 +121,7 @@ async def get_day_evaluations(
                 confidence=eval_row.confidence,
                 criteria_version=eval_row.criteria_version,
                 evaluated_at=eval_row.created_at or datetime.now(UTC),
+                menu_id=eval_row.menu_id,
             )
         )
     return result

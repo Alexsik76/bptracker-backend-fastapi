@@ -68,6 +68,15 @@ class MenuDayEvaluationBase(SQLModel):
         sa_column=Column(JSONB(astext_type=Text()), nullable=False),
     )
     model: str = Field(sa_column=Column(String, nullable=False))
+    menu_id: UUID | None = Field(
+        default=None,
+        sa_column=Column(
+            Uuid,
+            ForeignKey("menus.id", ondelete="CASCADE"),
+            index=True,
+            nullable=True,
+        ),
+    )
 
 
 class MenuDayEvaluation(MenuDayEvaluationBase, table=True):
@@ -111,3 +120,4 @@ class MenuEvaluationRead(SQLModel):
     confidence: float
     criteria_version: int
     evaluated_at: datetime
+    menu_id: UUID | None = None

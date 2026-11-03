@@ -20,11 +20,9 @@ async def test_upsert_and_get_profile(client: AsyncClient):
         "pace_kg_per_week": 0.75,
         "restrictions": "Обмеження солі",
         "dislikes": "Печінка",
-        "meals": [
-            {"type": "breakfast", "time": "08:00"},
-            {"type": "lunch", "time": "13:00"},
-            {"type": "dinner", "time": "19:00"},
-        ],
+        "weight_variety": 0.6,
+        "weight_balance": 0.7,
+        "weight_goal": 0.8,
     }
 
     put_resp = await client.put("/nutrition/profile", json=payload)
@@ -35,17 +33,17 @@ async def test_upsert_and_get_profile(client: AsyncClient):
     assert data["height_cm"] == 200
     assert data["weight_kg"] == 118.0
     assert data["target_weight_kg"] == 110.0
-    assert len(data["meals"]) == 3
-    assert data["meals"][0]["type"] == "breakfast"
+    assert data["weight_variety"] == 0.6
+    assert data["weight_balance"] == 0.7
+    assert data["weight_goal"] == 0.8
     assert "updated_at" in data
     assert "user_id" in data
 
     get_resp = await client.get("/nutrition/profile")
     assert get_resp.status_code == 200
-    get_data = get_resp.json()
-    assert get_data == data
+    assert get_resp.json() == data
 
-    # Update (complete replacement)
+    # Update (complete replacement) with default weights
     updated_payload = {
         "sex": "male",
         "birth_year": 1976,
@@ -53,83 +51,61 @@ async def test_upsert_and_get_profile(client: AsyncClient):
         "weight_kg": 115.0,
         "target_weight_kg": 110.0,
         "pace_kg_per_week": 0.5,
-        "restrictions": None,
-        "dislikes": None,
-        "meals": [
-            {"type": "breakfast", "time": "09:00"},
-            {"type": "dinner", "time": "18:00"},
-        ],
     }
     put_resp2 = await client.put("/nutrition/profile", json=updated_payload)
     assert put_resp2.status_code == 200
     data2 = put_resp2.json()
     assert data2["weight_kg"] == 115.0
     assert data2["restrictions"] is None
-    assert len(data2["meals"]) == 2
-    assert data2["meals"][0]["time"] == "09:00"
+    assert data2["weight_variety"] == 0.5
+    assert data2["weight_balance"] == 0.5
+    assert data2["weight_goal"] == 0.5
 
 
 @pytest.mark.asyncio
-async def test_profile_rejects_duplicate_meal_types(client: AsyncClient):
-    payload = {
-        "sex": "male",
-        "birth_year": 1980,
-        "height_cm": 180,
-        "weight_kg": 80.0,
-        "target_weight_kg": 75.0,
+async def test_profile_validates_weights(client: AsyncClient):
+    base_payload = {
+        "sex": "female",
+        "birth_year": 1990,
+        "height_cm": 165,
+        "weight_kg": 60.0,
+        "target_weight_kg": 55.0,
         "pace_kg_per_week": 0.5,
-        "meals": [
-            {"type": "breakfast", "time": "08:00"},
-            {"type": "breakfast", "time": "09:00"},
-        ],
     }
-    resp = await client.put("/nutrition/profile", json=payload)
-    assert resp.status_code == 422
-    assert "Duplicate meal types are not allowed" in resp.text
 
+    # Negative weight
+    resp_neg = await client.put(
+        "/nutrition/profile",
+        json={**base_payload, "weight_variety": -0.1},
+    )
+    assert resp_neg.status_code == 422
 
-@pytest.mark.asyncio
-async def test_profile_meals_sorted_by_time(client: AsyncClient):
-    payload = {
-        "sex": "male",
-        "birth_year": 1980,
-        "height_cm": 180,
-        "weight_kg": 80.0,
-        "target_weight_kg": 75.0,
-        "pace_kg_per_week": 0.5,
-        "meals": [
-            {"type": "dinner", "time": "19:00"},
-            {"type": "breakfast", "time": "08:00"},
-            {"type": "lunch", "time": "13:00"},
-        ],
-    }
-    resp = await client.put("/nutrition/profile", json=payload)
-    assert resp.status_code == 200
-    meals = resp.json()["meals"]
-    assert [m["type"] for m in meals] == ["breakfast", "lunch", "dinner"]
-    assert [m["time"] for m in meals] == ["08:00", "13:00", "19:00"]
+    # Weight > 1.0
+    resp_over = await client.put(
+        "/nutrition/profile",
+        json={**base_payload, "weight_balance": 1.2},
+    )
+    assert resp_over.status_code == 422
 
 
 @pytest.mark.asyncio
 async def test_profile_user_isolation(client_factory, make_user):
-    user_a = await make_user("user_a@example.com")
-    user_b = await make_user("user_b@example.com")
+    user_a = await make_user("pa@example.com")
+    user_b = await make_user("pb@example.com")
 
     client_a = client_factory(user_a)
-    payload = {
+
+    payload_a = {
         "sex": "female",
-        "birth_year": 1985,
+        "birth_year": 1992,
         "height_cm": 170,
         "weight_kg": 65.0,
         "target_weight_kg": 60.0,
         "pace_kg_per_week": 0.5,
-        "meals": [],
     }
+    await client_a.put("/nutrition/profile", json=payload_a)
 
-    resp = await client_a.put("/nutrition/profile", json=payload)
-    assert resp.status_code == 200
-
-    # User B cannot see User A's profile
     client_b = client_factory(user_b)
-    resp_b = await client_b.get("/nutrition/profile")
-    assert resp_b.status_code == 404
+    # User B should see 404
+    get_b = await client_b.get("/nutrition/profile")
+    assert get_b.status_code == 404

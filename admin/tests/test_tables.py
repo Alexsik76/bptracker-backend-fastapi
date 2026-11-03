@@ -29,20 +29,11 @@ async def test_metadata_lists_registered_tables_and_hides_secrets(client_factory
         "intake_reports",
         "dishes",
         "dish_components",
-        "frequent_dishes",
-        "frequent_dish_components",
         "generation_log",
         "menus",
-        "menu_days",
         "menu_items",
-        "menu_notes",
-        "off_plan_entries",
-        "pinned_meals",
-        "pinned_meal_items",
         "products",
         "nutrition_profiles",
-        "recipes",
-        "recipe_products",
         "sessions",
         "webauthn_credentials",
         "email_outbox",
@@ -120,10 +111,6 @@ async def test_metadata_lists_registered_tables_and_hides_secrets(client_factory
     intake_cols = {c["name"]: c for c in tables_by_name["intake_reports"]["columns"]}
     assert intake_cols["id"]["read_only"] is True
     assert intake_cols["recorded_at"]["read_only"] is True
-
-    menu_day_cols = {c["name"]: c for c in tables_by_name["menu_days"]["columns"]}
-    assert "id" not in menu_day_cols
-    assert menu_day_cols["created_at"]["read_only"] is True
 
 
 @pytest.mark.asyncio

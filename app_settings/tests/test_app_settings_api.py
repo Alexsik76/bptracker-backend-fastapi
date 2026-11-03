@@ -152,12 +152,9 @@ async def test_cache_load_reads_db_and_skips_invalid(admin_client, session):
 async def test_generator_path_uses_new_model(admin_client):
     await admin_client.put(f"/admin/settings/{MODEL_KEY}", json={"value": "gemini-custom"})
 
-    from nutrition.tests.test_notes import setup_test_environment
-
-    await setup_test_environment(admin_client)
     mock_result = GeminiResult(
-        data={"answer": "ok"},
-        raw_text='{"answer": "ok"}',
+        data={"kcal": 150.0, "protein_g": 5.0, "fat_g": 2.0, "carbs_g": 25.0},
+        raw_text='{"kcal": 150.0, "protein_g": 5.0, "fat_g": 2.0, "carbs_g": 25.0}',
         model="gemini-custom",
         input_tokens=1,
         output_tokens=1,
@@ -165,8 +162,8 @@ async def test_generator_path_uses_new_model(admin_client):
     with patch("gemini_infra.generate_json", new_callable=AsyncMock) as mock_gen:
         mock_gen.return_value = mock_result
         resp = await admin_client.post(
-            f"/nutrition/menus/{TEST_DATE_STR}/notes",
-            json={"kind": "info", "text": "any question"},
+            "/nutrition/dishes",
+            json={"name": "Каша вівсяна"},
         )
     assert resp.status_code == 201
     assert mock_gen.call_args.kwargs["model"] == "gemini-custom"
