@@ -18,6 +18,7 @@ from nutrition.models import (
     MenuState,
     NutritionProfile,
     NutritionSource,
+    PinnedDishDay,
     Product,
     Sex,
 )
@@ -215,3 +216,30 @@ async def test_menu_day_evaluation_with_menu_id(session: AsyncSession, test_user
 
     assert ev.id is not None
     assert ev.menu_id == menu.id
+
+
+@pytest.mark.asyncio
+async def test_pinned_dish_day_persistence(session: AsyncSession, test_user_id: UUID):
+    dish = Dish(
+        user_id=test_user_id,
+        name="Сирники",
+        pinned_meal_type=MealType.BREAKFAST,
+    )
+    session.add(dish)
+    await session.commit()
+    await session.refresh(dish)
+
+    pdd = PinnedDishDay(
+        user_id=test_user_id,
+        dish_id=dish.id,
+        date=utc_today(),
+    )
+    session.add(pdd)
+    await session.commit()
+    await session.refresh(pdd)
+
+    assert pdd.id is not None
+    assert pdd.dish_id == dish.id
+    assert pdd.user_id == test_user_id
+    assert pdd.date == utc_today()
+

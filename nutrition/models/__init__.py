@@ -39,6 +39,7 @@ from nutrition.models.menu import (
     MenuItemUpdate,
     MenuRead,
     MenuUpdate,
+    PinnedDishDay,
 )
 from nutrition.models.nutrition import NutritionEstimate, NutritionSet
 from nutrition.models.product import (
@@ -90,6 +91,7 @@ __all__ = [
     "MenuCreate",
     "MenuRead",
     "MenuUpdate",
+    "PinnedDishDay",
     "MenuItemBase",
     "MenuItem",
     "MenuItemCreate",

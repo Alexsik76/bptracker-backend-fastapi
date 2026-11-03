@@ -5,20 +5,23 @@ import sqlalchemy as sa
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from nutrition.clock import utc_today
-from nutrition.crud.dish import get_dish
+from nutrition.crud.dish import get_dish, get_dish_components
 from nutrition.models import (
+    Dish,
     GenerationLog,
     Menu,
     MenuCreate,
     MenuItem,
     MenuItemCreate,
+    MenuItemOrigin,
     MenuItemRead,
     MenuItemUpdate,
+    MenuOrigin,
     MenuRead,
     MenuState,
     MenuUpdate,
     NutritionSource,
+    PinnedDishDay,
 )
 
 
@@ -49,10 +52,12 @@ def to_menu_read(menu: Menu, items: list[MenuItemRead] | None = None) -> MenuRea
     return MenuRead(
         id=menu.id,
         user_id=menu.user_id,
+        date=menu.date,
         meal_type=menu.meal_type,
         origin=menu.origin,
         state=menu.state,
         eaten_at=menu.eaten_at,
+        pinned_dish_id=menu.pinned_dish_id,
         created_at=menu.created_at,
         updated_at=menu.updated_at,
         items=items or [],
@@ -96,14 +101,9 @@ async def get_menu(
 async def list_meals(
     session: AsyncSession,
     user_id: UUID,
-    target_date: date | None = None,
+    target_date: date,
 ) -> list[MenuRead]:
-    """List meals for a date: by eaten_at for eaten meals, plus the current suggestion."""
-    if target_date is None:
-        target_date = utc_today()
-
-    # Eaten meals on target_date OR current suggestion
-    # In SQLite/Postgres func.date compares to string or date
+    """List meals for a date: by Menu.date for eaten meals, plus the current suggestion."""
     stmt = (
         select(Menu)
         .where(
@@ -111,7 +111,7 @@ async def list_meals(
             sa.or_(
                 sa.and_(
                     Menu.state == MenuState.EATEN,
-                    sa.cast(Menu.eaten_at, sa.Date) == target_date,
+                    Menu.date == target_date,
                 ),
                 Menu.state == MenuState.SUGGESTION,
             ),
@@ -138,10 +138,12 @@ async def create_menu(
 
     menu = Menu(
         user_id=user_id,
+        date=data.date,
         meal_type=data.meal_type,
         origin=data.origin,
         state=data.state,
         eaten_at=eaten_at,
+        pinned_dish_id=data.pinned_dish_id,
     )
     session.add(menu)
     await session.commit()
@@ -158,6 +160,172 @@ async def create_menu(
         created_items.append(it)
 
     return to_menu_read(menu, created_items)
+
+
+async def eat_menu(
+    session: AsyncSession,
+    menu_id: UUID,
+    user_id: UUID,
+    target_date: date,
+    eaten_at: datetime,
+) -> MenuRead | None:
+    menu = await get_menu_entity(session, menu_id, user_id)
+    if menu is None:
+        return None
+    menu.state = MenuState.EATEN
+    menu.date = target_date
+    menu.eaten_at = eaten_at
+    menu.updated_at = datetime.now(UTC)
+    session.add(menu)
+    await session.commit()
+    await session.refresh(menu)
+    items = await get_menu_items_for_menu(session, menu.id)
+    return to_menu_read(menu, items)
+
+
+async def materialize_pinned_dishes(
+    session: AsyncSession,
+    user_id: UUID,
+    target_date: date,
+) -> list[MenuRead]:
+    stmt_dishes = (
+        select(Dish)
+        .where(
+            Dish.user_id == user_id,
+            Dish.pinned_meal_type.is_not(None),
+        )
+        .order_by(Dish.name.asc())
+    )
+    pinned_dishes = list((await session.exec(stmt_dishes)).all())
+    if not pinned_dishes:
+        return []
+
+    stmt_markers = select(PinnedDishDay.dish_id).where(
+        PinnedDishDay.user_id == user_id,
+        PinnedDishDay.date == target_date,
+    )
+    marked_dish_ids = set((await session.exec(stmt_markers)).all())
+
+    unmaterialized = [d for d in pinned_dishes if d.id not in marked_dish_ids]
+    if not unmaterialized:
+        return []
+
+    materialized_menus: list[MenuRead] = []
+    for dish in unmaterialized:
+        comps = await get_dish_components(session, dish.id)
+        comp_weight = sum(c.weight_g for c in comps)
+        portion_g = comp_weight if comp_weight > 0 else 100
+
+        if dish.kcal is not None:
+            ratio = portion_g / 100.0
+            kcal = round(dish.kcal * ratio, 1)
+            protein_g = round(dish.protein_g * ratio, 1) if dish.protein_g is not None else None
+            fat_g = round(dish.fat_g * ratio, 1) if dish.fat_g is not None else None
+            carbs_g = round(dish.carbs_g * ratio, 1) if dish.carbs_g is not None else None
+            fiber_g = round(dish.fiber_g * ratio, 1) if dish.fiber_g is not None else None
+            sugar_g = round(dish.sugar_g * ratio, 1) if dish.sugar_g is not None else None
+            sodium_mg = round(dish.sodium_mg * ratio, 1) if dish.sodium_mg is not None else None
+            source = NutritionSource.COMPUTED
+        else:
+            kcal, protein_g, fat_g, carbs_g, fiber_g, sugar_g, sodium_mg = (
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+            source = None
+
+        assert dish.pinned_meal_type is not None
+        menu = Menu(
+            user_id=user_id,
+            date=target_date,
+            meal_type=dish.pinned_meal_type,
+            origin=MenuOrigin.PINNED,
+            state=MenuState.EATEN,
+            eaten_at=None,
+            pinned_dish_id=dish.id,
+        )
+        session.add(menu)
+        await session.flush()
+
+        item = MenuItem(
+            menu_id=menu.id,
+            dish_id=dish.id,
+            title=dish.name,
+            portion_g=portion_g,
+            portion_text=f"{portion_g} г",
+            nutrition_source=source,
+            origin=MenuItemOrigin.MANUAL,
+            position=0,
+            kcal=kcal,
+            protein_g=protein_g,
+            fat_g=fat_g,
+            carbs_g=carbs_g,
+            fiber_g=fiber_g,
+            sugar_g=sugar_g,
+            sodium_mg=sodium_mg,
+        )
+        session.add(item)
+
+        marker = PinnedDishDay(
+            user_id=user_id,
+            dish_id=dish.id,
+            date=target_date,
+        )
+        session.add(marker)
+        await session.flush()
+
+        materialized_menus.append(to_menu_read(menu, [to_menu_item_read(item)]))
+
+    await session.commit()
+    return materialized_menus
+
+
+async def get_journal_data(
+    session: AsyncSession,
+    user_id: UUID,
+    target_date: date,
+) -> tuple[list[MenuRead], MenuRead | None, float, float]:
+    stmt_eaten = (
+        select(Menu)
+        .where(
+            Menu.user_id == user_id,
+            Menu.date == target_date,
+            Menu.state == MenuState.EATEN,
+        )
+        .order_by(Menu.eaten_at.asc().nulls_last(), Menu.created_at.asc())
+    )
+    eaten_menus = list((await session.exec(stmt_eaten)).all())
+    meals_read: list[MenuRead] = []
+    total_kcal = 0.0
+    total_protein_g = 0.0
+    for m in eaten_menus:
+        items = await get_menu_items_for_menu(session, m.id)
+        meals_read.append(to_menu_read(m, items))
+        for it in items:
+            if it.kcal is not None:
+                total_kcal += it.kcal
+            if it.protein_g is not None:
+                total_protein_g += it.protein_g
+
+    stmt_sugg = (
+        select(Menu)
+        .where(
+            Menu.user_id == user_id,
+            Menu.state == MenuState.SUGGESTION,
+        )
+        .order_by(Menu.created_at.desc())
+    )
+    sugg_menu = (await session.exec(stmt_sugg)).first()
+    sugg_read = None
+    if sugg_menu:
+        sugg_items = await get_menu_items_for_menu(session, sugg_menu.id)
+        sugg_read = to_menu_read(sugg_menu, sugg_items)
+
+    return meals_read, sugg_read, round(total_kcal, 1), round(total_protein_g, 1)
 
 
 async def update_menu(

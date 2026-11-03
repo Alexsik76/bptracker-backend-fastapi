@@ -208,6 +208,7 @@ async def test_evaluation_stores_rows_and_generation_log(
         session,
         test_user_id,
         MenuCreate(
+            date=test_day,
             meal_type=MealType.BREAKFAST,
             items=[MenuItemCreate(dish_id=dish_id, portion_g=200)],
         ),

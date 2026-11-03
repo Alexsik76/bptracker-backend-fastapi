@@ -66,6 +66,22 @@ def calculate_user_goal_data(
     }
 
 
+def calculate_daily_norms(
+    profile: NutritionProfile | None,
+    target_date: date | None = None,
+) -> tuple[float | None, float | None]:
+    """Calculate daily kcal and protein norms.
+
+    Returns (kcal_norm, protein_norm), or (None, None) if no profile.
+    """
+    if profile is None:
+        return None, None
+    goal = calculate_user_goal_data(profile, target_date)
+    kcal_norm = goal["daily_kcal_norm"]
+    protein_norm = round(1.6 * float(profile.weight_kg), 1)
+    return kcal_norm, protein_norm
+
+
 def build_jev_state(
     profile: NutritionProfile,
     day_menus: list[MenuRead],

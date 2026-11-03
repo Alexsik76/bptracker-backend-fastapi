@@ -94,6 +94,7 @@ async def test_estimate_items_nutrition(session: AsyncSession, test_user_id: UUI
         session,
         test_user_id,
         MenuCreate(
+            date=today,
             meal_type=MealType.LUNCH,
             items=[
                 MenuItemCreate(title="Борщ український", portion_g=300),
