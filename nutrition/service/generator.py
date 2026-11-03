@@ -1,8 +1,9 @@
 import json
 import logging
+import re
 import time
-from datetime import date, datetime
-from typing import Any
+from datetime import UTC, date, datetime
+from typing import Any, Literal
 from uuid import UUID
 
 from sqlmodel import select
@@ -33,7 +34,7 @@ from nutrition.service.evaluator import calculate_daily_norms
 logger = logging.getLogger(__name__)
 llm_logger = logging.getLogger("nutrition.llm")
 
-SUGGESTION_PROMPT_VERSION = "2026-11-03.1"
+SUGGESTION_PROMPT_VERSION = "2026-11-03.2"
 
 
 def log_llm_exchange(
@@ -99,11 +100,6 @@ class ServiceGenerationInvalidResponse(GenerationError):
 SUGGESTION_RESPONSE_SCHEMA: dict[str, Any] = {
     "type": "OBJECT",
     "properties": {
-        "intent": {
-            "type": "STRING",
-            "enum": ["suggest", "log"],
-            "description": "suggest for new meal, log if text describes eaten food",
-        },
         "meal_type": {
             "type": "STRING",
             "enum": [m.value for m in MealType],
@@ -149,8 +145,30 @@ SUGGESTION_RESPONSE_SCHEMA: dict[str, Any] = {
             "description": "Meal items",
         },
     },
-    "required": ["intent", "meal_type", "items"],
+    "required": ["meal_type", "items"],
 }
+
+
+def extract_time_from_text(text: str | None) -> tuple[int, int] | None:
+    """Extract hour and minute (0-23, 0-59) from user text, or None if no time named."""
+    if not text:
+        return None
+    match_colon = re.search(r"\b([01]?\d|2[0-3]):([0-5]\d)(?::[0-5]\d)?\b", text)
+    if match_colon:
+        return int(match_colon.group(1)), int(match_colon.group(2))
+    match_prep = re.search(
+        r"\b(?:о|в|at)\s+([01]?\d|2[0-3])(?:[:.]([0-5]\d))?(?:\s*(?:год(?:ин[іа]?)?))?(?:\s*(ранку|дня|вечора|ночі))?\b",
+        text,
+        re.IGNORECASE,
+    )
+    if match_prep:
+        hour = int(match_prep.group(1))
+        minute = int(match_prep.group(2)) if match_prep.group(2) else 0
+        period = match_prep.group(3).lower() if match_prep.group(3) else None
+        if period in ("вечора", "дня") and hour < 12:
+            hour += 12
+        return hour, minute
+    return None
 
 
 def build_suggestion_prompt(
@@ -164,6 +182,7 @@ def build_suggestion_prompt(
     at: datetime,
     target_date: date,
     text: str | None,
+    mode: Literal["suggest", "log"] = "suggest",
 ) -> str:
     # 1. Profile information
     if profile:
@@ -277,10 +296,54 @@ def build_suggestion_prompt(
         text.strip() if text and text.strip() else "Побажання відсутні (порожній запит)"
     )
 
+    if mode == "suggest":
+        intro_task = (
+            "Твоє завдання — проаналізувати контекст користувача, поточний час та його побажання і "
+            "запропонувати прийом їжі у вигляді JSON-відповіді."
+        )
+        rules_text = (
+            "--- ПРАВИЛА РОБОТИ ---\n"
+            "1. Запропонуй один прийом їжі (meal_type) для поточного часу на основі контексту "
+            "та побажань користувача. Тільки пропонуй прийом їжі і ніколи не записуй нічого як "
+            "з'їдене (навіть якщо текст користувача звучить як спожите).\n"
+            "2. Прийом повинен складатись із 2-4 окремих страв (items) з конкретними "
+            "грамами порцій.\n"
+            "3. Пріоритет вибору страв:\n"
+            "   1) Готові страви (is_ready=true) та закріплені страви (pinned_meal_type).\n"
+            "   2) Страви, які можна легко приготувати з наявних вдома продуктів.\n"
+            "   3) Інші страви з каталогу або нові прості страви.\n"
+            "4. Суворо враховуй обмеження профілю (restrictions) та небажані продукти (dislikes).\n"
+            "5. Враховуй залишок калорій і білка на сьогодні — не перевищуй денний бюджет.\n"
+            "6. Ваги профілю керують балансом вибору:\n"
+            "   * weight_variety (різноманітність): уникай повторення продуктів, пропонуй нове.\n"
+            "   * weight_balance (збалансованість): дбай про співвідношення БЖВ, "
+            "клітковину/овочі.\n"
+            "   * weight_goal (відповідність меті): суворо підганяй калораж та білок під норму.\n"
+            "7. Для кожної страви поверни: dish_id або null (якщо страва є в каталозі — вкажи "
+            "її dish_id), name, grams, та розраховані КБЖВ на цю порцію "
+            "(kcal, protein_g, fat_g, carbs_g).\n\n"
+            "Поверни відповідь виключно у форматі JSON відповідно до наданої схеми."
+        )
+    else:
+        intro_task = (
+            "Твоє завдання — розібрати текст користувача про вже з'їдену їжу "
+            "(страви/продукти з грамами) і сформувати запис прийому їжі у вигляді JSON-відповіді."
+        )
+        rules_text = (
+            "--- ПРАВИЛА РОБОТИ ---\n"
+            "1. Текст користувача описує їжу, яку він вже з'їв. Твоє завдання — тільки розібрати "
+            "спожите (страви/продукти з грамами) у запис прийому їжі.\n"
+            "2. Визнач відповідний прийом їжі (meal_type: breakfast, lunch, dinner, snack).\n"
+            "3. Сформуй прийом їжі зі спожитих страв (items). Якщо страва є в каталозі, вкажи "
+            "її dish_id; для решти вкажи назву (name).\n"
+            "4. Для кожної страви визнач грами (grams) та КБЖВ на порцію "
+            "(kcal, protein_g, fat_g, carbs_g).\n\n"
+            "Поверни відповідь виключно у форматі JSON відповідно до наданої схеми."
+        )
+
     return (
         "Ти — експертний нутриціолог у застосунку 'Що їсти?'.\n"
-        "Твоє завдання — проаналізувати контекст користувача, поточний час та його побажання і "
-        "сформувати JSON-відповідь.\n\n"
+        f"{intro_task}\n\n"
         f"--- ПОТОЧНИЙ ЧАС ТА ЗАПИТ ---\n"
         f"Дата клієнта: {target_date.isoformat()}\n"
         f"Момент клієнта (at): {at.isoformat()} ({at.strftime('%H:%M')})\n"
@@ -297,32 +360,7 @@ def build_suggestion_prompt(
         f"{ready_pinned_json}\n\n"
         f"--- РЕШТА СТРАВ З КАТАЛОГУ ---\n"
         f"{other_dishes_json}\n\n"
-        "--- ПРАВИЛА РОБОТИ ---\n"
-        "1. ВИЗНАЧЕННЯ НАМІРУ (intent):\n"
-        "   - 'log': якщо текст користувача описує їжу, яку він вже з'їв "
-        "(наприклад: 'з\\'їв омлет 200 г і яблуко', 'з\\'їла 150г сиру', 'випив капучино').\n"
-        "     Сформуй прийом їжі зі спожитих страв. Якщо страва є в каталозі, вкажи її dish_id; "
-        "для решти вкажи назву (name). Оціни грами (grams) та КБЖВ на порцію "
-        "(kcal, protein_g, fat_g, carbs_g).\n"
-        "   - 'suggest': якщо тексту немає або текст містить побажання/уточнення до наступного "
-        "прийому (наприклад: 'хочу щось ситне', 'без молочки', або порожній запит).\n\n"
-        "2. ЯКЩО НАМІР 'suggest':\n"
-        "   - Запропонуй один прийом їжі (meal_type) для поточного часу.\n"
-        "   - Прийом повинен складатись із 2-4 окремих страв (items) з конкретними "
-        "грамами порцій.\n"
-        "   - Пріоритет вибору страв:\n"
-        "     1) Готові страви (is_ready=true) та закріплені страви (pinned_meal_type).\n"
-        "     2) Страви, які можна легко приготувати з наявних вдома продуктів.\n"
-        "     3) Інші страви з каталогу або нові прості страви.\n"
-        "   - Суворо враховуй обмеження профілю (restrictions) та небажані продукти (dislikes).\n"
-        "   - Враховуй залишок калорій і білка на сьогодні — не перевищуй денний бюджет.\n"
-        "   - Ваги профілю керують балансом вибору:\n"
-        "     * weight_variety (різноманітність): уникай повторення продуктів, пропонуй нове.\n"
-        "     * weight_balance (збалансованість): дбай про співвідношення БЖВ, клітковину/овочі.\n"
-        "     * weight_goal (відповідність меті): суворо підганяй калораж та білок під норму.\n"
-        "   - Для кожної страви поверни: dish_id або null, name, grams, та розраховані КБЖВ на цю "
-        "порцію (kcal, protein_g, fat_g, carbs_g).\n\n"
-        "Поверни відповідь виключно у форматі JSON відповідно до наданої схеми."
+        f"{rules_text}"
     )
 
 
@@ -333,7 +371,8 @@ async def generate_suggestion(
     at: datetime,
     text: str | None,
     settings: Settings,
-) -> tuple[str, MenuRead]:
+    mode: Literal["suggest", "log"] = "suggest",
+) -> tuple[Literal["suggest", "log"], MenuRead]:
     # 1. Fetch profile and norms
     profile = await crud.get_nutrition_profile(session, user_id)
     kcal_norm, protein_norm = calculate_daily_norms(profile, target_date)
@@ -372,6 +411,7 @@ async def generate_suggestion(
         at=at,
         target_date=target_date,
         text=text,
+        mode=mode,
     )
 
     # 5. Call Gemini
@@ -425,10 +465,6 @@ async def generate_suggestion(
             raw_response=gemini_result.raw_text,
         )
 
-    intent = data.get("intent", "suggest")
-    if intent not in ("suggest", "log"):
-        intent = "suggest"
-
     meal_type_str = data.get("meal_type", "lunch")
     try:
         meal_type = MealType(meal_type_str)
@@ -442,12 +478,12 @@ async def generate_suggestion(
             raw_response=gemini_result.raw_text,
         )
 
-    # 6. Apply intent logic
+    # 6. Apply mode logic
     # Dish lookup by id or name
     dish_by_id = {d.id: d for d in all_dishes}
     dish_by_name = {d.name.strip().lower(): d for d in all_dishes}
 
-    if intent == "suggest":
+    if mode == "suggest":
         # A new suggestion replaces (deletes) the user's previous suggestion
         stmt_prev = select(Menu).where(
             Menu.user_id == user_id,
@@ -469,14 +505,42 @@ async def generate_suggestion(
         session.add(menu)
         await session.flush()
     else:
-        # "log": create a menu with state=eaten, origin=manual, eaten_at=at, date from request
+        # "log": records meal into request date. Eaten moment: at when date is today;
+        # for a past date use midday of that date, unless the text names a time.
+        if target_date == at.date():
+            eaten_moment = at
+        else:
+            tz = at.tzinfo if at.tzinfo is not None else UTC
+            parsed_time = extract_time_from_text(text)
+            if parsed_time is not None:
+                h, m = parsed_time
+                eaten_moment = datetime(
+                    target_date.year,
+                    target_date.month,
+                    target_date.day,
+                    h,
+                    m,
+                    0,
+                    tzinfo=tz,
+                )
+            else:
+                eaten_moment = datetime(
+                    target_date.year,
+                    target_date.month,
+                    target_date.day,
+                    12,
+                    0,
+                    0,
+                    tzinfo=tz,
+                )
+
         menu = Menu(
             user_id=user_id,
             date=target_date,
             meal_type=meal_type,
             origin=MenuOrigin.MANUAL,
             state=MenuState.EATEN,
-            eaten_at=at,
+            eaten_at=eaten_moment,
         )
         session.add(menu)
         await session.flush()
@@ -505,7 +569,7 @@ async def generate_suggestion(
         fat_g = max(0.0, float(it.get("fat_g", 0.0)))
         carbs_g = max(0.0, float(it.get("carbs_g", 0.0)))
 
-        is_gen = intent == "suggest"
+        is_gen = mode == "suggest"
         nutr_source = (
             NutritionSource.COMPUTED if resolved_dish_id else NutritionSource.MODEL
         )
@@ -558,4 +622,4 @@ async def generate_suggestion(
 
     await session.commit()
     await session.refresh(menu)
-    return intent, to_menu_read(menu, created_items)
+    return mode, to_menu_read(menu, created_items)

@@ -1,5 +1,5 @@
 from datetime import date, datetime
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
@@ -38,13 +38,14 @@ class EatMealRequest(BaseModel):
 
 
 class SuggestionRequest(BaseModel):
+    mode: Literal["suggest", "log"] = "suggest"
     text: str | None = None
     date: date
     at: datetime
 
 
 class SuggestionResponse(BaseModel):
-    intent: str
+    mode: Literal["suggest", "log"]
     menu: MenuRead
 
 
@@ -297,13 +298,14 @@ async def create_suggestion(
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> SuggestionResponse:
     try:
-        intent, menu = await generate_suggestion(
+        mode, menu = await generate_suggestion(
             session=session,
             user_id=user_id,
             target_date=data.date,
             at=data.at,
             text=data.text,
             settings=settings,
+            mode=data.mode,
         )
     except ServiceGeminiUnavailable as exc:
         raise HTTPException(
@@ -316,7 +318,7 @@ async def create_suggestion(
             detail=f"Invalid response from model: {exc}",
         ) from exc
 
-    if intent == "log":
+    if mode == "log":
         background_tasks.add_task(
             evaluate_menu_day_background,
             user_id=user_id,
@@ -325,7 +327,7 @@ async def create_suggestion(
             menu_id=menu.id,
         )
 
-    return SuggestionResponse(intent=intent, menu=menu)
+    return SuggestionResponse(mode=mode, menu=menu)
 
 
 @journal_router.get("", response_model=JournalResponse)
