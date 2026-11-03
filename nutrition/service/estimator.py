@@ -1,7 +1,7 @@
 import json
 import logging
 import time
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from datetime import date
 from typing import Any
 from uuid import UUID
@@ -29,8 +29,8 @@ from nutrition.service.generator import (
 logger = logging.getLogger(__name__)
 
 ESTIMATE_PROMPT_VERSION = "2026-10-27.4"
-DISH_ESTIMATE_PROMPT_VERSION = "2026-10-27.1"
-PRODUCT_ESTIMATE_PROMPT_VERSION = DISH_ESTIMATE_PROMPT_VERSION
+DISH_ESTIMATE_PROMPT_VERSION = "2026-11-03.1"
+PRODUCT_ESTIMATE_PROMPT_VERSION = "2026-10-27.1"
 
 
 class ItemNutritionEstimate(BaseModel):
@@ -111,10 +111,35 @@ DISH_ESTIMATE_RESPONSE_SCHEMA = {
 PRODUCT_ESTIMATE_RESPONSE_SCHEMA = DISH_ESTIMATE_RESPONSE_SCHEMA
 
 
-def build_dish_estimate_prompt(dish_name: str) -> str:
+def build_dish_estimate_prompt(
+    dish_name: str,
+    composition: Sequence[tuple[str, int | float]] | None = None,
+) -> str:
+    if not composition:
+        return (
+            "Ти — експертний нутриціолог. Твоє завдання — оцінити харчову цінність на 100 г "
+            f"для страви/продукту: '{dish_name}'.\n"
+            "Визнач реалістичні значення для:\n"
+            "- kcal: калорійність на 100 г (ккал, число >= 0);\n"
+            "- protein_g: білки на 100 г (г, число >= 0);\n"
+            "- fat_g: жири на 100 г (г, число >= 0);\n"
+            "- carbs_g: вуглеводи на 100 г (г, число >= 0);\n"
+            "- fiber_g: клітковина на 100 г (г, або null якщо невідомо);\n"
+            "- sugar_g: цукор на 100 г (г, або null якщо невідомо);\n"
+            "- sodium_mg: натрій на 100 г (мг, або null якщо невідомо).\n"
+            "Обов'язково вкажи kcal, protein_g, fat_g, carbs_g. "
+            "Пропущені значення мають бути null, не 0."
+        )
+
+    total_weight = sum(weight for _, weight in composition)
+    ingredients_str = "\n".join(f"- {name}: {weight} г" for name, weight in composition)
     return (
         "Ти — експертний нутриціолог. Твоє завдання — оцінити харчову цінність на 100 г "
-        f"для страви/продукту: '{dish_name}'.\n"
+        f"для страви: '{dish_name}'.\n"
+        f"Склад страви (загальна вага інгредієнтів: {total_weight} г):\n"
+        f"{ingredients_str}\n"
+        "Розрахуй харчову цінність на 100 г готової страви на основі цих інгредієнтів "
+        f"(загальна вага = сума ваг: {total_weight} г).\n"
         "Визнач реалістичні значення для:\n"
         "- kcal: калорійність на 100 г (ккал, число >= 0);\n"
         "- protein_g: білки на 100 г (г, число >= 0);\n"
@@ -128,7 +153,8 @@ def build_dish_estimate_prompt(dish_name: str) -> str:
     )
 
 
-build_product_estimate_prompt = build_dish_estimate_prompt
+def build_product_estimate_prompt(product_name: str) -> str:
+    return build_dish_estimate_prompt(product_name)
 
 
 async def estimate_dish_nutrition(
@@ -136,11 +162,12 @@ async def estimate_dish_nutrition(
     user_id: UUID,
     dish_name: str,
     settings: Settings,
+    composition: Sequence[tuple[str, int | float]] | None = None,
     *,
     raise_on_error: bool = False,
 ) -> NutritionEstimate | None:
     """Estimate dish nutrition per 100g with Gemini."""
-    prompt = build_dish_estimate_prompt(dish_name)
+    prompt = build_dish_estimate_prompt(dish_name, composition=composition)
     start_time = time.perf_counter()
     raw_response_text: str | None = None
     input_tokens: int | None = None
@@ -207,7 +234,23 @@ async def estimate_dish_nutrition(
         return None
 
 
-estimate_product_nutrition = estimate_dish_nutrition
+async def estimate_product_nutrition(
+    session: AsyncSession,
+    user_id: UUID,
+    product_name: str,
+    settings: Settings,
+    *,
+    raise_on_error: bool = False,
+) -> NutritionEstimate | None:
+    """Estimate product nutrition per 100g by name with Gemini."""
+    return await estimate_dish_nutrition(
+        session=session,
+        user_id=user_id,
+        dish_name=product_name,
+        settings=settings,
+        composition=None,
+        raise_on_error=raise_on_error,
+    )
 
 
 def build_estimate_response_schema(item_ids: Iterable[UUID]) -> dict[str, Any]:
