@@ -1,4 +1,5 @@
 import logging
+from collections import Counter
 from collections.abc import Sequence
 from datetime import UTC, datetime
 from uuid import UUID
@@ -16,6 +17,8 @@ from nutrition.models import (
     DishRead,
     DishUpdate,
     MealType,
+    NutritionEstimate,
+    Product,
     ProductCreate,
 )
 
@@ -55,6 +58,30 @@ async def get_dish_components(
         )
         for c in results
     ]
+
+
+async def get_dish_composition(
+    session: AsyncSession,
+    dish_id: UUID,
+) -> list[tuple[str, int]]:
+    statement = (
+        select(Product.name, DishComponent.weight_g)
+        .join(Product, DishComponent.product_id == Product.id)
+        .where(DishComponent.dish_id == dish_id)
+        .order_by(DishComponent.id)
+    )
+    results = (await session.exec(statement)).all()
+    return [(name, weight_g) for name, weight_g in results]
+
+
+def _apply_nutrition_estimate(dish: Dish, est: NutritionEstimate) -> None:
+    dish.kcal = est.kcal
+    dish.protein_g = est.protein_g
+    dish.fat_g = est.fat_g
+    dish.carbs_g = est.carbs_g
+    dish.fiber_g = est.fiber_g
+    dish.sugar_g = est.sugar_g
+    dish.sodium_mg = est.sodium_mg
 
 
 def to_dish_read(dish: Dish, components: list[DishComponentRead] | None = None) -> DishRead:
@@ -108,30 +135,6 @@ async def create_dish(
         sugar_g=data.sugar_g,
         sodium_mg=data.sodium_mg,
     )
-
-    # If nutrition is not provided, fill with estimator
-    if not user_provided_nutrition:
-        from nutrition.service.estimator import estimate_dish_nutrition
-
-        try:
-            est = await estimate_dish_nutrition(
-                session=session,
-                user_id=user_id,
-                dish_name=dish.name,
-                settings=settings,
-                raise_on_error=False,
-            )
-            if est:
-                dish.kcal = est.kcal
-                dish.protein_g = est.protein_g
-                dish.fat_g = est.fat_g
-                dish.carbs_g = est.carbs_g
-                dish.fiber_g = est.fiber_g
-                dish.sugar_g = est.sugar_g
-                dish.sodium_mg = est.sodium_mg
-        except Exception as exc:
-            logger.warning("Dish nutrition estimation failed for '%s': %s", dish.name, exc)
-
     session.add(dish)
     await session.commit()
     await session.refresh(dish)
@@ -164,6 +167,28 @@ async def create_dish(
                     weight_g=dc.weight_g,
                 )
             )
+
+    # If nutrition is not provided, fill with estimator after components are created
+    if not user_provided_nutrition:
+        from nutrition.service.estimator import estimate_dish_nutrition
+
+        composition = await get_dish_composition(session, dish.id)
+        try:
+            est = await estimate_dish_nutrition(
+                session=session,
+                user_id=user_id,
+                dish_name=dish.name,
+                settings=settings,
+                composition=composition or None,
+                raise_on_error=False,
+            )
+            if est:
+                _apply_nutrition_estimate(dish, est)
+                session.add(dish)
+                await session.commit()
+                await session.refresh(dish)
+        except Exception as exc:
+            logger.warning("Dish nutrition estimation failed for '%s': %s", dish.name, exc)
 
     return to_dish_read(dish, created_components)
 
@@ -215,15 +240,25 @@ async def update_dish(
     if settings is None:
         settings = get_settings()
 
+    reset_nutrition = data.reset_nutrition
     updates = data.model_dump(exclude_unset=True)
+    updates.pop("reset_nutrition", None)
 
     nutrition_updated = any(f in updates for f in NUTR_FIELDS)
-    if nutrition_updated:
-        dish.nutrition_overridden = True
-
+    components_present = "components" in updates
     components_data = updates.pop("components", None)
 
+    if reset_nutrition:
+        dish.nutrition_overridden = False
+        updates.pop("nutrition_overridden", None)
+        for f in NUTR_FIELDS:
+            updates.pop(f, None)
+    elif nutrition_updated:
+        dish.nutrition_overridden = True
+
     for field, value in updates.items():
+        if field == "name" and isinstance(value, str):
+            value = value.strip()
         setattr(dish, field, value)
 
     dish.updated_at = datetime.now(UTC)
@@ -231,32 +266,84 @@ async def update_dish(
     await session.commit()
     await session.refresh(dish)
 
-    if components_data is not None:
-        # Replace components
+    composition_changed = False
+    if components_present:
         old_comps = (
             await session.exec(select(DishComponent).where(DishComponent.dish_id == dish_id))
         ).all()
-        for oc in old_comps:
-            await session.delete(oc)
-        await session.commit()
+        has_new_product = any(
+            comp_dict.get("new_product") is not None
+            for comp_dict in (components_data or [])
+        )
+        if has_new_product:
+            composition_changed = True
+        else:
+            old_multiset = Counter(
+                (str(c.product_id), c.weight_g) for c in old_comps
+            )
+            new_multiset = Counter(
+                (str(c["product_id"]), c["weight_g"]) for c in (components_data or [])
+            )
+            composition_changed = old_multiset != new_multiset
 
-        for comp_dict in components_data:
-            pid = comp_dict.get("product_id")
-            new_p = comp_dict.get("new_product")
-            if new_p:
-                new_prod = await create_product(
-                    session,
-                    user_id,
-                    ProductCreate(
-                        name=new_p["name"],
-                        available=new_p.get("available", True),
-                        note=new_p.get("note"),
-                    ),
-                )
-                pid = new_prod.id
-            dc = DishComponent(dish_id=dish.id, product_id=pid, weight_g=comp_dict["weight_g"])
-            session.add(dc)
-        await session.commit()
+        if composition_changed:
+            # Replace components
+            for oc in old_comps:
+                await session.delete(oc)
+            await session.commit()
+
+            if components_data:
+                for comp_dict in components_data:
+                    pid = comp_dict.get("product_id")
+                    new_p = comp_dict.get("new_product")
+                    if new_p:
+                        new_prod = await create_product(
+                            session,
+                            user_id,
+                            ProductCreate(
+                                name=new_p["name"],
+                                available=new_p.get("available", True),
+                                note=new_p.get("note"),
+                            ),
+                        )
+                        pid = new_prod.id
+                    dc = DishComponent(
+                        dish_id=dish.id, product_id=pid, weight_g=comp_dict["weight_g"]
+                    )
+                    session.add(dc)
+                await session.commit()
+
+    should_reestimate = False
+    if reset_nutrition:
+        should_reestimate = True
+    elif (
+        components_present
+        and composition_changed
+        and not nutrition_updated
+        and not dish.nutrition_overridden
+    ):
+        should_reestimate = True
+
+    if should_reestimate:
+        from nutrition.service.estimator import estimate_dish_nutrition
+
+        composition = await get_dish_composition(session, dish.id)
+        try:
+            est = await estimate_dish_nutrition(
+                session=session,
+                user_id=user_id,
+                dish_name=dish.name,
+                settings=settings,
+                composition=composition or None,
+                raise_on_error=False,
+            )
+            if est:
+                _apply_nutrition_estimate(dish, est)
+                session.add(dish)
+                await session.commit()
+                await session.refresh(dish)
+        except Exception as exc:
+            logger.warning("Dish nutrition re-estimation failed for '%s': %s", dish.name, exc)
 
     components = await get_dish_components(session, dish.id)
     return to_dish_read(dish, components)

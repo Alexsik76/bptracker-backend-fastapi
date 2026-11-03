@@ -5,6 +5,7 @@ import pytest
 from httpx import AsyncClient
 
 from gemini_infra import GeminiResult
+from gemini_infra.types import GeminiUnavailable
 from nutrition.models import DishComponentCreate
 
 
@@ -207,3 +208,258 @@ async def test_dish_component_validation():
 
     with pytest.raises(ValueError, match="Either product_id or new_product must be provided"):
         DishComponentCreate(weight_g=100)
+
+
+@pytest.mark.asyncio
+async def test_create_dish_estimates_from_composition(
+    client: AsyncClient, _mock_gemini_default: AsyncMock
+):
+    _mock_gemini_default.reset_mock()
+    p1 = (
+        await client.post(
+            "/nutrition/products", json={"name": "Вівсяні пластівці", "available": True}
+        )
+    ).json()
+
+    payload = {
+        "name": "Вівсянка з бананом",
+        "components": [
+            {"product_id": p1["id"], "weight_g": 60},
+            {"new_product": {"name": "Банан", "available": True}, "weight_g": 120},
+        ],
+    }
+    resp = await client.post("/nutrition/dishes", json=payload)
+    assert resp.status_code == 201
+    data = resp.json()
+    assert data["kcal"] == 120.0
+    assert data["nutrition_overridden"] is False
+
+    assert _mock_gemini_default.call_count == 1
+    call_prompt = _mock_gemini_default.call_args.kwargs["prompt"]
+    assert "Вівсяні пластівці: 60 г" in call_prompt
+    assert "Банан: 120 г" in call_prompt
+    assert "180" in call_prompt
+
+
+@pytest.mark.asyncio
+async def test_components_change_reestimates_when_not_overridden_and_not_when_overridden(
+    client: AsyncClient, _mock_gemini_default: AsyncMock
+):
+    p1 = (await client.post("/nutrition/products", json={"name": "Сир", "available": True})).json()
+    p2 = (await client.post("/nutrition/products", json={"name": "Мед", "available": True})).json()
+
+    # Part 1: Dish without overridden nutrition -> re-estimates on components change
+    _mock_gemini_default.reset_mock()
+    d1 = (
+        await client.post(
+            "/nutrition/dishes",
+            json={
+                "name": "Сир з медом",
+                "components": [{"product_id": p1["id"], "weight_g": 100}],
+            },
+        )
+    ).json()
+    assert d1["nutrition_overridden"] is False
+    assert _mock_gemini_default.call_count == 1
+
+    # Update components -> triggers re-estimation with new composition
+    _mock_gemini_default.reset_mock()
+    patch_resp = await client.patch(
+        f"/nutrition/dishes/{d1['id']}",
+        json={
+            "components": [
+                {"product_id": p1["id"], "weight_g": 150},
+                {"product_id": p2["id"], "weight_g": 20},
+            ]
+        },
+    )
+    assert patch_resp.status_code == 200
+    assert _mock_gemini_default.call_count == 1
+    prompt = _mock_gemini_default.call_args.kwargs["prompt"]
+    assert "Сир: 150 г" in prompt
+    assert "Мед: 20 г" in prompt
+    assert "170" in prompt
+
+    # Update components to empty -> re-estimates by name
+    _mock_gemini_default.reset_mock()
+    empty_resp = await client.patch(
+        f"/nutrition/dishes/{d1['id']}",
+        json={"components": []},
+    )
+    assert empty_resp.status_code == 200
+    assert _mock_gemini_default.call_count == 1
+    empty_prompt = _mock_gemini_default.call_args.kwargs["prompt"]
+    assert "Склад страви" not in empty_prompt
+    assert "- Сир:" not in empty_prompt
+
+    # Part 2: Dish with overridden nutrition -> does NOT re-estimate on components change
+    d2 = (
+        await client.post(
+            "/nutrition/dishes",
+            json={
+                "name": "Каша гречана з маслом",
+                "kcal": 250.0,
+                "protein_g": 6.0,
+                "fat_g": 8.0,
+                "carbs_g": 35.0,
+                "components": [{"product_id": p1["id"], "weight_g": 100}],
+            },
+        )
+    ).json()
+    assert d2["nutrition_overridden"] is True
+
+    _mock_gemini_default.reset_mock()
+    patch_overridden = await client.patch(
+        f"/nutrition/dishes/{d2['id']}",
+        json={"components": [{"product_id": p1["id"], "weight_g": 200}]},
+    )
+    assert patch_overridden.status_code == 200
+    assert _mock_gemini_default.call_count == 0
+    updated_d2 = patch_overridden.json()
+    assert updated_d2["kcal"] == 250.0
+    assert updated_d2["nutrition_overridden"] is True
+
+    # Part 3: Request that sets both components and nutrition fields
+    # -> nutrition fields win, no re-estimation
+    _mock_gemini_default.reset_mock()
+    patch_both = await client.patch(
+        f"/nutrition/dishes/{d1['id']}",
+        json={
+            "components": [{"product_id": p1["id"], "weight_g": 200}],
+            "kcal": 300.0,
+        },
+    )
+    assert patch_both.status_code == 200
+    assert _mock_gemini_default.call_count == 0
+    updated_both = patch_both.json()
+    assert updated_both["kcal"] == 300.0
+    assert updated_both["nutrition_overridden"] is True
+
+
+@pytest.mark.asyncio
+async def test_reset_nutrition_clears_flag_and_reestimates(
+    client: AsyncClient, _mock_gemini_default: AsyncMock
+):
+    p1 = (
+        await client.post("/nutrition/products", json={"name": "Гречка", "available": True})
+    ).json()
+
+    d = (
+        await client.post(
+            "/nutrition/dishes",
+            json={
+                "name": "Гречана каша",
+                "kcal": 400.0,
+                "protein_g": 12.0,
+                "fat_g": 5.0,
+                "carbs_g": 70.0,
+                "components": [{"product_id": p1["id"], "weight_g": 100}],
+            },
+        )
+    ).json()
+    assert d["nutrition_overridden"] is True
+    assert d["kcal"] == 400.0
+
+    _mock_gemini_default.reset_mock()
+    _mock_gemini_default.side_effect = None
+    _mock_gemini_default.return_value = GeminiResult(
+        data={"kcal": 135.0, "protein_g": 4.5, "fat_g": 1.2, "carbs_g": 26.0},
+        raw_text='{"kcal": 135.0}',
+        model="gemini-2.0-flash",
+        input_tokens=10,
+        output_tokens=10,
+    )
+
+    # 1. Reset nutrition on overridden dish
+    reset_resp = await client.patch(
+        f"/nutrition/dishes/{d['id']}",
+        json={"reset_nutrition": True},
+    )
+    assert reset_resp.status_code == 200
+    data = reset_resp.json()
+    assert data["nutrition_overridden"] is False
+    assert data["kcal"] == 135.0
+    assert _mock_gemini_default.call_count == 1
+    call_prompt = _mock_gemini_default.call_args.kwargs["prompt"]
+    assert "Гречка: 100 г" in call_prompt
+
+    # 2. Reset nutrition while supplying new nutrition fields -> nutrition fields ignored
+    await client.patch(f"/nutrition/dishes/{d['id']}", json={"kcal": 999.0})
+    _mock_gemini_default.reset_mock()
+    reset_ignore_resp = await client.patch(
+        f"/nutrition/dishes/{d['id']}",
+        json={"reset_nutrition": True, "kcal": 777.0, "fat_g": 50.0},
+    )
+    assert reset_ignore_resp.status_code == 200
+    data_ignored = reset_ignore_resp.json()
+    assert data_ignored["nutrition_overridden"] is False
+    assert data_ignored["kcal"] == 135.0
+    assert _mock_gemini_default.call_count == 1
+
+    # 3. Reset nutrition failure leaves previous values and does not fail request
+    await client.patch(f"/nutrition/dishes/{d['id']}", json={"kcal": 555.0})
+    _mock_gemini_default.side_effect = GeminiUnavailable("LLM service unavailable")
+    reset_fail_resp = await client.patch(
+        f"/nutrition/dishes/{d['id']}",
+        json={"reset_nutrition": True},
+    )
+    assert reset_fail_resp.status_code == 200
+    data_failed = reset_fail_resp.json()
+    assert data_failed["nutrition_overridden"] is False
+    assert data_failed["kcal"] == 555.0
+
+
+@pytest.mark.asyncio
+async def test_update_dish_identical_components_does_not_reestimate(
+    client: AsyncClient, _mock_gemini_default: AsyncMock
+):
+    p1 = (
+        await client.post(
+            "/nutrition/products", json={"name": "Геркулес", "available": True}
+        )
+    ).json()
+
+    # Create dish with initial components and note
+    d = (
+        await client.post(
+            "/nutrition/dishes",
+            json={
+                "name": "Вівсянка ранкова",
+                "note": "без цукру",
+                "components": [{"product_id": p1["id"], "weight_g": 60}],
+            },
+        )
+    ).json()
+    assert d["nutrition_overridden"] is False
+    comp_id = d["components"][0]["id"]
+
+    _mock_gemini_default.reset_mock()
+
+    # 1. PATCH with identical components and changed note -> does not call estimator
+    patch_note_resp = await client.patch(
+        f"/nutrition/dishes/{d['id']}",
+        json={
+            "note": "з корицею",
+            "components": [{"product_id": p1["id"], "weight_g": 60}],
+        },
+    )
+    assert patch_note_resp.status_code == 200
+    patched_data = patch_note_resp.json()
+    assert patched_data["note"] == "з корицею"
+    assert patched_data["components"][0]["id"] == comp_id  # component row not deleted/recreated
+    assert _mock_gemini_default.call_count == 0  # estimator not called
+
+    # 2. PATCH with changed weight -> calls estimator
+    _mock_gemini_default.reset_mock()
+    patch_weight_resp = await client.patch(
+        f"/nutrition/dishes/{d['id']}",
+        json={
+            "components": [{"product_id": p1["id"], "weight_g": 90}],
+        },
+    )
+    assert patch_weight_resp.status_code == 200
+    patched_weight_data = patch_weight_resp.json()
+    assert patched_weight_data["components"][0]["weight_g"] == 90
+    assert _mock_gemini_default.call_count == 1  # estimator called
+    call_prompt = _mock_gemini_default.call_args.kwargs["prompt"]
+    assert "90 г" in call_prompt

@@ -159,6 +159,7 @@ class DishUpdate(NutritionSet):
     nutrition_overridden: bool | None = None
     note: str | None = None
     components: list[DishComponentCreate] | None = None
+    reset_nutrition: bool = False
 
     @model_validator(mode="before")
     @classmethod
