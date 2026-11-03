@@ -1,7 +1,7 @@
 import json
 import logging
 import time
-from datetime import UTC, date, datetime
+from datetime import date
 from typing import Any
 from uuid import UUID
 
@@ -12,6 +12,7 @@ from app_settings import ai_config
 from config import Settings
 from db import async_session_factory
 from nutrition import crud
+from nutrition.clock import utc_today
 from nutrition.models.enums import Sex
 from nutrition.models.menu import MenuRead
 from nutrition.models.profile import NutritionProfile
@@ -41,7 +42,7 @@ def calculate_user_goal_data(
     else:
         goal_direction = "утримання"
 
-    ref_year = target_date.year if target_date else datetime.now(UTC).year
+    ref_year = target_date.year if target_date else utc_today().year
     age = max(1, ref_year - profile.birth_year)
 
     if profile.sex == Sex.MALE:
@@ -87,9 +88,10 @@ def build_jev_state(
             if it.kcal is not None:
                 day_total_kcal += it.kcal
 
+        time_str = m.eaten_at.strftime("%H:%M") if m.eaten_at else None
         meals_data.append({
             "type": m.meal_type.value,
-            "time": m.time,
+            "time": time_str,
             "items": items_data,
         })
 
@@ -108,6 +110,7 @@ async def evaluate_menu_day(
     user_id: UUID,
     menu_date: date,
     settings: Settings,
+    menu_id: UUID | None = None,
 ) -> None:
     """Evaluate day menu against active criteria using TypeSafe JEV."""
     if not settings.typesafe_api_key:
@@ -124,7 +127,7 @@ async def evaluate_menu_day(
         logger.info("Evaluation skipped: user %s has no nutrition profile", user_id)
         return
 
-    day_menus = await crud.get_day_menus(session, user_id, menu_date)
+    day_menus = await crud.list_meals(session, user_id, menu_date)
     state = build_jev_state(profile, day_menus, menu_date)
     questions = {
         c.key: {
@@ -166,6 +169,7 @@ async def evaluate_menu_day(
             input_tokens=None,
             output_tokens=None,
             raw_response=exc.raw_text,
+            menu_id=menu_id,
         )
         logger.error(
             "JEV invalid response for user %s on %s: %s",
@@ -188,6 +192,7 @@ async def evaluate_menu_day(
             input_tokens=None,
             output_tokens=None,
             raw_response=None,
+            menu_id=menu_id,
         )
         logger.error(
             "JEV unavailable for user %s on %s: %s",
@@ -228,6 +233,7 @@ async def evaluate_menu_day(
         input_tokens=input_tokens,
         output_tokens=output_tokens,
         raw_response=result.raw_response,
+        menu_id=menu_id,
     )
 
     await crud.save_menu_day_evaluations(
@@ -237,6 +243,7 @@ async def evaluate_menu_day(
         criteria_version=criteria_version,
         answers=result.answers,
         model=result.model,
+        menu_id=menu_id,
     )
 
 
@@ -245,6 +252,7 @@ async def evaluate_menu_day_background(
     menu_date: date,
     settings: Settings,
     session_factory: async_sessionmaker[AsyncSession] | None = None,
+    menu_id: UUID | None = None,
 ) -> None:
     """Background task wrapper: evaluates day menu with its own session and catches all errors."""
     factory = session_factory if session_factory is not None else async_session_factory
@@ -255,6 +263,7 @@ async def evaluate_menu_day_background(
                 user_id=user_id,
                 menu_date=menu_date,
                 settings=settings,
+                menu_id=menu_id,
             )
             await session.commit()
     except Exception as exc:

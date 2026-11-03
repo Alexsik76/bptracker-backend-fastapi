@@ -7,7 +7,6 @@ from typing import Any
 from uuid import UUID
 
 from pydantic import BaseModel, field_validator, model_validator
-from sqlmodel import col, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 import gemini_infra
@@ -17,14 +16,9 @@ from gemini_infra.types import GeminiInvalidResponse, GeminiUnavailable
 from nutrition import crud
 from nutrition.clock import utc_today
 from nutrition.models import (
-    DayMenuRead,
-    MealType,
-    Menu,
     MenuItem,
-    MenuNoteRead,
     NutritionEstimate,
     NutritionSource,
-    OffPlanEntryRead,
 )
 from nutrition.service.generator import (
     ServiceGeminiUnavailable,
@@ -35,7 +29,8 @@ from nutrition.service.generator import (
 logger = logging.getLogger(__name__)
 
 ESTIMATE_PROMPT_VERSION = "2026-10-27.4"
-PRODUCT_ESTIMATE_PROMPT_VERSION = "2026-10-27.1"
+DISH_ESTIMATE_PROMPT_VERSION = "2026-10-27.1"
+PRODUCT_ESTIMATE_PROMPT_VERSION = DISH_ESTIMATE_PROMPT_VERSION
 
 
 class ItemNutritionEstimate(BaseModel):
@@ -87,7 +82,7 @@ class EstimateResponse(BaseModel):
     items: list[ItemNutritionEstimate]
 
 
-PRODUCT_ESTIMATE_RESPONSE_SCHEMA = {
+DISH_ESTIMATE_RESPONSE_SCHEMA = {
     "type": "OBJECT",
     "properties": {
         "kcal": {"type": "NUMBER", "description": "Калорійність на 100 г (ккал, число >= 0)"},
@@ -113,11 +108,13 @@ PRODUCT_ESTIMATE_RESPONSE_SCHEMA = {
     "required": ["kcal", "protein_g", "fat_g", "carbs_g"],
 }
 
+PRODUCT_ESTIMATE_RESPONSE_SCHEMA = DISH_ESTIMATE_RESPONSE_SCHEMA
 
-def build_product_estimate_prompt(product_name: str) -> str:
+
+def build_dish_estimate_prompt(dish_name: str) -> str:
     return (
         "Ти — експертний нутриціолог. Твоє завдання — оцінити харчову цінність на 100 г "
-        f"для продукту: '{product_name}'.\n"
+        f"для страви/продукту: '{dish_name}'.\n"
         "Визнач реалістичні значення для:\n"
         "- kcal: калорійність на 100 г (ккал, число >= 0);\n"
         "- protein_g: білки на 100 г (г, число >= 0);\n"
@@ -131,16 +128,19 @@ def build_product_estimate_prompt(product_name: str) -> str:
     )
 
 
-async def estimate_product_nutrition(
+build_product_estimate_prompt = build_dish_estimate_prompt
+
+
+async def estimate_dish_nutrition(
     session: AsyncSession,
     user_id: UUID,
-    product_name: str,
+    dish_name: str,
     settings: Settings,
     *,
     raise_on_error: bool = False,
 ) -> NutritionEstimate | None:
-    """Estimate product nutrition per 100g with Gemini."""
-    prompt = build_product_estimate_prompt(product_name)
+    """Estimate dish nutrition per 100g with Gemini."""
+    prompt = build_dish_estimate_prompt(dish_name)
     start_time = time.perf_counter()
     raw_response_text: str | None = None
     input_tokens: int | None = None
@@ -151,7 +151,7 @@ async def estimate_product_nutrition(
             prompt=prompt,
             model=ai_config.menu_model(),
             settings=settings,
-            response_schema=PRODUCT_ESTIMATE_RESPONSE_SCHEMA,
+            response_schema=DISH_ESTIMATE_RESPONSE_SCHEMA,
         )
         duration_ms = int(round((time.perf_counter() - start_time) * 1000))
         raw_response_text = gemini_result.raw_text
@@ -161,9 +161,9 @@ async def estimate_product_nutrition(
             settings=settings,
             user_id=user_id,
             menu_date=utc_today(),
-            scope="product_estimate",
+            scope="dish_estimate",
             model=ai_config.menu_model(),
-            prompt_version=PRODUCT_ESTIMATE_PROMPT_VERSION,
+            prompt_version=DISH_ESTIMATE_PROMPT_VERSION,
             duration_ms=duration_ms,
             input_tokens=input_tokens,
             output_tokens=output_tokens,
@@ -174,9 +174,9 @@ async def estimate_product_nutrition(
             session=session,
             user_id=user_id,
             menu_date=utc_today(),
-            scope="product_estimate",
+            scope="dish_estimate",
             model=ai_config.menu_model(),
-            prompt_version=PRODUCT_ESTIMATE_PROMPT_VERSION,
+            prompt_version=DISH_ESTIMATE_PROMPT_VERSION,
             prompt=prompt,
             duration_ms=duration_ms,
             input_tokens=input_tokens,
@@ -186,14 +186,14 @@ async def estimate_product_nutrition(
         return NutritionEstimate.model_validate(gemini_result.data)
     except Exception as exc:
         duration_ms = int(round((time.perf_counter() - start_time) * 1000))
-        logger.warning("Product estimation failed for '%s': %s", product_name, exc)
+        logger.warning("Dish estimation failed for '%s': %s", dish_name, exc)
         log_llm_exchange(
             settings=settings,
             user_id=user_id,
             menu_date=utc_today(),
-            scope="product_estimate",
+            scope="dish_estimate",
             model=ai_config.menu_model(),
-            prompt_version=PRODUCT_ESTIMATE_PROMPT_VERSION,
+            prompt_version=DISH_ESTIMATE_PROMPT_VERSION,
             duration_ms=duration_ms,
             input_tokens=None,
             output_tokens=None,
@@ -203,8 +203,11 @@ async def estimate_product_nutrition(
         if raise_on_error:
             if isinstance(exc, GeminiUnavailable):
                 raise ServiceGeminiUnavailable("Gemini service is unavailable") from exc
-            raise ServiceGenerationInvalidResponse(f"Product estimation failed: {exc}") from exc
+            raise ServiceGenerationInvalidResponse(f"Dish estimation failed: {exc}") from exc
         return None
+
+
+estimate_product_nutrition = estimate_dish_nutrition
 
 
 def build_estimate_response_schema(item_ids: Iterable[UUID]) -> dict[str, Any]:
@@ -294,51 +297,21 @@ def build_estimate_prompt(items: list[MenuItem]) -> str:
     )
 
 
-async def estimate_day_kcal(
+async def estimate_items_nutrition(
     session: AsyncSession,
     user_id: UUID,
-    menu_date: date,
+    items: list[MenuItem],
     settings: Settings,
-    meal_type: MealType | None = None,
-) -> DayMenuRead:
-    """Estimate full nutrition set for free-text menu items missing kcal using Gemini."""
-    stmt = (
-        select(MenuItem)
-        .join(Menu, col(MenuItem.menu_id) == col(Menu.id))
-        .where(
-            Menu.user_id == user_id,
-            Menu.date == menu_date,
-            Menu.eaten_at.is_(None),
-            MenuItem.dish_id.is_(None),
-            MenuItem.kcal.is_(None),
-        )
-        .order_by(col(Menu.meal_type).asc(), col(MenuItem.position).asc())
-    )
-    if meal_type is not None:
-        stmt = stmt.where(Menu.meal_type == meal_type)
+    menu_date: date | None = None,
+) -> list[MenuItem]:
+    """Estimate full nutrition set for given free-text menu items missing kcal."""
+    if not items:
+        return []
 
-    items_to_estimate = list((await session.exec(stmt)).all())
+    if menu_date is None:
+        menu_date = utc_today()
 
-    if not items_to_estimate:
-        day_menus = await crud.get_day_menus(session, user_id, menu_date)
-        notes = await crud.get_menu_notes(session, user_id, menu_date)
-        off_plan = await crud.get_off_plan_entries(session, user_id, menu_date)
-        available_pins = await crud.get_available_pins(session, user_id, menu_date)
-        evaluations = await crud.get_day_evaluations(session, user_id, menu_date)
-        day_created = await crud.is_day_created(session, user_id, menu_date)
-        return DayMenuRead(
-            date=menu_date,
-            day_created=day_created,
-            menus=day_menus,
-            notes=[MenuNoteRead.model_validate(n) for n in notes],
-            off_plan=[OffPlanEntryRead.model_validate(e) for e in off_plan],
-            available_pins=available_pins,
-            evaluations=evaluations,
-        )
-
-    prompt = build_estimate_prompt(items_to_estimate)
-
-    # End read transaction before calling Gemini so the connection is not idle in transaction
+    prompt = build_estimate_prompt(items)
     await session.commit()
 
     start_time = time.perf_counter()
@@ -352,12 +325,13 @@ async def estimate_day_kcal(
             prompt=prompt,
             model=ai_config.menu_model(),
             settings=settings,
-            response_schema=build_estimate_response_schema([it.id for it in items_to_estimate]),
+            response_schema=build_estimate_response_schema([i.id for i in items if i.id]),
         )
         duration_ms = int(round((time.perf_counter() - start_time) * 1000))
         raw_response_text = gemini_result.raw_text
         input_tokens = gemini_result.input_tokens
         output_tokens = gemini_result.output_tokens
+
         log_llm_exchange(
             settings=settings,
             user_id=user_id,
@@ -371,9 +345,9 @@ async def estimate_day_kcal(
             prompt=prompt,
             raw_response=raw_response_text,
         )
+        parsed = EstimateResponse.model_validate(gemini_result.data)
     except GeminiUnavailable as exc:
         duration_ms = int(round((time.perf_counter() - start_time) * 1000))
-        logger.error("Gemini unavailable during kcal estimation for user %s: %s", user_id, exc)
         log_llm_exchange(
             settings=settings,
             user_id=user_id,
@@ -402,9 +376,8 @@ async def estimate_day_kcal(
         )
         await session.commit()
         raise ServiceGeminiUnavailable("Gemini service is unavailable") from exc
-    except GeminiInvalidResponse as exc:
+    except (GeminiInvalidResponse, Exception) as exc:
         duration_ms = int(round((time.perf_counter() - start_time) * 1000))
-        raw_response_text = exc.raw_text
         log_llm_exchange(
             settings=settings,
             user_id=user_id,
@@ -436,52 +409,20 @@ async def estimate_day_kcal(
             f"Invalid Gemini response: {exc}", raw_response=raw_response_text
         ) from exc
 
-    try:
-        parsed_response = EstimateResponse.model_validate(gemini_result.data)
-        requested_ids = {it.id for it in items_to_estimate}
-        returned_ids = [it.id for it in parsed_response.items]
-
-        if len(returned_ids) != len(set(returned_ids)):
-            raise ValueError("Duplicate item ids in response")
-
-        if set(returned_ids) != requested_ids:
-            raise ValueError(
-                f"Returned item ids do not match requested set. "
-                f"Expected: {requested_ids}, got: {set(returned_ids)}"
-            )
-    except Exception as exc:
-        logger.warning("Estimation response validation failed for user %s: %s", user_id, exc)
-        await crud.add_generation_log(
-            session=session,
-            user_id=user_id,
-            menu_date=menu_date,
-            scope="estimate",
-            model=ai_config.menu_model(),
-            prompt_version=ESTIMATE_PROMPT_VERSION,
-            prompt=prompt,
-            duration_ms=duration_ms,
-            input_tokens=input_tokens,
-            output_tokens=output_tokens,
-            raw_response=raw_response_text,
-        )
-        await session.commit()
-        raise ServiceGenerationInvalidResponse(
-            f"Estimation response validation failed: {exc}",
-            raw_response=raw_response_text,
-        ) from exc
-
-    estimates_by_id = {it.id: it for it in parsed_response.items}
-    for item in items_to_estimate:
-        est = estimates_by_id[item.id]
-        item.kcal = est.kcal
-        item.protein_g = est.protein_g
-        item.fat_g = est.fat_g
-        item.carbs_g = est.carbs_g
-        item.fiber_g = est.fiber_g
-        item.sugar_g = est.sugar_g
-        item.sodium_mg = est.sodium_mg
-        item.nutrition_source = NutritionSource.MODEL
-        session.add(item)
+    # Apply estimates
+    estimates_by_id = {est.id: est for est in parsed.items}
+    for item in items:
+        est = estimates_by_id.get(item.id)
+        if est:
+            item.kcal = est.kcal
+            item.protein_g = est.protein_g
+            item.fat_g = est.fat_g
+            item.carbs_g = est.carbs_g
+            item.fiber_g = est.fiber_g
+            item.sugar_g = est.sugar_g
+            item.sodium_mg = est.sodium_mg
+            item.nutrition_source = NutritionSource.MODEL
+            session.add(item)
 
     await crud.add_generation_log(
         session=session,
@@ -497,20 +438,4 @@ async def estimate_day_kcal(
         raw_response=raw_response_text,
     )
     await session.commit()
-
-    day_menus = await crud.get_day_menus(session, user_id, menu_date)
-    notes = await crud.get_menu_notes(session, user_id, menu_date)
-    off_plan = await crud.get_off_plan_entries(session, user_id, menu_date)
-    available_pins = await crud.get_available_pins(session, user_id, menu_date)
-    day_created = await crud.is_day_created(session, user_id, menu_date)
-    evaluations = await crud.get_day_evaluations(session, user_id, menu_date)
-
-    return DayMenuRead(
-        date=menu_date,
-        day_created=day_created,
-        menus=day_menus,
-        notes=[MenuNoteRead.model_validate(n) for n in notes],
-        off_plan=[OffPlanEntryRead.model_validate(e) for e in off_plan],
-        available_pins=available_pins,
-        evaluations=evaluations,
-    )
+    return items

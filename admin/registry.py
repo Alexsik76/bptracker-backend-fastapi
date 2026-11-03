@@ -11,20 +11,11 @@ from measurements.models import Measurement
 from nutrition.models import (
     Dish,
     DishComponent,
-    FrequentDish,
-    FrequentDishComponent,
     GenerationLog,
     Menu,
-    MenuDay,
     MenuItem,
-    MenuNote,
     NutritionProfile,
-    OffPlanEntry,
-    PinnedMeal,
-    PinnedMealItem,
     Product,
-    Recipe,
-    RecipeProduct,
 )
 from ocr_training.models import (
     OcrDataset,
@@ -146,18 +137,6 @@ TABLE_REGISTRY: dict[str, TableConfig] = {
         can_update=True,
         can_delete=True,
     ),
-    FrequentDish.__tablename__: TableConfig(
-        model=FrequentDish,
-        can_create=True,
-        can_update=True,
-        can_delete=True,
-    ),
-    FrequentDishComponent.__tablename__: TableConfig(
-        model=FrequentDishComponent,
-        can_create=True,
-        can_update=True,
-        can_delete=True,
-    ),
     GenerationLog.__tablename__: TableConfig(
         model=GenerationLog,
         can_create=False,
@@ -170,38 +149,8 @@ TABLE_REGISTRY: dict[str, TableConfig] = {
         can_update=True,
         can_delete=True,
     ),
-    MenuDay.__tablename__: TableConfig(
-        model=MenuDay,
-        can_create=True,
-        can_update=True,
-        can_delete=True,
-    ),
     MenuItem.__tablename__: TableConfig(
         model=MenuItem,
-        can_create=True,
-        can_update=True,
-        can_delete=True,
-    ),
-    MenuNote.__tablename__: TableConfig(
-        model=MenuNote,
-        can_create=True,
-        can_update=True,
-        can_delete=True,
-    ),
-    OffPlanEntry.__tablename__: TableConfig(
-        model=OffPlanEntry,
-        can_create=True,
-        can_update=True,
-        can_delete=True,
-    ),
-    PinnedMeal.__tablename__: TableConfig(
-        model=PinnedMeal,
-        can_create=True,
-        can_update=True,
-        can_delete=True,
-    ),
-    PinnedMealItem.__tablename__: TableConfig(
-        model=PinnedMealItem,
         can_create=True,
         can_update=True,
         can_delete=True,
@@ -214,18 +163,6 @@ TABLE_REGISTRY: dict[str, TableConfig] = {
     ),
     NutritionProfile.__tablename__: TableConfig(
         model=NutritionProfile,
-        can_create=True,
-        can_update=True,
-        can_delete=True,
-    ),
-    Recipe.__tablename__: TableConfig(
-        model=Recipe,
-        can_create=True,
-        can_update=True,
-        can_delete=True,
-    ),
-    RecipeProduct.__tablename__: TableConfig(
-        model=RecipeProduct,
         can_create=True,
         can_update=True,
         can_delete=True,

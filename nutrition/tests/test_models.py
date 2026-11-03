@@ -1,25 +1,24 @@
 from datetime import UTC, datetime
 from uuid import UUID
 
-import pydantic
 import pytest
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
+from nutrition.clock import utc_today
 from nutrition.models import (
     Dish,
     DishComponent,
-    MealSchedule,
+    GenerationLog,
     MealType,
-    MenuNote,
-    MenuNoteKind,
+    Menu,
+    MenuDayEvaluation,
+    MenuItem,
+    MenuOrigin,
+    MenuState,
     NutritionProfile,
-    OffPlanEntry,
-    OffPlanEntryCreate,
+    NutritionSource,
     Product,
-    ProductAvailability,
-    ProductPreference,
-    Recipe,
     Sex,
 )
 
@@ -36,11 +35,9 @@ async def test_nutrition_profile_persistence(session: AsyncSession, test_user_id
         pace_kg_per_week=0.75,
         restrictions="Low salt",
         dislikes="Liver",
-        meals=[
-            MealSchedule(type=MealType.BREAKFAST, time="08:00"),
-            MealSchedule(type=MealType.LUNCH, time="13:00"),
-            MealSchedule(type=MealType.DINNER, time="19:00"),
-        ],
+        weight_variety=0.6,
+        weight_balance=0.7,
+        weight_goal=0.8,
     )
     session.add(profile)
     await session.commit()
@@ -52,8 +49,9 @@ async def test_nutrition_profile_persistence(session: AsyncSession, test_user_id
     assert saved.sex == Sex.MALE
     assert saved.birth_year == 1976
     assert saved.weight_kg == 118.0
-    assert len(saved.meals) == 3
-    assert saved.meals[0].type == MealType.BREAKFAST
+    assert saved.weight_variety == 0.6
+    assert saved.weight_balance == 0.7
+    assert saved.weight_goal == 0.8
     assert saved.updated_at is not None
 
 
@@ -62,17 +60,8 @@ async def test_product_persistence(session: AsyncSession, test_user_id: UUID):
     product = Product(
         user_id=test_user_id,
         name="Вівсянка",
-        availability=ProductAvailability.IN_STOCK,
-        preference=ProductPreference.PREFERRED,
-        eat_raw=False,
-        stock_g=1000,
-        kcal=350.0,
-        protein_g=12.0,
-        fat_g=6.0,
-        carbs_g=60.0,
-        fiber_g=10.0,
-        sugar_g=1.0,
-        sodium_mg=5.0,
+        available=True,
+        note="органічна",
     )
     session.add(product)
     await session.commit()
@@ -86,53 +75,41 @@ async def test_product_persistence(session: AsyncSession, test_user_id: UUID):
     saved = (await session.exec(stmt)).first()
     assert saved is not None
     assert saved.name == "Вівсянка"
-    assert saved.availability == ProductAvailability.IN_STOCK
-    assert saved.preference == ProductPreference.PREFERRED
-    assert saved.eat_raw is False
-    assert saved.stock_g == 1000
-    assert saved.kcal == 350.0
-    assert saved.protein_g == 12.0
+    assert saved.available is True
+    assert saved.note == "органічна"
 
 
 @pytest.mark.asyncio
 async def test_dish_and_components_persistence(session: AsyncSession, test_user_id: UUID):
-    p1 = Product(user_id=test_user_id, name="Вівсяні пластівці")
-    p2 = Product(user_id=test_user_id, name="Яблуко")
+    p1 = Product(user_id=test_user_id, name="Вівсяні пластівці", available=True)
+    p2 = Product(user_id=test_user_id, name="Яблуко", available=True)
     session.add_all([p1, p2])
     await session.commit()
     await session.refresh(p1)
     await session.refresh(p2)
 
-    recipe = Recipe(user_id=test_user_id, name="Вівсянка з яблуком")
-    session.add(recipe)
-    await session.commit()
-    await session.refresh(recipe)
-
     dish = Dish(
         user_id=test_user_id,
-        recipe_id=recipe.id,
         name="Вівсянка з яблуком",
-        cooked_weight_g=300,
-        remaining_g=300,
-        cooked_on=datetime.now(UTC).date(),
-        notes="Постійна ранкова страва",
+        is_ready=True,
+        pinned_meal_type=MealType.BREAKFAST,
+        nutrition_overridden=True,
+        note="Постійна ранкова страва",
+        kcal=150.0,
+        protein_g=5.0,
+        fat_g=2.0,
+        carbs_g=25.0,
     )
     session.add(dish)
     await session.commit()
     await session.refresh(dish)
 
     assert dish.id is not None
+    assert dish.is_ready is True
+    assert dish.pinned_meal_type == MealType.BREAKFAST
 
-    comp1 = DishComponent(
-        dish_id=dish.id,
-        product_id=p1.id,
-        weight_g=45,
-    )
-    comp2 = DishComponent(
-        dish_id=dish.id,
-        product_id=p2.id,
-        weight_g=100,
-    )
+    comp1 = DishComponent(dish_id=dish.id, product_id=p1.id, weight_g=45)
+    comp2 = DishComponent(dish_id=dish.id, product_id=p2.id, weight_g=100)
     session.add_all([comp1, comp2])
     await session.commit()
 
@@ -144,62 +121,97 @@ async def test_dish_and_components_persistence(session: AsyncSession, test_user_
 
 
 @pytest.mark.asyncio
-async def test_menu_note_persistence(session: AsyncSession, test_user_id: UUID):
-    today = datetime.now(UTC).date()
-    note = MenuNote(
+async def test_menu_and_item_persistence(session: AsyncSession, test_user_id: UUID):
+    now_dt = datetime.now(UTC)
+    menu = Menu(
         user_id=test_user_id,
-        date=today,
-        kind=MenuNoteKind.INFO,
-        text="Чи можна замінити гречку на бурий рис?",
-        answer="Так, бурий рис має близький глікемічний індекс.",
+        meal_type=MealType.LUNCH,
+        origin=MenuOrigin.MANUAL,
+        state=MenuState.EATEN,
+        eaten_at=now_dt,
     )
-    session.add(note)
+    session.add(menu)
     await session.commit()
-    await session.refresh(note)
+    await session.refresh(menu)
 
-    assert note.id is not None
-    assert note.created_at is not None
+    assert menu.id is not None
+    assert menu.origin == MenuOrigin.MANUAL
+    assert menu.state == MenuState.EATEN
 
-    stmt = select(MenuNote).where(MenuNote.user_id == test_user_id)
-    saved = (await session.exec(stmt)).first()
-    assert saved is not None
-    assert saved.kind == MenuNoteKind.INFO
-    assert saved.date == today
-    assert saved.text == "Чи можна замінити гречку на бурий рис?"
-    assert saved.answer == "Так, бурий рис має близький глікемічний індекс."
+    item = MenuItem(
+        menu_id=menu.id,
+        title="Борщ",
+        portion_g=300,
+        portion_text="300 г",
+        kcal=180.0,
+        protein_g=10.0,
+        nutrition_source=NutritionSource.USER,
+    )
+    session.add(item)
+    await session.commit()
+    await session.refresh(item)
+
+    assert item.id is not None
+    assert item.menu_id == menu.id
 
 
 @pytest.mark.asyncio
-async def test_off_plan_entry_persistence(session: AsyncSession, test_user_id: UUID):
-    today = datetime.now(UTC).date()
-    now_dt = datetime.now(UTC)
-    entry = OffPlanEntry(
+async def test_generation_log_with_menu_id(session: AsyncSession, test_user_id: UUID):
+    menu = Menu(
         user_id=test_user_id,
-        date=today,
-        at=now_dt,
-        text="Яблуко зелене 150г",
-        kcal_est=78,
+        meal_type=MealType.DINNER,
+        origin=MenuOrigin.SUGGESTION,
+        state=MenuState.SUGGESTION,
     )
-    session.add(entry)
+    session.add(menu)
     await session.commit()
-    await session.refresh(entry)
+    await session.refresh(menu)
 
-    assert entry.id is not None
+    log = GenerationLog(
+        user_id=test_user_id,
+        menu_id=menu.id,
+        date=utc_today(),
+        scope="single_meal",
+        model="gemini-2.0-flash",
+        prompt_version="2026-11-02.1",
+        prompt="prompt",
+        duration_ms=120,
+    )
+    session.add(log)
+    await session.commit()
+    await session.refresh(log)
 
-    stmt = select(OffPlanEntry).where(OffPlanEntry.user_id == test_user_id)
-    saved = (await session.exec(stmt)).first()
-    assert saved is not None
-    assert saved.date == today
-    assert saved.text == "Яблуко зелене 150г"
-    assert saved.kcal_est == 78
-    assert saved.at == now_dt
+    assert log.id is not None
+    assert log.menu_id == menu.id
 
 
-def test_off_plan_entry_create_requires_date():
-    with pytest.raises(pydantic.ValidationError):
-        OffPlanEntryCreate(
-            at=datetime.now(UTC),
-            text="Яблуко зелене 150г",
-        )
+@pytest.mark.asyncio
+async def test_menu_day_evaluation_with_menu_id(session: AsyncSession, test_user_id: UUID):
+    menu = Menu(
+        user_id=test_user_id,
+        meal_type=MealType.BREAKFAST,
+        origin=MenuOrigin.MANUAL,
+        state=MenuState.EATEN,
+        eaten_at=datetime.now(UTC),
+    )
+    session.add(menu)
+    await session.commit()
+    await session.refresh(menu)
 
+    ev = MenuDayEvaluation(
+        user_id=test_user_id,
+        date=utc_today(),
+        criterion_key="balance",
+        criteria_version=1,
+        choice="good",
+        confidence=0.9,
+        probabilities={"good": 0.9, "bad": 0.1},
+        model="jev",
+        menu_id=menu.id,
+    )
+    session.add(ev)
+    await session.commit()
+    await session.refresh(ev)
 
+    assert ev.id is not None
+    assert ev.menu_id == menu.id

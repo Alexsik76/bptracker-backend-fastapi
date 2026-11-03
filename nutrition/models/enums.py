@@ -25,16 +25,15 @@ class Sex(StrEnum):
     FEMALE = "female"
 
 
-class ProductAvailability(StrEnum):
-    IN_STOCK = "in_stock"
-    LOW = "low"
-    OUT = "out"
+class MenuOrigin(StrEnum):
+    SUGGESTION = "suggestion"
+    MANUAL = "manual"
+    PINNED = "pinned"
 
 
-class ProductPreference(StrEnum):
-    PREFERRED = "preferred"
-    NEUTRAL = "neutral"
-    AVOID = "avoid"
+class MenuState(StrEnum):
+    SUGGESTION = "suggestion"
+    EATEN = "eaten"
 
 
 class MenuItemOrigin(StrEnum):
@@ -50,21 +49,3 @@ class NutritionSource(StrEnum):
 
 # Backwards compatibility alias
 KcalSource = NutritionSource
-
-
-class MenuStatus(StrEnum):
-    PLANNED = "planned"
-    INCOMPLETE = "incomplete"
-    EATEN = "eaten"
-    MISSED = "missed"
-
-
-class GenerationScope(StrEnum):
-    DAY = "day"
-    SLOT = "slot"
-    UNMARKED = "unmarked"
-
-
-class MenuNoteKind(StrEnum):
-    INFO = "info"
-    CORRECTION = "correction"

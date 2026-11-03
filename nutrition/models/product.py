@@ -2,41 +2,17 @@ from datetime import datetime
 from typing import ClassVar
 from uuid import UUID
 
-import sqlalchemy as sa
-from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String, Uuid, func, text
+from sqlalchemy import Boolean, Column, DateTime, ForeignKey, String, Uuid, func, text
 from sqlmodel import Field, SQLModel
 
-from nutrition.models.enums import ProductAvailability, ProductPreference
-from nutrition.models.nutrition import NutritionSet
 
-
-class ProductBase(NutritionSet):
+class ProductBase(SQLModel):
     name: str = Field(sa_column=Column(String, nullable=False))
-    availability: ProductAvailability = Field(
-        default=ProductAvailability.IN_STOCK,
-        sa_column=Column(
-            sa.Enum(
-                ProductAvailability,
-                name="productavailability",
-                values_callable=lambda x: [e.value for e in x],
-            ),
-            nullable=False,
-        ),
+    available: bool = Field(
+        default=True,
+        sa_column=Column(Boolean, nullable=False, server_default=text("true")),
     )
-    preference: ProductPreference = Field(
-        default=ProductPreference.NEUTRAL,
-        sa_column=Column(
-            sa.Enum(
-                ProductPreference,
-                name="productpreference",
-                values_callable=lambda x: [e.value for e in x],
-            ),
-            nullable=False,
-        ),
-    )
-    eat_raw: bool = Field(default=False, sa_column=Column(Boolean, nullable=False))
-    count: int | None = Field(default=None, sa_column=Column(Integer, nullable=True))
-    stock_g: int | None = Field(default=None, sa_column=Column(Integer, nullable=True))
+    note: str | None = Field(default=None, sa_column=Column(String, nullable=True))
 
 
 class Product(ProductBase, table=True):
@@ -66,8 +42,10 @@ class Product(ProductBase, table=True):
     )
 
 
-class ProductCreate(ProductBase):
-    pass
+class ProductCreate(SQLModel):
+    name: str
+    available: bool = True
+    note: str | None = None
 
 
 class ProductRead(ProductBase):
@@ -79,15 +57,5 @@ class ProductRead(ProductBase):
 
 class ProductUpdate(SQLModel):
     name: str | None = None
-    availability: ProductAvailability | None = None
-    preference: ProductPreference | None = None
-    eat_raw: bool | None = None
-    count: int | None = None
-    stock_g: int | None = None
-    kcal: float | None = None
-    protein_g: float | None = None
-    fat_g: float | None = None
-    carbs_g: float | None = None
-    fiber_g: float | None = None
-    sugar_g: float | None = None
-    sodium_mg: float | None = None
+    available: bool | None = None
+    note: str | None = None
