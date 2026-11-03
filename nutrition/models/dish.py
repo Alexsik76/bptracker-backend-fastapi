@@ -3,7 +3,7 @@ from typing import Any, ClassVar
 from uuid import UUID
 
 import sqlalchemy as sa
-from pydantic import model_validator
+from pydantic import field_validator, model_validator
 from sqlalchemy import (
     Boolean,
     CheckConstraint,
@@ -98,6 +98,17 @@ class DishBase(SQLModel):
         sa_column=Column(Boolean, nullable=False, server_default=text("false")),
     )
     note: str | None = Field(default=None, sa_column=Column(String, nullable=True))
+    cooked_weight_g: int | None = Field(
+        default=None,
+        sa_column=Column(Integer, nullable=True),
+    )
+
+    @field_validator("cooked_weight_g")
+    @classmethod
+    def validate_cooked_weight_g(cls, v: int | None) -> int | None:
+        if v is not None and v <= 0:
+            raise ValueError("cooked_weight_g must be > 0")
+        return v
 
 
 class Dish(DishBase, NutritionSet, table=True):
@@ -133,7 +144,15 @@ class DishCreate(NutritionSet):
     pinned_meal_type: MealType | None = None
     nutrition_overridden: bool = False
     note: str | None = None
+    cooked_weight_g: int | None = None
     components: list[DishComponentCreate] = []
+
+    @field_validator("cooked_weight_g")
+    @classmethod
+    def validate_cooked_weight_g(cls, v: int | None) -> int | None:
+        if v is not None and v <= 0:
+            raise ValueError("cooked_weight_g must be > 0")
+        return v
 
     @model_validator(mode="before")
     @classmethod
@@ -158,8 +177,16 @@ class DishUpdate(NutritionSet):
     pinned_meal_type: MealType | None = None
     nutrition_overridden: bool | None = None
     note: str | None = None
+    cooked_weight_g: int | None = None
     components: list[DishComponentCreate] | None = None
     reset_nutrition: bool = False
+
+    @field_validator("cooked_weight_g")
+    @classmethod
+    def validate_cooked_weight_g(cls, v: int | None) -> int | None:
+        if v is not None and v <= 0:
+            raise ValueError("cooked_weight_g must be > 0")
+        return v
 
     @model_validator(mode="before")
     @classmethod

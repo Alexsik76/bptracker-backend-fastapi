@@ -819,3 +819,93 @@ async def test_evaluation_scheduled_after_journal_writes_with_menu_id(
         assert kwargs["menu_date"] == test_date
 
 
+@pytest.mark.asyncio
+async def test_materialize_pinned_dish_portion_cooked_weight(
+    client: AsyncClient, session: AsyncSession, test_user_id: UUID
+):
+    test_date = date(2026, 11, 4)
+
+    # 1. Product for composition
+    p = (
+        await client.post(
+            "/nutrition/products", json={"name": "Гречка", "available": True}
+        )
+    ).json()
+
+    # 2. Dish A: has components (100g) AND cooked_weight_g=280 -> portion_g should be 280
+    dish_a = (
+        await client.post(
+            "/nutrition/dishes",
+            json={
+                "name": "Гречана каша зварена",
+                "is_ready": True,
+                "pinned_meal_type": "breakfast",
+                "cooked_weight_g": 280,
+                "kcal": 120.0,
+                "protein_g": 4.0,
+                "fat_g": 2.0,
+                "carbs_g": 20.0,
+                "components": [{"product_id": p["id"], "weight_g": 100}],
+            },
+        )
+    ).json()
+
+    # 3. Dish B: has components (150g) but NO cooked_weight_g -> portion_g is composition sum
+    dish_b = (
+        await client.post(
+            "/nutrition/dishes",
+            json={
+                "name": "Гречка без вказаної ваги",
+                "is_ready": True,
+                "pinned_meal_type": "lunch",
+                "kcal": 150.0,
+                "protein_g": 5.0,
+                "fat_g": 2.5,
+                "carbs_g": 25.0,
+                "components": [{"product_id": p["id"], "weight_g": 150}],
+            },
+        )
+    ).json()
+
+    # 4. Dish C: NO components and NO cooked_weight_g -> portion_g should default to 100
+    dish_c = (
+        await client.post(
+            "/nutrition/dishes",
+            json={
+                "name": "Яблуко печене",
+                "is_ready": True,
+                "pinned_meal_type": "dinner",
+                "kcal": 60.0,
+                "protein_g": 0.5,
+                "fat_g": 0.5,
+                "carbs_g": 15.0,
+            },
+        )
+    ).json()
+
+    # Materialize via GET /journal
+    j = (await client.get(f"/nutrition/journal?date={test_date.isoformat()}")).json()
+    meals_by_type = {m["meal_type"]: m for m in j["meals"]}
+
+    # Dish A: portion equals cooked_weight_g (280)
+    meal_a = meals_by_type["breakfast"]
+    assert meal_a["pinned_dish_id"] == dish_a["id"]
+    assert meal_a["items"][0]["portion_g"] == 280
+    assert meal_a["items"][0]["portion_text"] == "280 г"
+    assert meal_a["items"][0]["kcal"] == round(120.0 * 2.8, 1)
+
+    # Dish B: portion equals composition sum (150)
+    meal_b = meals_by_type["lunch"]
+    assert meal_b["pinned_dish_id"] == dish_b["id"]
+    assert meal_b["items"][0]["portion_g"] == 150
+    assert meal_b["items"][0]["portion_text"] == "150 г"
+    assert meal_b["items"][0]["kcal"] == round(150.0 * 1.5, 1)
+
+    # Dish C: portion equals 100
+    meal_c = meals_by_type["dinner"]
+    assert meal_c["pinned_dish_id"] == dish_c["id"]
+    assert meal_c["items"][0]["portion_g"] == 100
+    assert meal_c["items"][0]["portion_text"] == "100 г"
+    assert meal_c["items"][0]["kcal"] == 60.0
+
+

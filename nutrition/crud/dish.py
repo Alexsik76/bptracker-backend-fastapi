@@ -93,6 +93,7 @@ def to_dish_read(dish: Dish, components: list[DishComponentRead] | None = None) 
         pinned_meal_type=dish.pinned_meal_type,
         nutrition_overridden=dish.nutrition_overridden,
         note=dish.note,
+        cooked_weight_g=dish.cooked_weight_g,
         kcal=dish.kcal,
         protein_g=dish.protein_g,
         fat_g=dish.fat_g,
@@ -127,6 +128,7 @@ async def create_dish(
         pinned_meal_type=data.pinned_meal_type,
         nutrition_overridden=nutrition_overridden,
         note=data.note,
+        cooked_weight_g=data.cooked_weight_g,
         kcal=data.kcal,
         protein_g=data.protein_g,
         fat_g=data.fat_g,
@@ -180,6 +182,7 @@ async def create_dish(
                 dish_name=dish.name,
                 settings=settings,
                 composition=composition or None,
+                cooked_weight_g=dish.cooked_weight_g,
                 raise_on_error=False,
             )
             if est:
@@ -247,6 +250,11 @@ async def update_dish(
     nutrition_updated = any(f in updates for f in NUTR_FIELDS)
     components_present = "components" in updates
     components_data = updates.pop("components", None)
+
+    cooked_weight_present = "cooked_weight_g" in updates
+    cooked_weight_changed = (
+        cooked_weight_present and updates["cooked_weight_g"] != dish.cooked_weight_g
+    )
 
     if reset_nutrition:
         dish.nutrition_overridden = False
@@ -317,8 +325,7 @@ async def update_dish(
     if reset_nutrition:
         should_reestimate = True
     elif (
-        components_present
-        and composition_changed
+        ((components_present and composition_changed) or cooked_weight_changed)
         and not nutrition_updated
         and not dish.nutrition_overridden
     ):
@@ -335,6 +342,7 @@ async def update_dish(
                 dish_name=dish.name,
                 settings=settings,
                 composition=composition or None,
+                cooked_weight_g=dish.cooked_weight_g,
                 raise_on_error=False,
             )
             if est:

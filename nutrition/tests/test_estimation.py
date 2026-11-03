@@ -184,6 +184,34 @@ def test_product_estimate_prompt_unchanged():
     assert DISH_ESTIMATE_PROMPT_VERSION != "2026-10-27.1"
 
 
+def test_dish_estimate_prompt_cooked_weight():
+    comp = [("Вівсяні пластівці", 50), ("Яблуко", 100)]
+    # 1. With composition and cooked_weight_g:
+    prompt_with_cw = build_dish_estimate_prompt(
+        "Вівсянка з яблуком", composition=comp, cooked_weight_g=250
+    )
+    assert "Вівсяні пластівці: 50 г" in prompt_with_cw
+    assert "Яблуко: 100 г" in prompt_with_cw
+    assert "загальна вага інгредієнтів: 150 г" in prompt_with_cw
+    assert "вага готової страви: 250 г" in prompt_with_cw
+    assert "сумарна харчова цінність інгредієнтів ділиться на вагу готової страви" in prompt_with_cw
+    assert "загальна вага = сума ваг: 150 г" not in prompt_with_cw
+
+    # 2. With composition without cooked_weight_g (None):
+    prompt_without_cw = build_dish_estimate_prompt(
+        "Вівсянка з яблуком", composition=comp, cooked_weight_g=None
+    )
+    assert "загальна вага = сума ваг: 150 г" in prompt_without_cw
+    assert "вага готової страви" not in prompt_without_cw
+
+    # 3. Without composition: cooked_weight_g ignored, prompt by name only
+    prompt_no_comp_with_cw = build_dish_estimate_prompt("Вівсянка", cooked_weight_g=250)
+    prompt_no_comp = build_dish_estimate_prompt("Вівсянка")
+    assert prompt_no_comp_with_cw == prompt_no_comp
+    assert "вага готової страви" not in prompt_no_comp_with_cw
+    assert "Склад страви" not in prompt_no_comp_with_cw
+
+
 @pytest.mark.asyncio
 async def test_estimate_dish_nutrition_with_composition_and_generation_log(
     session: AsyncSession, test_user_id: UUID
@@ -276,3 +304,64 @@ async def test_estimate_product_nutrition_keeps_by_name(
         call_prompt = mock_gemini.call_args.kwargs["prompt"]
         assert call_prompt == build_product_estimate_prompt("Яблуко")
         assert "Склад страви" not in call_prompt
+
+
+@pytest.mark.asyncio
+async def test_estimate_dish_nutrition_with_cooked_weight_and_generation_log(
+    session: AsyncSession, test_user_id: UUID
+):
+    settings = get_settings()
+    comp = [("Гречка", 100), ("Вода", 200)]
+
+    mock_res = GeminiResult(
+        data={
+            "kcal": 110.0,
+            "protein_g": 4.0,
+            "fat_g": 1.0,
+            "carbs_g": 22.0,
+            "fiber_g": 2.5,
+            "sugar_g": 0.5,
+            "sodium_mg": 5.0,
+        },
+        raw_text='{"kcal": 110.0}',
+        model="gemini-2.0-flash",
+        input_tokens=25,
+        output_tokens=20,
+    )
+
+    with patch("gemini_infra.generate_json", new_callable=AsyncMock) as mock_gemini:
+        mock_gemini.return_value = mock_res
+        est = await estimate_dish_nutrition(
+            session=session,
+            user_id=test_user_id,
+            dish_name="Гречана каша",
+            settings=settings,
+            composition=comp,
+            cooked_weight_g=280,
+        )
+        assert est is not None
+        assert est.kcal == 110.0
+
+        # Cooked weight and composition in Gemini prompt
+        basis_phrase = "сумарна харчова цінність інгредієнтів ділиться на вагу готової страви"
+        call_prompt = mock_gemini.call_args.kwargs["prompt"]
+        assert "Гречка: 100 г" in call_prompt
+        assert "Вода: 200 г" in call_prompt
+        assert "вага готової страви: 280 г" in call_prompt
+        assert basis_phrase in call_prompt
+
+        # generation_log stores prompt with cooked weight
+        log_entry = (
+            await session.exec(
+                select(GenerationLog)
+                .where(
+                    GenerationLog.user_id == test_user_id,
+                    GenerationLog.scope == "dish_estimate",
+                )
+                .order_by(GenerationLog.created_at.desc())
+            )
+        ).first()
+        assert log_entry is not None
+        assert log_entry.prompt is not None
+        assert "вага готової страви: 280 г" in log_entry.prompt
+        assert basis_phrase in log_entry.prompt

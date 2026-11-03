@@ -6,7 +6,7 @@ from httpx import AsyncClient
 
 from gemini_infra import GeminiResult
 from gemini_infra.types import GeminiUnavailable
-from nutrition.models import DishComponentCreate
+from nutrition.models import DishComponentCreate, DishCreate, DishUpdate
 
 
 @pytest.fixture(autouse=True)
@@ -208,6 +208,36 @@ async def test_dish_component_validation():
 
     with pytest.raises(ValueError, match="Either product_id or new_product must be provided"):
         DishComponentCreate(weight_g=100)
+
+
+@pytest.mark.asyncio
+async def test_dish_cooked_weight_validation(client: AsyncClient):
+    with pytest.raises(ValueError, match="cooked_weight_g must be > 0"):
+        DishCreate(name="Борщ", cooked_weight_g=0)
+
+    with pytest.raises(ValueError, match="cooked_weight_g must be > 0"):
+        DishCreate(name="Борщ", cooked_weight_g=-10)
+
+    with pytest.raises(ValueError, match="cooked_weight_g must be > 0"):
+        DishUpdate(cooked_weight_g=0)
+
+    with pytest.raises(ValueError, match="cooked_weight_g must be > 0"):
+        DishUpdate(cooked_weight_g=-5)
+
+    # Valid values
+    dc = DishCreate(name="Борщ", cooked_weight_g=300)
+    assert dc.cooked_weight_g == 300
+    dc_none = DishCreate(name="Борщ", cooked_weight_g=None)
+    assert dc_none.cooked_weight_g is None
+
+    du = DishUpdate(cooked_weight_g=300)
+    assert du.cooked_weight_g == 300
+    du_none = DishUpdate(cooked_weight_g=None)
+    assert du_none.cooked_weight_g is None
+
+    # Via API: invalid cooked_weight_g returns 422
+    err_resp = await client.post("/nutrition/dishes", json={"name": "Суп", "cooked_weight_g": 0})
+    assert err_resp.status_code == 422
 
 
 @pytest.mark.asyncio
@@ -463,3 +493,141 @@ async def test_update_dish_identical_components_does_not_reestimate(
     assert _mock_gemini_default.call_count == 1  # estimator called
     call_prompt = _mock_gemini_default.call_args.kwargs["prompt"]
     assert "90 г" in call_prompt
+
+
+@pytest.mark.asyncio
+async def test_create_dish_with_cooked_weight(
+    client: AsyncClient, _mock_gemini_default: AsyncMock
+):
+    _mock_gemini_default.reset_mock()
+    p1 = (
+        await client.post(
+            "/nutrition/products", json={"name": "Вівсянка", "available": True}
+        )
+    ).json()
+
+    payload = {
+        "name": "Вівсяна каша на воді",
+        "cooked_weight_g": 250,
+        "components": [{"product_id": p1["id"], "weight_g": 60}],
+    }
+    resp = await client.post("/nutrition/dishes", json=payload)
+    assert resp.status_code == 201
+    data = resp.json()
+    assert data["name"] == "Вівсяна каша на воді"
+    assert data["cooked_weight_g"] == 250
+    assert data["nutrition_overridden"] is False
+
+    assert _mock_gemini_default.call_count == 1
+    call_prompt = _mock_gemini_default.call_args.kwargs["prompt"]
+    assert "Вівсянка: 60 г" in call_prompt
+    assert "вага готової страви: 250 г" in call_prompt
+    assert "сумарна харчова цінність інгредієнтів ділиться на вагу готової страви" in call_prompt
+
+
+@pytest.mark.asyncio
+async def test_reestimate_on_cooked_weight_change_for_non_overridden_and_not_overridden(
+    client: AsyncClient, _mock_gemini_default: AsyncMock
+):
+    p1 = (
+        await client.post(
+            "/nutrition/products", json={"name": "Макарони", "available": True}
+        )
+    ).json()
+
+    # Part 1: Non-overridden dish triggers re-estimation on cooked_weight_g change
+    _mock_gemini_default.reset_mock()
+    d1 = (
+        await client.post(
+            "/nutrition/dishes",
+            json={
+                "name": "Відварені макарони",
+                "cooked_weight_g": 250,
+                "components": [{"product_id": p1["id"], "weight_g": 100}],
+            },
+        )
+    ).json()
+    assert d1["nutrition_overridden"] is False
+    assert d1["cooked_weight_g"] == 250
+    assert _mock_gemini_default.call_count == 1
+
+    # 1a. Patch with changed cooked_weight_g -> re-estimates
+    _mock_gemini_default.reset_mock()
+    patch_cw_resp = await client.patch(
+        f"/nutrition/dishes/{d1['id']}",
+        json={"cooked_weight_g": 300},
+    )
+    assert patch_cw_resp.status_code == 200
+    data_cw = patch_cw_resp.json()
+    assert data_cw["cooked_weight_g"] == 300
+    assert _mock_gemini_default.call_count == 1
+    prompt = _mock_gemini_default.call_args.kwargs["prompt"]
+    assert "вага готової страви: 300 г" in prompt
+
+    # 1b. Patch with identical cooked_weight_g -> does NOT re-estimate
+    _mock_gemini_default.reset_mock()
+    patch_same_resp = await client.patch(
+        f"/nutrition/dishes/{d1['id']}",
+        json={"cooked_weight_g": 300, "note": "аль денте"},
+    )
+    assert patch_same_resp.status_code == 200
+    assert patch_same_resp.json()["note"] == "аль денте"
+    assert _mock_gemini_default.call_count == 0
+
+    # 1c. Patch with explicit null to clear cooked_weight_g -> re-estimates without cooked weight
+    _mock_gemini_default.reset_mock()
+    patch_clear_resp = await client.patch(
+        f"/nutrition/dishes/{d1['id']}",
+        json={"cooked_weight_g": None},
+    )
+    assert patch_clear_resp.status_code == 200
+    data_cleared = patch_clear_resp.json()
+    assert data_cleared["cooked_weight_g"] is None
+    assert _mock_gemini_default.call_count == 1
+    cleared_prompt = _mock_gemini_default.call_args.kwargs["prompt"]
+    assert "вага готової страви" not in cleared_prompt
+    assert "загальна вага = сума ваг: 100 г" in cleared_prompt
+
+    # 1d. Patch from None to a value -> re-estimates with cooked weight
+    _mock_gemini_default.reset_mock()
+    patch_set_resp = await client.patch(
+        f"/nutrition/dishes/{d1['id']}",
+        json={"cooked_weight_g": 280},
+    )
+    assert patch_set_resp.status_code == 200
+    data_set = patch_set_resp.json()
+    assert data_set["cooked_weight_g"] == 280
+    assert _mock_gemini_default.call_count == 1
+    set_prompt = _mock_gemini_default.call_args.kwargs["prompt"]
+    assert "вага готової страви: 280 г" in set_prompt
+
+    # Part 2: Dish with nutrition_overridden=True does NOT re-estimate on cooked_weight_g change
+    d2 = (
+        await client.post(
+            "/nutrition/dishes",
+            json={
+                "name": "Макарони з сиром",
+                "kcal": 350.0,
+                "protein_g": 12.0,
+                "fat_g": 10.0,
+                "carbs_g": 50.0,
+                "cooked_weight_g": 200,
+                "components": [{"product_id": p1["id"], "weight_g": 100}],
+            },
+        )
+    ).json()
+    assert d2["nutrition_overridden"] is True
+    assert d2["cooked_weight_g"] == 200
+    assert d2["kcal"] == 350.0
+
+    _mock_gemini_default.reset_mock()
+    patch_overridden_cw = await client.patch(
+        f"/nutrition/dishes/{d2['id']}",
+        json={"cooked_weight_g": 260},
+    )
+    assert patch_overridden_cw.status_code == 200
+    data_overridden = patch_overridden_cw.json()
+    assert data_overridden["cooked_weight_g"] == 260
+    assert data_overridden["nutrition_overridden"] is True
+    assert data_overridden["kcal"] == 350.0
+    assert _mock_gemini_default.call_count == 0  # not called!
