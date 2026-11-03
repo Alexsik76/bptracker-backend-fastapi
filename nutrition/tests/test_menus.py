@@ -1,4 +1,4 @@
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta, timezone
 from unittest.mock import AsyncMock, patch
 from uuid import UUID, uuid4
 
@@ -246,7 +246,6 @@ async def test_suggestion_without_text_creates_one_suggestion_and_log(
 
     mock_gemini_res = GeminiResult(
         data={
-            "intent": "suggest",
             "meal_type": "lunch",
             "items": [
                 {
@@ -288,7 +287,7 @@ async def test_suggestion_without_text_creates_one_suggestion_and_log(
 
     assert resp.status_code == 200
     body = resp.json()
-    assert body["intent"] == "suggest"
+    assert body["mode"] == "suggest"
     menu = body["menu"]
     assert menu["state"] == "suggestion"
     assert menu["origin"] == "suggestion"
@@ -327,7 +326,6 @@ async def test_second_suggestion_request_replaces_previous(
 
     first_res = GeminiResult(
         data={
-            "intent": "suggest",
             "meal_type": "lunch",
             "items": [
                 {
@@ -349,7 +347,6 @@ async def test_second_suggestion_request_replaces_previous(
 
     second_res = GeminiResult(
         data={
-            "intent": "suggest",
             "meal_type": "dinner",
             "items": [
                 {
@@ -420,7 +417,6 @@ async def test_eat_moves_suggestion_to_eaten_and_journal_totals_grow(
 
     mock_gemini_res = GeminiResult(
         data={
-            "intent": "suggest",
             "meal_type": "lunch",
             "items": [
                 {
@@ -494,7 +490,6 @@ async def test_log_intent_creates_manual_eaten_menu_with_items(
     # 1. First, create a suggestion so we can verify it stays untouched on log
     sugg_gemini_res = GeminiResult(
         data={
-            "intent": "suggest",
             "meal_type": "lunch",
             "items": [
                 {
@@ -524,7 +519,6 @@ async def test_log_intent_creates_manual_eaten_menu_with_items(
     # 2. User logs already eaten food: "з'їв омлет 200 г і яблуко"
     log_gemini_res = GeminiResult(
         data={
-            "intent": "log",
             "meal_type": "breakfast",
             "items": [
                 {
@@ -558,6 +552,7 @@ async def test_log_intent_creates_manual_eaten_menu_with_items(
         log_resp = await client.post(
             "/nutrition/suggestions",
             json={
+                "mode": "log",
                 "text": "з'їв омлет 200 г і яблуко",
                 "date": test_date.isoformat(),
                 "at": test_at.isoformat(),
@@ -566,7 +561,7 @@ async def test_log_intent_creates_manual_eaten_menu_with_items(
 
     assert log_resp.status_code == 200
     log_body = log_resp.json()
-    assert log_body["intent"] == "log"
+    assert log_body["mode"] == "log"
     logged_menu = log_body["menu"]
     assert logged_menu["state"] == "eaten"
     assert logged_menu["origin"] == "manual"
@@ -668,7 +663,6 @@ async def test_evaluation_scheduled_after_journal_writes_with_menu_id(
         # 1. Suggestion: evaluation must NOT be scheduled
         sugg_gemini_res = GeminiResult(
             data={
-                "intent": "suggest",
                 "meal_type": "lunch",
                 "items": [
                     {
@@ -709,10 +703,9 @@ async def test_evaluation_scheduled_after_journal_writes_with_menu_id(
         assert kwargs["menu_date"] == test_date
         mock_eval.reset_mock()
 
-        # 3. Log intent: evaluation IS scheduled with menu_id
+        # 3. Log mode: evaluation IS scheduled with menu_id
         log_gemini_res = GeminiResult(
             data={
-                "intent": "log",
                 "meal_type": "dinner",
                 "items": [
                     {
@@ -736,6 +729,7 @@ async def test_evaluation_scheduled_after_journal_writes_with_menu_id(
             log_resp = await client.post(
                 "/nutrition/suggestions",
                 json={
+                    "mode": "log",
                     "text": "випив кефір",
                     "date": test_date.isoformat(),
                     "at": test_at.isoformat(),
@@ -907,5 +901,315 @@ async def test_materialize_pinned_dish_portion_cooked_weight(
     assert meal_c["items"][0]["portion_g"] == 100
     assert meal_c["items"][0]["portion_text"] == "100 г"
     assert meal_c["items"][0]["kcal"] == 60.0
+
+
+@pytest.mark.asyncio
+async def test_suggest_mode_with_eaten_text_returns_suggestion_and_writes_nothing_eaten(
+    client: AsyncClient, session: AsyncSession, test_user_id: UUID
+):
+    """Suggest mode with text describing eaten food returns a suggestion
+    and writes nothing eaten.
+    """
+    today = utc_today()
+    test_at = datetime(today.year, today.month, today.day, 12, 0, 0, tzinfo=UTC)
+
+    mock_gemini_res = GeminiResult(
+        data={
+            "meal_type": "lunch",
+            "items": [
+                {
+                    "name": "Гречка",
+                    "dish_id": None,
+                    "grams": 200,
+                    "kcal": 240.0,
+                    "protein_g": 8.0,
+                    "fat_g": 2.0,
+                    "carbs_g": 46.0,
+                }
+            ],
+        },
+        raw_text="{}",
+        model="gemini-2.5-flash",
+        input_tokens=100,
+        output_tokens=50,
+    )
+
+    with patch("gemini_infra.generate_json", new_callable=AsyncMock) as mock_gemini:
+        mock_gemini.return_value = mock_gemini_res
+        resp = await client.post(
+            "/nutrition/suggestions",
+            json={
+                "mode": "suggest",
+                "text": "з'їв гречку 200 г",
+                "date": today.isoformat(),
+                "at": test_at.isoformat(),
+            },
+        )
+        assert mock_gemini.call_count == 1
+        prompt = mock_gemini.call_args.kwargs["prompt"]
+        assert "Тільки пропонуй прийом їжі і ніколи не записуй нічого як з'їдене" in prompt
+        assert "1. ВИЗНАЧЕННЯ НАМІРУ (intent)" not in prompt
+        schema = mock_gemini.call_args.kwargs["response_schema"]
+        assert "intent" not in schema["properties"]
+        assert "intent" not in schema["required"]
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["mode"] == "suggest"
+    menu = body["menu"]
+    assert menu["state"] == "suggestion"
+    assert menu["origin"] == "suggestion"
+    assert menu["items"][0]["origin"] == "generated"
+
+    # Journal check: no eaten meals written, suggestion is present
+    j = (await client.get(f"/nutrition/journal?date={today.isoformat()}")).json()
+    assert len(j["meals"]) == 0
+    assert j["suggestion"] is not None
+    assert j["suggestion"]["id"] == menu["id"]
+
+
+@pytest.mark.asyncio
+async def test_log_mode_with_eaten_text_records_eaten_meal_and_creates_no_suggestion(
+    client: AsyncClient, session: AsyncSession, test_user_id: UUID
+):
+    """Log mode with 'з\\'їв гречку 200 г' records an eaten meal with origin manual
+    and creates no suggestion.
+    """
+    today = utc_today()
+    test_at = datetime(today.year, today.month, today.day, 12, 0, 0, tzinfo=UTC)
+
+    mock_gemini_res = GeminiResult(
+        data={
+            "meal_type": "lunch",
+            "items": [
+                {
+                    "name": "Гречка",
+                    "dish_id": None,
+                    "grams": 200,
+                    "kcal": 240.0,
+                    "protein_g": 8.0,
+                    "fat_g": 2.0,
+                    "carbs_g": 46.0,
+                }
+            ],
+        },
+        raw_text="{}",
+        model="gemini-2.5-flash",
+        input_tokens=100,
+        output_tokens=50,
+    )
+
+    with patch("gemini_infra.generate_json", new_callable=AsyncMock) as mock_gemini:
+        mock_gemini.return_value = mock_gemini_res
+        resp = await client.post(
+            "/nutrition/suggestions",
+            json={
+                "mode": "log",
+                "text": "з'їв гречку 200 г",
+                "date": today.isoformat(),
+                "at": test_at.isoformat(),
+            },
+        )
+        assert mock_gemini.call_count == 1
+        prompt = mock_gemini.call_args.kwargs["prompt"]
+        assert "Текст користувача описує їжу, яку він вже з'їв" in prompt
+        assert "1. ВИЗНАЧЕННЯ НАМІРУ (intent)" not in prompt
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["mode"] == "log"
+    menu = body["menu"]
+    assert menu["state"] == "eaten"
+    assert menu["origin"] == "manual"
+    assert datetime.fromisoformat(menu["eaten_at"]) == test_at
+    assert menu["items"][0]["origin"] == "manual"
+
+    # Journal check: 1 eaten meal, NO suggestion
+    j = (await client.get(f"/nutrition/journal?date={today.isoformat()}")).json()
+    assert len(j["meals"]) == 1
+    assert j["meals"][0]["id"] == menu["id"]
+    assert j["suggestion"] is None
+
+
+@pytest.mark.asyncio
+async def test_log_mode_past_date_lands_on_midday(
+    client: AsyncClient, session: AsyncSession, test_user_id: UUID
+):
+    """Log into a past date lands on that date with midday time (12:00)."""
+    past_date = utc_today() - timedelta(days=2)
+    test_at = datetime.now(UTC)
+
+    mock_gemini_res = GeminiResult(
+        data={
+            "meal_type": "lunch",
+            "items": [
+                {
+                    "name": "Гречка",
+                    "dish_id": None,
+                    "grams": 200,
+                    "kcal": 240.0,
+                    "protein_g": 8.0,
+                    "fat_g": 2.0,
+                    "carbs_g": 46.0,
+                }
+            ],
+        },
+        raw_text="{}",
+        model="gemini-2.5-flash",
+        input_tokens=100,
+        output_tokens=50,
+    )
+
+    with patch("gemini_infra.generate_json", new_callable=AsyncMock) as mock_gemini:
+        mock_gemini.return_value = mock_gemini_res
+        resp = await client.post(
+            "/nutrition/suggestions",
+            json={
+                "mode": "log",
+                "text": "з'їв гречку 200 г",
+                "date": past_date.isoformat(),
+                "at": test_at.isoformat(),
+            },
+        )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["mode"] == "log"
+    menu = body["menu"]
+    assert menu["state"] == "eaten"
+    assert menu["origin"] == "manual"
+    assert menu["date"] == past_date.isoformat()
+    eaten_at = datetime.fromisoformat(menu["eaten_at"])
+    assert eaten_at == datetime(
+        past_date.year, past_date.month, past_date.day, 12, 0, 0, tzinfo=UTC
+    )
+
+    # Journal for past date check
+    j = (await client.get(f"/nutrition/journal?date={past_date.isoformat()}")).json()
+    assert len(j["meals"]) == 1
+    assert j["meals"][0]["id"] == menu["id"]
+    assert j["suggestion"] is None
+
+
+@pytest.mark.asyncio
+async def test_log_mode_past_date_with_named_time_uses_that_time(
+    client: AsyncClient, session: AsyncSession, test_user_id: UUID
+):
+    """Log into a past date with a named time uses that time."""
+    past_date = utc_today() - timedelta(days=2)
+    test_at = datetime.now(UTC)
+
+    mock_gemini_res = GeminiResult(
+        data={
+            "meal_type": "dinner",
+            "items": [
+                {
+                    "name": "Гречка",
+                    "dish_id": None,
+                    "grams": 200,
+                    "kcal": 240.0,
+                    "protein_g": 8.0,
+                    "fat_g": 2.0,
+                    "carbs_g": 46.0,
+                }
+            ],
+        },
+        raw_text="{}",
+        model="gemini-2.5-flash",
+        input_tokens=100,
+        output_tokens=50,
+    )
+
+    with patch("gemini_infra.generate_json", new_callable=AsyncMock) as mock_gemini:
+        mock_gemini.return_value = mock_gemini_res
+        resp = await client.post(
+            "/nutrition/suggestions",
+            json={
+                "mode": "log",
+                "text": "з'їв гречку 200 г о 14:30",
+                "date": past_date.isoformat(),
+                "at": test_at.isoformat(),
+            },
+        )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["mode"] == "log"
+    menu = body["menu"]
+    assert menu["state"] == "eaten"
+    assert menu["origin"] == "manual"
+    assert menu["date"] == past_date.isoformat()
+    eaten_at = datetime.fromisoformat(menu["eaten_at"])
+    assert eaten_at == datetime(
+        past_date.year, past_date.month, past_date.day, 14, 30, 0, tzinfo=UTC
+    )
+
+    # Journal for past date check
+    j = (await client.get(f"/nutrition/journal?date={past_date.isoformat()}")).json()
+    assert len(j["meals"]) == 1
+    assert j["meals"][0]["id"] == menu["id"]
+    assert j["suggestion"] is None
+
+
+@pytest.mark.asyncio
+async def test_log_mode_keeps_at_when_date_equals_at_date_even_if_utc_date_differs(
+    client: AsyncClient, session: AsyncSession, test_user_id: UUID
+):
+    """Log with date equal to at.date() keeps eaten_at == at even when
+    that date differs from the UTC date (e.g. at=2026-11-04T00:30+02:00, date=2026-11-04).
+    """
+    test_tz = timezone(timedelta(hours=2))
+    test_at = datetime(2026, 11, 4, 0, 30, 0, tzinfo=test_tz)
+    test_date = date(2026, 11, 4)
+    # Confirm premise: client date is 2026-11-04, but UTC date is 2026-11-03
+    assert test_at.date() == test_date
+    assert test_at.astimezone(UTC).date() == date(2026, 11, 3)
+
+    mock_gemini_res = GeminiResult(
+        data={
+            "meal_type": "breakfast",
+            "items": [
+                {
+                    "name": "Вівсянка",
+                    "dish_id": None,
+                    "grams": 200,
+                    "kcal": 200.0,
+                    "protein_g": 6.0,
+                    "fat_g": 3.0,
+                    "carbs_g": 35.0,
+                }
+            ],
+        },
+        raw_text="{}",
+        model="gemini-2.5-flash",
+        input_tokens=100,
+        output_tokens=50,
+    )
+
+    with patch("gemini_infra.generate_json", new_callable=AsyncMock) as mock_gemini:
+        mock_gemini.return_value = mock_gemini_res
+        resp = await client.post(
+            "/nutrition/suggestions",
+            json={
+                "mode": "log",
+                "text": "вівсянка 200 г",
+                "date": test_date.isoformat(),
+                "at": test_at.isoformat(),
+            },
+        )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["mode"] == "log"
+    menu = body["menu"]
+    assert menu["state"] == "eaten"
+    assert menu["origin"] == "manual"
+    assert menu["date"] == test_date.isoformat()
+    assert datetime.fromisoformat(menu["eaten_at"]) == test_at
+
+    j = (await client.get(f"/nutrition/journal?date={test_date.isoformat()}")).json()
+    assert len(j["meals"]) == 1
+    assert datetime.fromisoformat(j["meals"][0]["eaten_at"]) == test_at
+    assert j["suggestion"] is None
 
 
