@@ -114,6 +114,7 @@ PRODUCT_ESTIMATE_RESPONSE_SCHEMA = DISH_ESTIMATE_RESPONSE_SCHEMA
 def build_dish_estimate_prompt(
     dish_name: str,
     composition: Sequence[tuple[str, int | float]] | None = None,
+    cooked_weight_g: int | float | None = None,
 ) -> str:
     if not composition:
         return (
@@ -133,13 +134,21 @@ def build_dish_estimate_prompt(
 
     total_weight = sum(weight for _, weight in composition)
     ingredients_str = "\n".join(f"- {name}: {weight} г" for name, weight in composition)
+    if cooked_weight_g:
+        calc_basis = (
+            f"(вага готової страви: {cooked_weight_g} г; "
+            "сумарна харчова цінність інгредієнтів ділиться на вагу готової страви)"
+        )
+    else:
+        calc_basis = f"(загальна вага = сума ваг: {total_weight} г)"
+
     return (
         "Ти — експертний нутриціолог. Твоє завдання — оцінити харчову цінність на 100 г "
         f"для страви: '{dish_name}'.\n"
         f"Склад страви (загальна вага інгредієнтів: {total_weight} г):\n"
         f"{ingredients_str}\n"
-        "Розрахуй харчову цінність на 100 г готової страви на основі цих інгредієнтів "
-        f"(загальна вага = сума ваг: {total_weight} г).\n"
+        f"Розрахуй харчову цінність на 100 г готової страви на основі цих інгредієнтів "
+        f"{calc_basis}.\n"
         "Визнач реалістичні значення для:\n"
         "- kcal: калорійність на 100 г (ккал, число >= 0);\n"
         "- protein_g: білки на 100 г (г, число >= 0);\n"
@@ -163,11 +172,14 @@ async def estimate_dish_nutrition(
     dish_name: str,
     settings: Settings,
     composition: Sequence[tuple[str, int | float]] | None = None,
+    cooked_weight_g: int | float | None = None,
     *,
     raise_on_error: bool = False,
 ) -> NutritionEstimate | None:
     """Estimate dish nutrition per 100g with Gemini."""
-    prompt = build_dish_estimate_prompt(dish_name, composition=composition)
+    prompt = build_dish_estimate_prompt(
+        dish_name, composition=composition, cooked_weight_g=cooked_weight_g
+    )
     start_time = time.perf_counter()
     raw_response_text: str | None = None
     input_tokens: int | None = None

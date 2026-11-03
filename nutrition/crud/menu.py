@@ -224,7 +224,12 @@ async def materialize_pinned_dishes(
     for dish in unmaterialized:
         comps = await get_dish_components(session, dish.id)
         comp_weight = sum(c.weight_g for c in comps)
-        portion_g = comp_weight if comp_weight > 0 else 100
+        if dish.cooked_weight_g is not None:
+            portion_g = dish.cooked_weight_g
+        elif comp_weight > 0:
+            portion_g = comp_weight
+        else:
+            portion_g = 100
 
         if dish.kcal is not None:
             ratio = portion_g / 100.0
