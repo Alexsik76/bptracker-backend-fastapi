@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 
 _activity_queue: asyncio.Queue[RequestEvent | ErrorEvent] | None = None
 _activity_queue_loop: asyncio.AbstractEventLoop | None = None
-_last_drop_warning: float = 0.0
+_last_drop_warning: float = float("-inf")
 
 
 def get_activity_queue() -> asyncio.Queue[RequestEvent | ErrorEvent]:
@@ -83,6 +83,8 @@ async def flush_activity_queue(
 
 
 def clear_activity_queue() -> None:
+    global _last_drop_warning
+    _last_drop_warning = float("-inf")
     queue = get_activity_queue()
     while not queue.empty():
         try:
