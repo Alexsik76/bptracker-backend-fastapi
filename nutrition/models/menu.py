@@ -1,3 +1,4 @@
+from datetime import date as dt_date
 from datetime import datetime
 from typing import ClassVar
 from uuid import UUID
@@ -6,16 +7,19 @@ import sqlalchemy as sa
 from pydantic import model_validator
 from sqlalchemy import (
     Column,
+    Date,
     DateTime,
     ForeignKey,
     Integer,
     String,
+    UniqueConstraint,
     Uuid,
     func,
     text,
 )
 from sqlmodel import Field, SQLModel
 
+from nutrition.clock import utc_today
 from nutrition.models.enums import (
     MealType,
     MenuItemOrigin,
@@ -27,6 +31,10 @@ from nutrition.models.nutrition import NutritionSet
 
 
 class MenuBase(SQLModel):
+    date: dt_date = Field(
+        default_factory=utc_today,
+        sa_column=Column(Date, nullable=False, index=True),
+    )
     meal_type: MealType = Field(
         sa_column=Column(
             sa.Enum(
@@ -64,6 +72,15 @@ class MenuBase(SQLModel):
     eaten_at: datetime | None = Field(
         default=None,
         sa_column=Column(DateTime(timezone=True), nullable=True),
+    )
+    pinned_dish_id: UUID | None = Field(
+        default=None,
+        sa_column=Column(
+            Uuid,
+            ForeignKey("dishes.id", ondelete="SET NULL"),
+            nullable=True,
+            index=True,
+        ),
     )
 
 
@@ -206,15 +223,58 @@ class MenuRead(MenuBase):
 
 
 class MenuCreate(SQLModel):
+    date: dt_date
     meal_type: MealType
     origin: MenuOrigin = MenuOrigin.MANUAL
     state: MenuState = MenuState.EATEN
     eaten_at: datetime | None = None
+    pinned_dish_id: UUID | None = None
     items: list[MenuItemCreate] = []
 
 
 class MenuUpdate(SQLModel):
+    date: dt_date | None = None
     meal_type: MealType | None = None
     origin: MenuOrigin | None = None
     state: MenuState | None = None
     eaten_at: datetime | None = None
+    pinned_dish_id: UUID | None = None
+
+
+class PinnedDishDay(SQLModel, table=True):
+    __tablename__: ClassVar[str] = "pinned_dish_days"
+
+    id: UUID | None = Field(
+        default=None,
+        sa_column=Column(Uuid, primary_key=True, server_default=text("uuidv7()")),
+    )
+    user_id: UUID = Field(
+        sa_column=Column(
+            Uuid,
+            ForeignKey("users.id", ondelete="CASCADE"),
+            index=True,
+            nullable=False,
+        )
+    )
+    dish_id: UUID = Field(
+        sa_column=Column(
+            Uuid,
+            ForeignKey("dishes.id", ondelete="CASCADE"),
+            index=True,
+            nullable=False,
+        )
+    )
+    date: dt_date = Field(
+        sa_column=Column(Date, index=True, nullable=False),
+    )
+    created_at: datetime | None = Field(
+        default=None,
+        sa_column=Column(DateTime(timezone=True), server_default=func.now(), nullable=False),
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "user_id", "dish_id", "date", name="uq_pinned_dish_days_user_id_dish_id_date"
+        ),
+    )
+
