@@ -27,6 +27,33 @@ from nutrition.models import (
 )
 
 
+class SuggestionDateMismatchError(ValueError):
+    """Raised when attempting to eat a suggestion whose date does not match the request date."""
+
+
+async def delete_stale_suggestions(
+    session: AsyncSession,
+    user_id: UUID,
+    target_date: date,
+    commit: bool = True,
+) -> int:
+    """Delete suggestions of the user whose date is earlier than target_date."""
+    stmt = select(Menu).where(
+        Menu.user_id == user_id,
+        Menu.state == MenuState.SUGGESTION,
+        Menu.date < target_date,
+    )
+    stale_menus = list((await session.exec(stmt)).all())
+    for m in stale_menus:
+        await session.delete(m)
+    if stale_menus:
+        if commit:
+            await session.commit()
+        else:
+            await session.flush()
+    return len(stale_menus)
+
+
 def to_menu_item_read(item: MenuItem) -> MenuItemRead:
     return MenuItemRead(
         id=item.id,
@@ -112,15 +139,14 @@ async def list_meals(
     target_date: date,
 ) -> list[MenuRead]:
     """List meals for a date: by Menu.date for eaten meals, plus the current suggestion."""
+    await delete_stale_suggestions(session, user_id, target_date, commit=True)
     stmt = (
         select(Menu)
         .where(
             Menu.user_id == user_id,
+            Menu.date == target_date,
             sa.or_(
-                sa.and_(
-                    Menu.state == MenuState.EATEN,
-                    Menu.date == target_date,
-                ),
+                Menu.state == MenuState.EATEN,
                 Menu.state == MenuState.SUGGESTION,
             ),
         )
@@ -182,6 +208,8 @@ async def eat_menu(
     menu = await get_menu_entity(session, menu_id, user_id)
     if menu is None:
         return None
+    if menu.state == MenuState.SUGGESTION and menu.date != target_date:
+        raise SuggestionDateMismatchError("Cannot eat suggestion from another day")
     menu.state = MenuState.EATEN
     menu.date = target_date
     menu.eaten_at = eaten_at
@@ -304,6 +332,7 @@ async def get_journal_data(
     user_id: UUID,
     target_date: date,
 ) -> tuple[list[MenuRead], MenuRead | None, float, float]:
+    await delete_stale_suggestions(session, user_id, target_date, commit=True)
     stmt_eaten = (
         select(Menu)
         .where(
@@ -334,6 +363,7 @@ async def get_journal_data(
         select(Menu)
         .where(
             Menu.user_id == user_id,
+            Menu.date == target_date,
             Menu.state == MenuState.SUGGESTION,
         )
         .order_by(Menu.created_at.desc())
