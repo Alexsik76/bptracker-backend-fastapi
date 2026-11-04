@@ -1,5 +1,4 @@
 from unittest.mock import AsyncMock, patch
-from uuid import uuid4
 
 import pytest
 from httpx import AsyncClient
@@ -82,19 +81,13 @@ async def test_create_dish_with_explicit_nutrition(client: AsyncClient):
 
 @pytest.mark.asyncio
 async def test_create_dish_with_components(client: AsyncClient):
-    p1 = (
-        await client.post(
-            "/nutrition/products", json={"name": "Вівсяні пластівці", "available": True}
-        )
-    ).json()
-
     payload = {
         "name": "Вівсянка з яблуком",
         "is_ready": False,
         "note": "на воді",
         "components": [
-            {"product_id": p1["id"], "weight_g": 50},
-            {"new_product": {"name": "Яблуко", "available": True}, "weight_g": 100},
+            {"name": "Вівсяні пластівці", "weight_g": 50},
+            {"name": "Яблуко", "weight_g": 100},
         ],
     }
     resp = await client.post("/nutrition/dishes", json=payload)
@@ -102,8 +95,8 @@ async def test_create_dish_with_components(client: AsyncClient):
     data = resp.json()
     assert data["name"] == "Вівсянка з яблуком"
     assert len(data["components"]) == 2
-    comp_product_ids = {c["product_id"] for c in data["components"]}
-    assert p1["id"] in comp_product_ids
+    comp_names = {c["name"] for c in data["components"]}
+    assert comp_names == {"Вівсяні пластівці", "Яблуко"}
 
 
 @pytest.mark.asyncio
@@ -204,10 +197,21 @@ async def test_dish_user_isolation(client_factory, make_user):
 @pytest.mark.asyncio
 async def test_dish_component_validation():
     with pytest.raises(ValueError, match="weight_g must be > 0"):
-        DishComponentCreate(product_id=uuid4(), weight_g=0)
+        DishComponentCreate(name="Вівсянка", weight_g=0)
 
-    with pytest.raises(ValueError, match="Either product_id or new_product must be provided"):
-        DishComponentCreate(weight_g=100)
+    with pytest.raises(ValueError, match="weight_g must be > 0"):
+        DishComponentCreate(name="Вівсянка", weight_g=-5)
+
+    with pytest.raises(ValueError, match="name must not be empty"):
+        DishComponentCreate(name="   ", weight_g=100)
+
+    with pytest.raises(ValueError, match="name must not be empty"):
+        DishComponentCreate(name="", weight_g=100)
+
+    # Valid stripped name
+    comp = DishComponentCreate(name="  Вівсянка  ", weight_g=50)
+    assert comp.name == "Вівсянка"
+    assert comp.weight_g == 50
 
 
 @pytest.mark.asyncio
@@ -245,17 +249,11 @@ async def test_create_dish_estimates_from_composition(
     client: AsyncClient, _mock_gemini_default: AsyncMock
 ):
     _mock_gemini_default.reset_mock()
-    p1 = (
-        await client.post(
-            "/nutrition/products", json={"name": "Вівсяні пластівці", "available": True}
-        )
-    ).json()
-
     payload = {
         "name": "Вівсянка з бананом",
         "components": [
-            {"product_id": p1["id"], "weight_g": 60},
-            {"new_product": {"name": "Банан", "available": True}, "weight_g": 120},
+            {"name": "Вівсяні пластівці", "weight_g": 60},
+            {"name": "Банан", "weight_g": 120},
         ],
     }
     resp = await client.post("/nutrition/dishes", json=payload)
@@ -275,9 +273,6 @@ async def test_create_dish_estimates_from_composition(
 async def test_components_change_reestimates_when_not_overridden_and_not_when_overridden(
     client: AsyncClient, _mock_gemini_default: AsyncMock
 ):
-    p1 = (await client.post("/nutrition/products", json={"name": "Сир", "available": True})).json()
-    p2 = (await client.post("/nutrition/products", json={"name": "Мед", "available": True})).json()
-
     # Part 1: Dish without overridden nutrition -> re-estimates on components change
     _mock_gemini_default.reset_mock()
     d1 = (
@@ -285,7 +280,7 @@ async def test_components_change_reestimates_when_not_overridden_and_not_when_ov
             "/nutrition/dishes",
             json={
                 "name": "Сир з медом",
-                "components": [{"product_id": p1["id"], "weight_g": 100}],
+                "components": [{"name": "Сир", "weight_g": 100}],
             },
         )
     ).json()
@@ -298,8 +293,8 @@ async def test_components_change_reestimates_when_not_overridden_and_not_when_ov
         f"/nutrition/dishes/{d1['id']}",
         json={
             "components": [
-                {"product_id": p1["id"], "weight_g": 150},
-                {"product_id": p2["id"], "weight_g": 20},
+                {"name": "Сир", "weight_g": 150},
+                {"name": "Мед", "weight_g": 20},
             ]
         },
     )
@@ -332,7 +327,7 @@ async def test_components_change_reestimates_when_not_overridden_and_not_when_ov
                 "protein_g": 6.0,
                 "fat_g": 8.0,
                 "carbs_g": 35.0,
-                "components": [{"product_id": p1["id"], "weight_g": 100}],
+                "components": [{"name": "Гречка", "weight_g": 100}],
             },
         )
     ).json()
@@ -341,7 +336,7 @@ async def test_components_change_reestimates_when_not_overridden_and_not_when_ov
     _mock_gemini_default.reset_mock()
     patch_overridden = await client.patch(
         f"/nutrition/dishes/{d2['id']}",
-        json={"components": [{"product_id": p1["id"], "weight_g": 200}]},
+        json={"components": [{"name": "Гречка", "weight_g": 200}]},
     )
     assert patch_overridden.status_code == 200
     assert _mock_gemini_default.call_count == 0
@@ -355,7 +350,7 @@ async def test_components_change_reestimates_when_not_overridden_and_not_when_ov
     patch_both = await client.patch(
         f"/nutrition/dishes/{d1['id']}",
         json={
-            "components": [{"product_id": p1["id"], "weight_g": 200}],
+            "components": [{"name": "Сир", "weight_g": 200}],
             "kcal": 300.0,
         },
     )
@@ -370,10 +365,6 @@ async def test_components_change_reestimates_when_not_overridden_and_not_when_ov
 async def test_reset_nutrition_clears_flag_and_reestimates(
     client: AsyncClient, _mock_gemini_default: AsyncMock
 ):
-    p1 = (
-        await client.post("/nutrition/products", json={"name": "Гречка", "available": True})
-    ).json()
-
     d = (
         await client.post(
             "/nutrition/dishes",
@@ -383,7 +374,7 @@ async def test_reset_nutrition_clears_flag_and_reestimates(
                 "protein_g": 12.0,
                 "fat_g": 5.0,
                 "carbs_g": 70.0,
-                "components": [{"product_id": p1["id"], "weight_g": 100}],
+                "components": [{"name": "Гречка", "weight_g": 100}],
             },
         )
     ).json()
@@ -443,12 +434,6 @@ async def test_reset_nutrition_clears_flag_and_reestimates(
 async def test_update_dish_identical_components_does_not_reestimate(
     client: AsyncClient, _mock_gemini_default: AsyncMock
 ):
-    p1 = (
-        await client.post(
-            "/nutrition/products", json={"name": "Геркулес", "available": True}
-        )
-    ).json()
-
     # Create dish with initial components and note
     d = (
         await client.post(
@@ -456,7 +441,7 @@ async def test_update_dish_identical_components_does_not_reestimate(
             json={
                 "name": "Вівсянка ранкова",
                 "note": "без цукру",
-                "components": [{"product_id": p1["id"], "weight_g": 60}],
+                "components": [{"name": "Геркулес", "weight_g": 60}],
             },
         )
     ).json()
@@ -470,7 +455,7 @@ async def test_update_dish_identical_components_does_not_reestimate(
         f"/nutrition/dishes/{d['id']}",
         json={
             "note": "з корицею",
-            "components": [{"product_id": p1["id"], "weight_g": 60}],
+            "components": [{"name": "Геркулес", "weight_g": 60}],
         },
     )
     assert patch_note_resp.status_code == 200
@@ -484,7 +469,7 @@ async def test_update_dish_identical_components_does_not_reestimate(
     patch_weight_resp = await client.patch(
         f"/nutrition/dishes/{d['id']}",
         json={
-            "components": [{"product_id": p1["id"], "weight_g": 90}],
+            "components": [{"name": "Геркулес", "weight_g": 90}],
         },
     )
     assert patch_weight_resp.status_code == 200
@@ -500,16 +485,10 @@ async def test_create_dish_with_cooked_weight(
     client: AsyncClient, _mock_gemini_default: AsyncMock
 ):
     _mock_gemini_default.reset_mock()
-    p1 = (
-        await client.post(
-            "/nutrition/products", json={"name": "Вівсянка", "available": True}
-        )
-    ).json()
-
     payload = {
         "name": "Вівсяна каша на воді",
         "cooked_weight_g": 250,
-        "components": [{"product_id": p1["id"], "weight_g": 60}],
+        "components": [{"name": "Вівсянка", "weight_g": 60}],
     }
     resp = await client.post("/nutrition/dishes", json=payload)
     assert resp.status_code == 201
@@ -529,12 +508,6 @@ async def test_create_dish_with_cooked_weight(
 async def test_reestimate_on_cooked_weight_change_for_non_overridden_and_not_overridden(
     client: AsyncClient, _mock_gemini_default: AsyncMock
 ):
-    p1 = (
-        await client.post(
-            "/nutrition/products", json={"name": "Макарони", "available": True}
-        )
-    ).json()
-
     # Part 1: Non-overridden dish triggers re-estimation on cooked_weight_g change
     _mock_gemini_default.reset_mock()
     d1 = (
@@ -543,7 +516,7 @@ async def test_reestimate_on_cooked_weight_change_for_non_overridden_and_not_ove
             json={
                 "name": "Відварені макарони",
                 "cooked_weight_g": 250,
-                "components": [{"product_id": p1["id"], "weight_g": 100}],
+                "components": [{"name": "Макарони", "weight_g": 100}],
             },
         )
     ).json()
@@ -612,7 +585,7 @@ async def test_reestimate_on_cooked_weight_change_for_non_overridden_and_not_ove
                 "fat_g": 10.0,
                 "carbs_g": 50.0,
                 "cooked_weight_g": 200,
-                "components": [{"product_id": p1["id"], "weight_g": 100}],
+                "components": [{"name": "Макарони", "weight_g": 100}],
             },
         )
     ).json()
@@ -631,3 +604,78 @@ async def test_reestimate_on_cooked_weight_change_for_non_overridden_and_not_ove
     assert data_overridden["nutrition_overridden"] is True
     assert data_overridden["kcal"] == 350.0
     assert _mock_gemini_default.call_count == 0  # not called!
+
+
+@pytest.mark.asyncio
+async def test_adding_component_creates_no_product(client: AsyncClient):
+    products_before = (await client.get("/nutrition/products")).json()
+    count_before = len(products_before)
+
+    dish_resp = await client.post(
+        "/nutrition/dishes",
+        json={
+            "name": "Новий сніданок",
+            "components": [{"name": "Невідомий інгредієнт", "weight_g": 100}],
+        },
+    )
+    assert dish_resp.status_code == 201
+
+    products_after = (await client.get("/nutrition/products")).json()
+    assert len(products_after) == count_before
+    product_names = {p["name"] for p in products_after}
+    assert "Невідомий інгредієнт" not in product_names
+
+
+@pytest.mark.asyncio
+async def test_deleting_product_leaves_dish_composition_unchanged(client: AsyncClient):
+    prod = (
+        await client.post(
+            "/nutrition/products",
+            json={"name": "Морква солодка", "available": True},
+        )
+    ).json()
+
+    dish = (
+        await client.post(
+            "/nutrition/dishes",
+            json={
+                "name": "Салат морквяний",
+                "components": [{"name": "Морква солодка", "weight_g": 150}],
+            },
+        )
+    ).json()
+    assert len(dish["components"]) == 1
+    assert dish["components"][0]["name"] == "Морква солодка"
+    assert dish["components"][0]["weight_g"] == 150
+
+    del_resp = await client.delete(f"/nutrition/products/{prod['id']}")
+    assert del_resp.status_code == 204
+
+    get_dish_resp = await client.get(f"/nutrition/dishes/{dish['id']}")
+    assert get_dish_resp.status_code == 200
+    dish_data = get_dish_resp.json()
+    assert len(dish_data["components"]) == 1
+    assert dish_data["components"][0]["name"] == "Морква солодка"
+    assert dish_data["components"][0]["weight_g"] == 150
+
+
+@pytest.mark.asyncio
+async def test_component_name_passed_to_estimator(
+    client: AsyncClient, _mock_gemini_default: AsyncMock
+):
+    _mock_gemini_default.reset_mock()
+    resp = await client.post(
+        "/nutrition/dishes",
+        json={
+            "name": "Омлет зі шпинатом",
+            "components": [
+                {"name": "Шпинат свіжий", "weight_g": 80},
+                {"name": "Яйце куряче", "weight_g": 110},
+            ],
+        },
+    )
+    assert resp.status_code == 201
+    assert _mock_gemini_default.call_count == 1
+    call_prompt = _mock_gemini_default.call_args.kwargs["prompt"]
+    assert "Шпинат свіжий: 80 г" in call_prompt
+    assert "Яйце куряче: 110 г" in call_prompt

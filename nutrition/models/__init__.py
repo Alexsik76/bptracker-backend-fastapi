@@ -8,7 +8,6 @@ from nutrition.models.dish import (
     DishCreate,
     DishRead,
     DishUpdate,
-    NewProductInput,
 )
 from nutrition.models.enums import (
     MEAL_TYPE_LABELS,
@@ -81,7 +80,6 @@ __all__ = [
     "DishComponent",
     "DishComponentCreate",
     "DishComponentRead",
-    "NewProductInput",
     "DishBase",
     "Dish",
     "DishCreate",

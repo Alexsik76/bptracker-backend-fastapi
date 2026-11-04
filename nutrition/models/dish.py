@@ -23,12 +23,24 @@ from nutrition.models.nutrition import NutritionSet
 
 
 class DishComponentBase(SQLModel):
-    product_id: UUID = Field(
-        sa_column=Column(
-            Uuid, ForeignKey("products.id", ondelete="CASCADE"), index=True, nullable=False
-        )
-    )
+    name: str = Field(sa_column=Column(String(200), nullable=False), max_length=200)
     weight_g: int = Field(sa_column=Column(Integer, nullable=False))
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, v: str) -> str:
+        if isinstance(v, str):
+            v = v.strip()
+        if not v:
+            raise ValueError("name must not be empty")
+        return v
+
+    @field_validator("weight_g")
+    @classmethod
+    def validate_weight_g(cls, v: int) -> int:
+        if v <= 0:
+            raise ValueError("weight_g must be > 0")
+        return v
 
 
 class DishComponent(DishComponentBase, table=True):
@@ -49,26 +61,8 @@ class DishComponent(DishComponentBase, table=True):
     )
 
 
-class NewProductInput(SQLModel):
-    name: str
-    available: bool = True
-    note: str | None = None
-
-
-class DishComponentCreate(SQLModel):
-    product_id: UUID | None = None
-    new_product: NewProductInput | None = None
-    weight_g: int
-
-    @model_validator(mode="after")
-    def validate_component(self) -> "DishComponentCreate":
-        if self.product_id is None and self.new_product is None:
-            raise ValueError("Either product_id or new_product must be provided")
-        if self.product_id is not None and self.new_product is not None:
-            raise ValueError("Cannot provide both product_id and new_product")
-        if self.weight_g <= 0:
-            raise ValueError("weight_g must be > 0")
-        return self
+class DishComponentCreate(DishComponentBase):
+    pass
 
 
 class DishComponentRead(DishComponentBase):

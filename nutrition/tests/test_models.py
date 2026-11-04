@@ -109,16 +109,16 @@ async def test_dish_and_components_persistence(session: AsyncSession, test_user_
     assert dish.is_ready is True
     assert dish.pinned_meal_type == MealType.BREAKFAST
 
-    comp1 = DishComponent(dish_id=dish.id, product_id=p1.id, weight_g=45)
-    comp2 = DishComponent(dish_id=dish.id, product_id=p2.id, weight_g=100)
+    comp1 = DishComponent(dish_id=dish.id, name="Вівсяні пластівці", weight_g=45)
+    comp2 = DishComponent(dish_id=dish.id, name="Яблуко", weight_g=100)
     session.add_all([comp1, comp2])
     await session.commit()
 
     stmt = select(DishComponent).where(DishComponent.dish_id == dish.id)
     comps = (await session.exec(stmt)).all()
     assert len(comps) == 2
-    comp_map = {c.product_id: c.weight_g for c in comps}
-    assert comp_map == {p1.id: 45, p2.id: 100}
+    comp_map = {c.name: c.weight_g for c in comps}
+    assert comp_map == {"Вівсяні пластівці": 45, "Яблуко": 100}
 
 
 @pytest.mark.asyncio
