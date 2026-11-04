@@ -484,10 +484,13 @@ async def generate_suggestion(
     dish_by_name = {d.name.strip().lower(): d for d in all_dishes}
 
     if mode == "suggest":
-        # A new suggestion replaces (deletes) the user's previous suggestion
+        # A new suggestion replaces any previous suggestion for this day;
+        # stale suggestions (date earlier than target_date) are also deleted.
+        await crud.delete_stale_suggestions(session, user_id, target_date, commit=False)
         stmt_prev = select(Menu).where(
             Menu.user_id == user_id,
             Menu.state == MenuState.SUGGESTION,
+            Menu.date == target_date,
         )
         prev_suggestions = list((await session.exec(stmt_prev)).all())
         for prev in prev_suggestions:

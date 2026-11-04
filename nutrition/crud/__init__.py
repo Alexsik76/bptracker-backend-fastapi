@@ -14,11 +14,13 @@ from nutrition.crud.evaluation import (
     save_menu_day_evaluations,
 )
 from nutrition.crud.menu import (
+    SuggestionDateMismatchError,
     add_generation_log,
     add_menu_item,
     create_menu,
     delete_menu,
     delete_menu_item,
+    delete_stale_suggestions,
     eat_menu,
     get_journal_data,
     get_menu,
@@ -63,7 +65,9 @@ __all__ = [
     "create_menu",
     "update_menu",
     "delete_menu",
+    "delete_stale_suggestions",
     "eat_menu",
+    "SuggestionDateMismatchError",
     "materialize_pinned_dishes",
     "get_journal_data",
     "add_menu_item",

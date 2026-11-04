@@ -8,6 +8,7 @@ from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from gemini_infra import GeminiResult
+from nutrition import crud
 from nutrition.clock import utc_today
 from nutrition.models import GenerationLog, Menu, MenuState, PinnedDishDay
 
@@ -1211,5 +1212,390 @@ async def test_log_mode_keeps_at_when_date_equals_at_date_even_if_utc_date_diffe
     assert len(j["meals"]) == 1
     assert datetime.fromisoformat(j["meals"][0]["eaten_at"]) == test_at
     assert j["suggestion"] is None
+
+
+@pytest.mark.asyncio
+async def test_yesterday_suggestion_not_returned_by_journal_and_is_deleted(
+    client: AsyncClient, session: AsyncSession, test_user_id: UUID
+):
+    """A suggestion dated yesterday is not returned by journal for today and is deleted."""
+    today = date(2026, 11, 4)
+    yesterday = date(2026, 11, 3)
+    yesterday_at = datetime(2026, 11, 3, 12, 0, 0, tzinfo=UTC)
+
+    mock_gemini_res = GeminiResult(
+        data={
+            "meal_type": "lunch",
+            "items": [
+                {
+                    "name": "Вчорашній суп",
+                    "dish_id": None,
+                    "grams": 250,
+                    "kcal": 150.0,
+                    "protein_g": 5.0,
+                    "fat_g": 3.0,
+                    "carbs_g": 20.0,
+                }
+            ],
+        },
+        raw_text="{}",
+        model="gemini-2.5-flash",
+        input_tokens=100,
+        output_tokens=40,
+    )
+
+    with patch("gemini_infra.generate_json", new_callable=AsyncMock) as mock_gemini:
+        mock_gemini.return_value = mock_gemini_res
+        sugg_resp = await client.post(
+            "/nutrition/suggestions",
+            json={
+                "text": None,
+                "date": yesterday.isoformat(),
+                "at": yesterday_at.isoformat(),
+            },
+        )
+    assert sugg_resp.status_code == 200
+    sugg_id = UUID(sugg_resp.json()["menu"]["id"])
+
+    # Verify suggestion exists in DB for yesterday
+    db_sugg = await crud.get_menu_entity(session, sugg_id, test_user_id)
+    assert db_sugg is not None
+    assert db_sugg.date == yesterday
+
+    # Journal request for today
+    j_resp = await client.get(f"/nutrition/journal?date={today.isoformat()}")
+    assert j_resp.status_code == 200
+    j_data = j_resp.json()
+    assert j_data["suggestion"] is None
+
+    # Verify yesterday's suggestion is deleted from DB
+    session.expire_all()
+    deleted_sugg = await crud.get_menu_entity(session, sugg_id, test_user_id)
+    assert deleted_sugg is None
+
+
+@pytest.mark.asyncio
+async def test_yesterday_suggestion_not_returned_by_list_meals_and_is_deleted(
+    client: AsyncClient, session: AsyncSession, test_user_id: UUID
+):
+    """A suggestion dated yesterday is not returned by list_meals for today, and is deleted."""
+    today = date(2026, 11, 4)
+    yesterday = date(2026, 11, 3)
+    yesterday_at = datetime(2026, 11, 3, 12, 0, 0, tzinfo=UTC)
+
+    mock_gemini_res = GeminiResult(
+        data={
+            "meal_type": "lunch",
+            "items": [
+                {
+                    "name": "Вчорашній суп",
+                    "dish_id": None,
+                    "grams": 250,
+                    "kcal": 150.0,
+                    "protein_g": 5.0,
+                    "fat_g": 3.0,
+                    "carbs_g": 20.0,
+                }
+            ],
+        },
+        raw_text="{}",
+        model="gemini-2.5-flash",
+        input_tokens=100,
+        output_tokens=40,
+    )
+
+    with patch("gemini_infra.generate_json", new_callable=AsyncMock) as mock_gemini:
+        mock_gemini.return_value = mock_gemini_res
+        sugg_resp = await client.post(
+            "/nutrition/suggestions",
+            json={
+                "text": None,
+                "date": yesterday.isoformat(),
+                "at": yesterday_at.isoformat(),
+            },
+        )
+    assert sugg_resp.status_code == 200
+    sugg_id = UUID(sugg_resp.json()["menu"]["id"])
+
+    # list_meals for today
+    meals_resp = await client.get(f"/nutrition/menus?date={today.isoformat()}")
+    assert meals_resp.status_code == 200
+    meals = meals_resp.json()
+    assert len(meals) == 0
+
+    # Verify yesterday's suggestion is deleted from DB
+    session.expire_all()
+    deleted_sugg = await crud.get_menu_entity(session, sugg_id, test_user_id)
+    assert deleted_sugg is None
+
+
+@pytest.mark.asyncio
+async def test_new_suggestion_deletes_stale_suggestion(
+    client: AsyncClient, session: AsyncSession, test_user_id: UUID
+):
+    """Generating a new suggestion for today deletes stale suggestion from yesterday."""
+    today = date(2026, 11, 4)
+    yesterday = date(2026, 11, 3)
+    yesterday_at = datetime(2026, 11, 3, 12, 0, 0, tzinfo=UTC)
+    today_at = datetime(2026, 11, 4, 12, 0, 0, tzinfo=UTC)
+
+    res1 = GeminiResult(
+        data={
+            "meal_type": "lunch",
+            "items": [
+                {
+                    "name": "Суп",
+                    "dish_id": None,
+                    "grams": 250,
+                    "kcal": 150.0,
+                    "protein_g": 5.0,
+                    "fat_g": 3.0,
+                    "carbs_g": 20.0,
+                }
+            ],
+        },
+        raw_text="{}",
+        model="gemini-2.5-flash",
+        input_tokens=100,
+        output_tokens=40,
+    )
+    res2 = GeminiResult(
+        data={
+            "meal_type": "dinner",
+            "items": [
+                {
+                    "name": "Омлет",
+                    "dish_id": None,
+                    "grams": 200,
+                    "kcal": 240.0,
+                    "protein_g": 18.0,
+                    "fat_g": 16.0,
+                    "carbs_g": 2.0,
+                }
+            ],
+        },
+        raw_text="{}",
+        model="gemini-2.5-flash",
+        input_tokens=100,
+        output_tokens=40,
+    )
+
+    with patch("gemini_infra.generate_json", new_callable=AsyncMock) as mock_gemini:
+        mock_gemini.return_value = res1
+        sugg1_resp = await client.post(
+            "/nutrition/suggestions",
+            json={"text": None, "date": yesterday.isoformat(), "at": yesterday_at.isoformat()},
+        )
+        assert sugg1_resp.status_code == 200
+        sugg1_id = UUID(sugg1_resp.json()["menu"]["id"])
+
+        mock_gemini.return_value = res2
+        sugg2_resp = await client.post(
+            "/nutrition/suggestions",
+            json={"text": None, "date": today.isoformat(), "at": today_at.isoformat()},
+        )
+        assert sugg2_resp.status_code == 200
+        sugg2_id = UUID(sugg2_resp.json()["menu"]["id"])
+
+    assert sugg1_id != sugg2_id
+
+    # Yesterday's suggestion must be deleted from DB
+    session.expire_all()
+    assert await crud.get_menu_entity(session, sugg1_id, test_user_id) is None
+    # Today's suggestion must exist in DB
+    db_sugg2 = await crud.get_menu_entity(session, sugg2_id, test_user_id)
+    assert db_sugg2 is not None
+    assert db_sugg2.date == today
+
+
+@pytest.mark.asyncio
+async def test_future_suggestion_not_returned_for_today_and_not_deleted(
+    client: AsyncClient, session: AsyncSession, test_user_id: UUID
+):
+    """Tomorrow's suggestion is not returned for today and not deleted (not stale)."""
+    today = date(2026, 11, 4)
+    tomorrow = date(2026, 11, 5)
+    tomorrow_at = datetime(2026, 11, 5, 12, 0, 0, tzinfo=UTC)
+
+    mock_gemini_res = GeminiResult(
+        data={
+            "meal_type": "lunch",
+            "items": [
+                {
+                    "name": "Завтрашній обід",
+                    "dish_id": None,
+                    "grams": 250,
+                    "kcal": 200.0,
+                    "protein_g": 10.0,
+                    "fat_g": 5.0,
+                    "carbs_g": 25.0,
+                }
+            ],
+        },
+        raw_text="{}",
+        model="gemini-2.5-flash",
+        input_tokens=100,
+        output_tokens=40,
+    )
+
+    with patch("gemini_infra.generate_json", new_callable=AsyncMock) as mock_gemini:
+        mock_gemini.return_value = mock_gemini_res
+        sugg_resp = await client.post(
+            "/nutrition/suggestions",
+            json={
+                "text": None,
+                "date": tomorrow.isoformat(),
+                "at": tomorrow_at.isoformat(),
+            },
+        )
+    assert sugg_resp.status_code == 200
+    sugg_id = UUID(sugg_resp.json()["menu"]["id"])
+
+    # Journal for today should not return tomorrow's suggestion
+    j_resp = await client.get(f"/nutrition/journal?date={today.isoformat()}")
+    assert j_resp.status_code == 200
+    assert j_resp.json()["suggestion"] is None
+
+    # list_meals for today should not return tomorrow's suggestion
+    meals_resp = await client.get(f"/nutrition/menus?date={today.isoformat()}")
+    assert meals_resp.status_code == 200
+    assert len(meals_resp.json()) == 0
+
+    # Suggestion still exists for tomorrow (not deleted)
+    session.expire_all()
+    db_sugg = await crud.get_menu_entity(session, sugg_id, test_user_id)
+    assert db_sugg is not None
+    assert db_sugg.date == tomorrow
+
+
+@pytest.mark.asyncio
+async def test_eat_on_yesterday_suggestion_rejected(
+    client: AsyncClient, session: AsyncSession, test_user_id: UUID
+):
+    """Eat on yesterday's suggestion is rejected with 409 Conflict."""
+    today = date(2026, 11, 4)
+    yesterday = date(2026, 11, 3)
+    yesterday_at = datetime(2026, 11, 3, 12, 0, 0, tzinfo=UTC)
+    today_at = datetime(2026, 11, 4, 13, 0, 0, tzinfo=UTC)
+
+    mock_gemini_res = GeminiResult(
+        data={
+            "meal_type": "lunch",
+            "items": [
+                {
+                    "name": "Вчорашній суп",
+                    "dish_id": None,
+                    "grams": 250,
+                    "kcal": 150.0,
+                    "protein_g": 5.0,
+                    "fat_g": 3.0,
+                    "carbs_g": 20.0,
+                }
+            ],
+        },
+        raw_text="{}",
+        model="gemini-2.5-flash",
+        input_tokens=100,
+        output_tokens=40,
+    )
+
+    with patch("gemini_infra.generate_json", new_callable=AsyncMock) as mock_gemini:
+        mock_gemini.return_value = mock_gemini_res
+        sugg_resp = await client.post(
+            "/nutrition/suggestions",
+            json={
+                "text": None,
+                "date": yesterday.isoformat(),
+                "at": yesterday_at.isoformat(),
+            },
+        )
+    assert sugg_resp.status_code == 200
+    sugg_id = sugg_resp.json()["menu"]["id"]
+
+    # Attempt to eat yesterday's suggestion on today
+    eat_resp = await client.post(
+        f"/nutrition/menus/{sugg_id}/eat",
+        json={
+            "date": today.isoformat(),
+            "at": today_at.isoformat(),
+        },
+    )
+    assert eat_resp.status_code == 409
+    assert "detail" in eat_resp.json()
+    assert "Cannot eat suggestion from another day" in eat_resp.json()["detail"]
+
+    # Verify menu state in DB remains suggestion
+    session.expire_all()
+    menu_in_db = await crud.get_menu_entity(session, UUID(sugg_id), test_user_id)
+    assert menu_in_db is not None
+    assert menu_in_db.state == MenuState.SUGGESTION
+    assert menu_in_db.date == yesterday
+
+
+@pytest.mark.asyncio
+async def test_delete_suggestion_removes_it_and_does_not_touch_journal(
+    client: AsyncClient, session: AsyncSession, test_user_id: UUID
+):
+    """DELETE suggestion removes it without touching journal or triggering day evaluation."""
+    today = date(2026, 11, 4)
+    today_at = datetime(2026, 11, 4, 12, 0, 0, tzinfo=UTC)
+
+    mock_gemini_res = GeminiResult(
+        data={
+            "meal_type": "lunch",
+            "items": [
+                {
+                    "name": "Гречка",
+                    "dish_id": None,
+                    "grams": 200,
+                    "kcal": 220.0,
+                    "protein_g": 8.0,
+                    "fat_g": 2.5,
+                    "carbs_g": 40.0,
+                }
+            ],
+        },
+        raw_text="{}",
+        model="gemini-2.5-flash",
+        input_tokens=100,
+        output_tokens=40,
+    )
+
+    with patch("gemini_infra.generate_json", new_callable=AsyncMock) as mock_gemini:
+        mock_gemini.return_value = mock_gemini_res
+        sugg_resp = await client.post(
+            "/nutrition/suggestions",
+            json={
+                "text": None,
+                "date": today.isoformat(),
+                "at": today_at.isoformat(),
+            },
+        )
+    assert sugg_resp.status_code == 200
+    sugg_id = sugg_resp.json()["menu"]["id"]
+
+    # Check journal has suggestion before DELETE
+    j_before = (await client.get(f"/nutrition/journal?date={today.isoformat()}")).json()
+    assert j_before["suggestion"]["id"] == sugg_id
+    assert len(j_before["meals"]) == 0
+    assert j_before["totals"]["kcal"] == 0.0
+
+    # Call DELETE /menus/{id} with evaluation spy
+    with patch("nutrition.router.menu.evaluate_menu_day_background") as mock_eval:
+        del_resp = await client.delete(f"/nutrition/menus/{sugg_id}")
+        assert del_resp.status_code == 204
+        assert mock_eval.call_count == 0
+
+    # Verify suggestion is removed from DB
+    session.expire_all()
+    assert await crud.get_menu_entity(session, UUID(sugg_id), test_user_id) is None
+
+    # Journal after DELETE: no meals, suggestion is None, totals are 0
+    j_after = (await client.get(f"/nutrition/journal?date={today.isoformat()}")).json()
+    assert j_after["suggestion"] is None
+    assert len(j_after["meals"]) == 0
+    assert j_after["totals"]["kcal"] == 0.0
+    assert j_after["totals"]["protein_g"] == 0.0
+
 
 

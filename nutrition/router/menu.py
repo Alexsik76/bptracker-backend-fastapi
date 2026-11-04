@@ -200,13 +200,19 @@ async def eat_meal(
     background_tasks: BackgroundTasks,
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> MenuRead:
-    menu = await crud.eat_menu(
-        session=session,
-        menu_id=menu_id,
-        user_id=user_id,
-        target_date=data.date,
-        eaten_at=data.at,
-    )
+    try:
+        menu = await crud.eat_menu(
+            session=session,
+            menu_id=menu_id,
+            user_id=user_id,
+            target_date=data.date,
+            eaten_at=data.at,
+        )
+    except crud.SuggestionDateMismatchError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(exc),
+        ) from exc
     if menu is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
