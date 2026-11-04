@@ -820,14 +820,7 @@ async def test_materialize_pinned_dish_portion_cooked_weight(
 ):
     test_date = date(2026, 11, 4)
 
-    # 1. Product for composition
-    p = (
-        await client.post(
-            "/nutrition/products", json={"name": "Гречка", "available": True}
-        )
-    ).json()
-
-    # 2. Dish A: has components (100g) AND cooked_weight_g=280 -> portion_g should be 280
+    # 1. Dish A: has components (100g) AND cooked_weight_g=280 -> portion_g should be 280
     dish_a = (
         await client.post(
             "/nutrition/dishes",
@@ -840,7 +833,7 @@ async def test_materialize_pinned_dish_portion_cooked_weight(
                 "protein_g": 4.0,
                 "fat_g": 2.0,
                 "carbs_g": 20.0,
-                "components": [{"product_id": p["id"], "weight_g": 100}],
+                "components": [{"name": "Гречка", "weight_g": 100}],
             },
         )
     ).json()
@@ -857,7 +850,7 @@ async def test_materialize_pinned_dish_portion_cooked_weight(
                 "protein_g": 5.0,
                 "fat_g": 2.5,
                 "carbs_g": 25.0,
-                "components": [{"product_id": p["id"], "weight_g": 150}],
+                "components": [{"name": "Гречка", "weight_g": 150}],
             },
         )
     ).json()

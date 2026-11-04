@@ -8,7 +8,6 @@ from sqlmodel import col, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from config import Settings, get_settings
-from nutrition.crud.product import create_product
 from nutrition.models import (
     Dish,
     DishComponent,
@@ -18,8 +17,6 @@ from nutrition.models import (
     DishUpdate,
     MealType,
     NutritionEstimate,
-    Product,
-    ProductCreate,
 )
 
 logger = logging.getLogger(__name__)
@@ -53,7 +50,7 @@ async def get_dish_components(
         DishComponentRead(
             id=c.id,
             dish_id=c.dish_id,
-            product_id=c.product_id,
+            name=c.name,
             weight_g=c.weight_g,
         )
         for c in results
@@ -65,8 +62,7 @@ async def get_dish_composition(
     dish_id: UUID,
 ) -> list[tuple[str, int]]:
     statement = (
-        select(Product.name, DishComponent.weight_g)
-        .join(Product, DishComponent.product_id == Product.id)
+        select(DishComponent.name, DishComponent.weight_g)
         .where(DishComponent.dish_id == dish_id)
         .order_by(DishComponent.id)
     )
@@ -145,19 +141,11 @@ async def create_dish(
     created_components: list[DishComponentRead] = []
     if data.components:
         for comp in data.components:
-            product_id = comp.product_id
-            if comp.new_product:
-                new_prod = await create_product(
-                    session,
-                    user_id,
-                    ProductCreate(
-                        name=comp.new_product.name,
-                        available=comp.new_product.available,
-                        note=comp.new_product.note,
-                    ),
-                )
-                product_id = new_prod.id
-            dc = DishComponent(dish_id=dish.id, product_id=product_id, weight_g=comp.weight_g)
+            dc = DishComponent(
+                dish_id=dish.id,
+                name=comp.name.strip(),
+                weight_g=comp.weight_g,
+            )
             session.add(dc)
             await session.commit()
             await session.refresh(dc)
@@ -165,7 +153,7 @@ async def create_dish(
                 DishComponentRead(
                     id=dc.id,
                     dish_id=dc.dish_id,
-                    product_id=dc.product_id,
+                    name=dc.name,
                     weight_g=dc.weight_g,
                 )
             )
@@ -279,20 +267,13 @@ async def update_dish(
         old_comps = (
             await session.exec(select(DishComponent).where(DishComponent.dish_id == dish_id))
         ).all()
-        has_new_product = any(
-            comp_dict.get("new_product") is not None
-            for comp_dict in (components_data or [])
+        old_multiset = Counter(
+            (c.name.strip(), c.weight_g) for c in old_comps
         )
-        if has_new_product:
-            composition_changed = True
-        else:
-            old_multiset = Counter(
-                (str(c.product_id), c.weight_g) for c in old_comps
-            )
-            new_multiset = Counter(
-                (str(c["product_id"]), c["weight_g"]) for c in (components_data or [])
-            )
-            composition_changed = old_multiset != new_multiset
+        new_multiset = Counter(
+            (c["name"].strip(), c["weight_g"]) for c in (components_data or [])
+        )
+        composition_changed = old_multiset != new_multiset
 
         if composition_changed:
             # Replace components
@@ -302,21 +283,10 @@ async def update_dish(
 
             if components_data:
                 for comp_dict in components_data:
-                    pid = comp_dict.get("product_id")
-                    new_p = comp_dict.get("new_product")
-                    if new_p:
-                        new_prod = await create_product(
-                            session,
-                            user_id,
-                            ProductCreate(
-                                name=new_p["name"],
-                                available=new_p.get("available", True),
-                                note=new_p.get("note"),
-                            ),
-                        )
-                        pid = new_prod.id
                     dc = DishComponent(
-                        dish_id=dish.id, product_id=pid, weight_g=comp_dict["weight_g"]
+                        dish_id=dish.id,
+                        name=comp_dict["name"].strip(),
+                        weight_g=comp_dict["weight_g"],
                     )
                     session.add(dc)
                 await session.commit()
